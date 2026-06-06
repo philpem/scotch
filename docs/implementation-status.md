@@ -75,6 +75,8 @@ this file describes the current portable code in `replay-tooling`.
   `-Convert 6Y5UV` changes the type 2 label but does not convert type 7 YUV555
   words because Decomp7 has no `Dec24`. Comparison tooling must preserve this
   historical word interpretation when reproducing the Acorn encode.
+- `LionFishX,ae7` is the validated type 2 YUV intermediate: 16,118,852 bytes,
+  SHA-256 `f6a71e4e73dda589d131146ae0de79f4e350fbdcd2fe7bed891e3a39b1b41020`.
 - Formats 7, 17, and 20 have descriptors and notes but no complete portable
   encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
   type 20, Moving Blocks Beta. Moving Lines remains separate future work.

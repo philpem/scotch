@@ -134,8 +134,17 @@ type 19 field layout and comparing the 25 chunk-0 frames gives Acorn's output
 45.221729 dB luma PSNR with maximum luma error 2. This validates the source
 alignment and supersedes the earlier Decomp7-emulation hypothesis.
 
-For a type 2 movie that also plays correctly, repeat the conversion without
-`-Convert 6Y5UV`, leaving the output labelled `YUV`. The pixel payload should
-remain the same. Re-encoding is safer than changing the annotation inside the
-binary AE7 file, although replacing `[6Y5UV]` with `[YUV]  ` while preserving
-the exact header-line length should be sufficient.
+The corrected intermediate is:
+
+```text
+path     /home/philpem/riscos/RPCEmu/rpcemu/hostfs/Public/ReplayComp/LionFishX,ae7
+size     16,118,852 bytes
+SHA-256  f6a71e4e73dda589d131146ae0de79f4e350fbdcd2fe7bed891e3a39b1b41020
+format   type 2, 16 bit colour uncompressed [YUV]
+```
+
+It contains 15 chunks of 25 frames, with exactly 1,024,000 video bytes per
+chunk. Its YUV555 payload is full-range and its 25 chunk-0 frames reproduce the
+same 45.221729 dB luma PSNR and maximum luma error 2 comparison against
+`LionFish19`. This confirms the source pixels and frame alignment while using a
+colour-space declaration that Replay can display correctly.
