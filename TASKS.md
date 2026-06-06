@@ -59,6 +59,12 @@
   temporal and spatial 2x2 modes.
 - [ ] Compare portable and original-compressor decisions and quantify bitrate
   and decoder-visible quality differences; exact decision parity is not a goal.
+- [x] Add source-independent aggregate mode and bit accounting for original and
+  portable type 19, Super Moving Blocks payloads.
+- [x] Decode candidate type 7, Moving Blocks source movies with compiled
+  Decomp7 and reject mismatched provenance using native-domain quality checks.
+- [ ] Establish the exact source movie and command used for `LionFish19,ae7`
+  before publishing bitrate or quality comparisons.
 - [x] Add per-block decoder traces and native 6Y5UV quality metrics.
 - [ ] Add selectable `--policy portable|acorn` encoder policy after comparison
   data justifies and defines the Acorn-compatible behavior.

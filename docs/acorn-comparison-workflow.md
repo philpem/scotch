@@ -50,8 +50,9 @@ SHA-256  e4a6539b19a105e80e3171a4753870b184edafded0ee874bf2f470231b661684
 file     Acorn Replay ARMovie
 ```
 
-The next ingestion step is to parse its container metadata and extract type
-19, Super Moving Blocks frame payloads, key-frame state, and source timing.
+Its AE7 metadata and first chunk have been parsed. Compiled Decomp19 establishes
+25 exact frame boundaries in chunk 0; the catalogue's 181,886-byte video area
+contains 181,885 bytes consumed by frames plus one byte of alignment padding.
 
 The Acorn compressor's two-pane display and coloured debug block map are
 documented in the project-level note
@@ -70,6 +71,10 @@ ffmpeg -i source-video -pix_fmt rgb24 -f rawvideo - | \
 
 Encoder traces now include payload size, mode counts, native 6Y5UV SSE/MSE,
 PSNR, and maximum component error for every attempted frame.
+
+Use `--input-format 6y5uv` when the source has already been decoded to native
+samples. `tools/mb19_compare_reports.py` aggregates verifier reports using
+summed squared error and sample counts; it does not average per-frame PSNR.
 
 Decode and trace an extracted type 19, Super Moving Blocks payload with:
 
@@ -104,3 +109,19 @@ regression. `acorn` may later reproduce Acorn's cross-family best-error search
 and tie behavior for comparison or archival output. Both policies must emit
 the same type 19, Super Moving Blocks bitstream syntax and use the same quality
 acceptance table.
+
+## Source Provenance Limit
+
+The received `LionFish19,ae7` cannot yet be tied numerically to a source movie.
+Both plausible bundled candidates were decoded with compiled Decomp7:
+
+- `LionFish2,ae7`, type 7 (Moving Blocks), 160x128 at 12.5 fps;
+- `HiRes/LionFish,ae7`, type 7 (Moving Blocks), 160x128 at 25 fps, sampled at
+  half rate.
+
+Neither produces credible native-domain error against `LionFish19` output,
+under either literal unpatched-word interpretation or documented YUV555 to
+6Y5UV component conversion. Supplying the type 7 key image does not change
+chunk 0 because its first frame is self-contained. Therefore no bitrate or
+quality parity number is claimed until the exact source path and compressor
+command are known.

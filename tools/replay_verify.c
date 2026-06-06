@@ -19,7 +19,7 @@ static void usage(FILE *stream)
             "usage: replay-verify --codec ID [--describe|--verify-huffman] "
             "[--payload FILE --size WIDTHxHEIGHT [--previous-6y5uv FILE] "
             "[--output-6y5uv FILE] [--expect-6y5uv FILE] "
-            "[--reference-6y5uv FILE] [--trace FILE]]\n");
+            "[--reference-6y5uv FILE] [--trace FILE] [--summary]]\n");
 }
 
 static const char *mode_name(CodecSuperMovingBlocksMode mode)
@@ -44,19 +44,54 @@ typedef struct {
     FILE *file;
     const MbFrame *reference;
     const MbFrame *decoded;
+    size_t counts[5][2];
+    size_t bits[5][2];
+    size_t motion_manhattan[5];
+    unsigned motion_max_x[5];
+    unsigned motion_max_y[5];
 } DecodeTraceContext;
+
+static unsigned absolute_motion(int value)
+{
+    return value < 0 ? (unsigned)(-(value + 1)) + 1U : (unsigned)value;
+}
 
 static void trace_decoded_block(
     const CodecSuperMovingBlocksDecodeEvent *event, void *opaque)
 {
     DecodeTraceContext *context = opaque;
+    unsigned size_index = event->size == 2U ? 0U : 1U;
+    unsigned mode = (unsigned)event->mode;
+    size_t event_bits = event->bit_end - event->bit_start;
+
+    if (mode < 5U) {
+        unsigned absolute_x = absolute_motion(event->motion_dx);
+        unsigned absolute_y = absolute_motion(event->motion_dy);
+
+        ++context->counts[mode][size_index];
+        context->bits[mode][size_index] += event_bits;
+        if (event->mode == CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL ||
+            event->mode == CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL) {
+            context->motion_manhattan[mode] += absolute_x + absolute_y;
+            if (absolute_x > context->motion_max_x[mode]) {
+                context->motion_max_x[mode] = absolute_x;
+            }
+            if (absolute_y > context->motion_max_y[mode]) {
+                context->motion_max_y[mode] = absolute_y;
+            }
+        }
+    }
+
+    if (context->file == NULL) {
+        return;
+    }
 
     fprintf(context->file,
             "codec=19 name=\"Super Moving Blocks\" x=%u y=%u size=%u "
             "mode=%s bit_start=%zu bit_end=%zu bits=%zu dx=%d dy=%d",
             event->x, event->y, event->size, mode_name(event->mode),
             event->bit_start, event->bit_end,
-            event->bit_end - event->bit_start,
+            event_bits,
             event->motion_dx, event->motion_dy);
     if (context->reference != NULL) {
         MbFrameMetrics metrics;
@@ -215,7 +250,7 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
                                const char *output_path,
                                const char *expected_path,
                                const char *reference_path,
-                               const char *trace_path)
+                               const char *trace_path, int print_summary)
 {
     ReplayBuffer payload;
     MbFrame frame;
@@ -227,7 +262,7 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
     ReplayStatus status;
     size_t pixel_count;
     FILE *trace = NULL;
-    DecodeTraceContext trace_context;
+    DecodeTraceContext trace_context = { 0 };
 
     if (codec->id != REPLAY_CODEC_SUPERMOVINGBLOCKS) {
         fprintf(stderr, "payload verification is not implemented for %s\n",
@@ -303,7 +338,8 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
     status = codec_supermovingblocks_verify_frame_traced(
         payload.data, payload.size,
         previous.pixels != NULL ? &previous : NULL, &frame, &bits, &error,
-        trace != NULL ? trace_decoded_block : NULL, &trace_context);
+        (trace != NULL || print_summary) ? trace_decoded_block : NULL,
+        &trace_context);
     if (status == REPLAY_OK) {
         printf("codec=%u name=\"%s\" payload=\"%s\" size=%ux%u "
                "bits=%zu status=ok\n",
@@ -358,6 +394,53 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
                    metrics.max_error_y, metrics.max_error_u,
                    metrics.max_error_v);
         }
+    }
+    if (status == REPLAY_OK && print_summary) {
+        printf("summary codec=19 name=\"Super Moving Blocks\" "
+               "data4x4=%zu stationary4x4=%zu temporal4x4=%zu "
+               "spatial4x4=%zu split4x4=%zu "
+               "data2x2=%zu stationary2x2=%zu temporal2x2=%zu "
+               "spatial2x2=%zu "
+               "data4x4_bits=%zu stationary4x4_bits=%zu "
+               "temporal4x4_bits=%zu spatial4x4_bits=%zu "
+               "split_header_bits=%zu "
+               "data2x2_bits=%zu stationary2x2_bits=%zu "
+               "temporal2x2_bits=%zu spatial2x2_bits=%zu "
+               "temporal_motion_manhattan=%zu temporal_motion_max=%u,%u "
+               "spatial_motion_manhattan=%zu spatial_motion_max=%u,%u "
+               "semantic_bits=%zu payload_bytes=%zu\n",
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_DATA][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_SPLIT][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_DATA][0],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY][0],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL][0],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL][0],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_DATA][1],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY][1],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL][1],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL][1],
+               trace_context.counts[CODEC_SUPERMOVINGBLOCKS_MODE_SPLIT][1] *
+                   2U,
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_DATA][0],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY][0],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL][0],
+               trace_context.bits[CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL][0],
+               trace_context.motion_manhattan[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL],
+               trace_context.motion_max_x[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL],
+               trace_context.motion_max_y[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL],
+               trace_context.motion_manhattan[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL],
+               trace_context.motion_max_x[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL],
+               trace_context.motion_max_y[
+                   CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL],
+               bits, payload.size);
     }
     free(reference.pixels);
     free(expected.pixels);
@@ -433,6 +516,7 @@ int main(int argc, char **argv)
     const char *expected_path = NULL;
     const char *reference_path = NULL;
     const char *trace_path = NULL;
+    int print_summary = 0;
     unsigned width = 0;
     unsigned height = 0;
     int i;
@@ -460,6 +544,8 @@ int main(int argc, char **argv)
             expected_path = argv[++i];
         } else if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_path = argv[++i];
+        } else if (strcmp(argv[i], "--summary") == 0) {
+            print_summary = 1;
         } else if (strcmp(argv[i], "--reference-6y5uv") == 0 &&
                    i + 1 < argc) {
             reference_path = argv[++i];
@@ -478,7 +564,7 @@ int main(int argc, char **argv)
     if (codec == NULL || (!describe && !huffman && payload_path == NULL) ||
         ((previous_path != NULL || output_path != NULL ||
           expected_path != NULL || reference_path != NULL ||
-          trace_path != NULL) &&
+          trace_path != NULL || print_summary) &&
          payload_path == NULL) ||
         (payload_path != NULL && (width == 0U || height == 0U))) {
         usage(stderr);
@@ -499,5 +585,5 @@ int main(int argc, char **argv)
                : verify_payload_file(codec, payload_path, width, height,
                                      previous_path, output_path,
                                      expected_path, reference_path,
-                                     trace_path);
+                                     trace_path, print_summary);
 }

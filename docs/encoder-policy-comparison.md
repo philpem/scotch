@@ -85,5 +85,43 @@ that is what the codec actually preserves.
 
 The portable tooling now emits these block traces and reports native 6Y5UV
 SSE/MSE, PSNR, and maximum component errors. Original-compressor fixtures are
-still required before the expected directions above can be quantified. No
-numerical bitrate or quality advantage is currently claimed.
+present, but the exact source movie for the received comparison encode is not
+yet established. No numerical bitrate or quality advantage is currently
+claimed.
+
+## Original Chunk-0 Decision Profile
+
+The first chunk of `LionFish19,ae7`, produced by Acorn's type 19 (Super Moving
+Blocks) compressor, provides a source-independent view of its decisions:
+
+```text
+frames                 25
+decoder-consumed bytes 181885
+semantic bits          1454985
+average bytes/frame    7275.4
+```
+
+Across 32,000 top-level 4x4 positions, Acorn selected 3,394 data, 428
+stationary, 7,832 temporal, 1,507 spatial, and 18,839 split blocks. Splits are
+58.9% of top-level positions. Their 75,356 child blocks comprise 13,061 data,
+1,460 stationary, 49,507 temporal, and 11,328 spatial blocks; temporal copies
+are 65.7% of split children.
+
+Per-mode semantic bit totals are:
+
+```text
+data 4x4          331901
+stationary 4x4       856
+temporal 4x4       71945
+spatial 4x4        13563
+split headers      37678
+data 2x2          475859
+stationary 2x2      2920
+temporal 2x2      429639
+spatial 2x2        90624
+```
+
+These sum exactly to the decoded semantic-bit total. They show that split
+selection and temporal 2x2 matching are central to Acorn's output, not rare
+fallbacks. This profile is suitable for structural regression tests even
+before source-referenced quality comparison is available.

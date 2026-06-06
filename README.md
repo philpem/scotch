@@ -52,6 +52,14 @@ dependencies:
 build/replay-verify --codec 19 --payload frame.mb19 --size 320x256
 ```
 
+Add `--summary` for machine-readable selected-mode counts, per-mode bit totals,
+motion extent, semantic bits, and stored payload bytes. Aggregate multiple
+verifier reports without incorrectly averaging frame PSNR values with:
+
+```sh
+tools/mb19_compare_reports.py acorn=acorn.report portable=portable.report
+```
+
 Export decoded packed `Y,U,V` bytes and compare them with an Acorn reference:
 
 ```sh
@@ -83,6 +91,10 @@ every generated payload, and compares the result with its reconstructed frame
 before writing the payload. A first/key frame cannot use temporal modes, but it
 may use spatial and split modes unless `--data-only` is supplied. Single-frame
 mode requires EOF after that frame.
+
+For comparison inputs already expressed in the codec's native packed byte
+triplets, use `--input-format 6y5uv`. The default remains `rgb24`; native input
+is range-checked and avoids an unnecessary RGB conversion.
 
 Encode all complete frames from an RGB24 stream as separate raw payloads:
 

@@ -30,6 +30,10 @@ this file describes the current portable code in `replay-tooling`.
 - Bounded AE7 header and chunk-catalogue parsing plus a `replay-inspect` CLI.
 - Sequential ARM decoding that uses returned source pointers to split Replay
   chunks into exact frame payloads.
+- Direct packed-6Y5UV encoder input and aggregate mode/bit/quality reports for
+  encoder-policy comparisons.
+- Compiled type 7 (Moving Blocks) source decoding, including raw output words
+  and native 16-bit key-frame initialization.
 
 ## Verified Claims
 
@@ -67,6 +71,9 @@ this file describes the current portable code in `replay-tooling`.
 - There is no AE7/Replay container writer or player acceptance test. The
   reader currently exposes chunk boundaries; type 19 frame splitting remains
   a decoder-assisted operation because AE7 stores no per-frame size table.
+- The exact source and command used to create `LionFish19,ae7` are not yet
+  established. Its Acorn decision profile is valid, but source-referenced
+  bitrate/quality parity must not be inferred from the bundled LionFish files.
 - Formats 7, 17, and 20 have descriptors and notes but no complete portable
   encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
   type 20, Moving Blocks Beta. Moving Lines remains separate future work.

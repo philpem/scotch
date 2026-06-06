@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Acorn's generated format-19 decompressor under Unicorn.
+"""Run Acorn's generated Moving Blocks decompressors under Unicorn.
 
 A compiled binary is bundled under !ARMovie_compiled/Decomp19. Another binary
 with the same CodecIf contract may be supplied explicitly. The harness leaves
@@ -78,6 +78,17 @@ def words_to_yuv_bytes(data: bytes) -> bytes:
     return bytes(pixels)
 
 
+def yuv555_words_to_6y5uv_bytes(data: bytes) -> bytes:
+    """Convert unpatched type-7 YUV555 words to type-19 working samples."""
+    pixels = bytearray()
+    for (word,) in struct.iter_unpack("<I", data):
+        y5 = word & 0x1F
+        # CompLib's full-range component conversion rounds to nearest.
+        y6 = (y5 * 63 + 15) // 31
+        pixels += bytes((y6, (word >> 5) & 0x1F, (word >> 10) & 0x1F))
+    return bytes(pixels)
+
+
 def map_and_write(machine: Uc, address: int, data: bytes,
                   minimum_size: int = 0) -> None:
     mapped_size = page_size(max(len(data), minimum_size, 1))
@@ -86,16 +97,17 @@ def map_and_write(machine: Uc, address: int, data: bytes,
         machine.mem_write(address, data)
 
 
-def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
-    """Emulate pre-ARMv6 alignment for Decomp19's bitstream LDMs.
+def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
+                                  codec: int) -> None:
+    """Emulate pre-ARMv6 alignment for Moving Blocks bitstream LDMs.
 
     Unicorn performs these LDMIA instructions from the literal unaligned byte
     address. Acorn ARM cores ignored the low address bits; the surrounding ARM
     shifts then selected the requested bit position within aligned words.
     """
     lookaheads = {
-        # Four block/sub-block headers use LDMIA r7,{r5,r6}.
-        bytes.fromhex("600097e8"): (4, UC_ARM_REG_R7,
+        # Format 19 has four header sites; format 7 has five decoder paths.
+        bytes.fromhex("600097e8"): (4 if codec == 19 else 5, UC_ARM_REG_R7,
                                     UC_ARM_REG_R5, UC_ARM_REG_R6),
         # The two Huffman paths use r6 as both base and first destination.
         bytes.fromhex("400196e8"): (1, UC_ARM_REG_R6,
@@ -120,6 +132,8 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
         expected_count, base_register, first_register, second_register = (
             description
         )
+        if codec == 7 and expected_count == 1:
+            expected_count = 0
         offsets = []
         offset = decompressor.find(instruction)
         while offset >= 0:
@@ -127,7 +141,7 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
             offset = decompressor.find(instruction, offset + 1)
         if len(offsets) != expected_count:
             raise ValueError(
-                "unexpected Decomp19 bitstream lookahead signature count: "
+                "unexpected Moving Blocks bitstream lookahead signature count: "
                 f"found {len(offsets)}, expected {expected_count}"
             )
         for offset in offsets:
@@ -163,7 +177,15 @@ def run(args: argparse.Namespace) -> int:
     if arm_frame_bytes > PREVIOUS_BASE - OUTPUT_BASE:
         raise ValueError("frame is too large for the harness memory map")
 
-    if args.previous is None:
+    if args.previous_words16 is not None:
+        previous_halfwords = read_exact(
+            args.previous_words16, pixel_count * 2, "16-bit previous frame"
+        )
+        previous_words = b"".join(
+            struct.pack("<I", value)
+            for (value,) in struct.iter_unpack("<H", previous_halfwords)
+        )
+    elif args.previous is None:
         previous_words = bytes(arm_frame_bytes)
     else:
         previous_words = yuv_bytes_to_words(
@@ -178,7 +200,7 @@ def run(args: argparse.Namespace) -> int:
     map_and_write(machine, PREVIOUS_BASE, previous_words)
     map_and_write(machine, STACK_BASE, b"", PAGE_SIZE)
     map_and_write(machine, RETURN_ADDRESS, struct.pack("<I", 0xE1A00000))
-    install_classic_ldm_lookahead(machine, decompressor)
+    install_classic_ldm_lookahead(machine, decompressor, args.codec)
 
     machine.reg_write(UC_ARM_REG_R0, args.width)
     machine.reg_write(UC_ARM_REG_R1, args.height)
@@ -215,18 +237,26 @@ def run(args: argparse.Namespace) -> int:
                 f"frame {frame}: {consumed} after {source_offset}"
             )
         output_words = bytes(machine.mem_read(output_address, arm_frame_bytes))
-        output_yuv = words_to_yuv_bytes(output_words)
+        output_yuv = (
+            yuv555_words_to_6y5uv_bytes(output_words)
+            if args.output_layout == "yuv555-to-6y5uv"
+            else words_to_yuv_bytes(output_words)
+        )
         if args.output is not None:
             output_path = args.output
         else:
             output_path = numbered_path(args.output_prefix, frame, ".6y5uv")
         output_path.write_bytes(output_yuv)
+        if args.output_words_prefix is not None:
+            numbered_path(args.output_words_prefix, frame, ".words").write_bytes(
+                output_words
+            )
         if args.payload_prefix is not None:
             numbered_path(args.payload_prefix, frame, ".mb19").write_bytes(
                 payload[source_offset:consumed]
             )
         print(
-            f"frame={frame} source_start={source_offset} "
+            f"frame={frame} codec={args.codec} source_start={source_offset} "
             f"source_end={consumed} bytes={consumed - source_offset} "
             f'output="{output_path}" status=ok'
         )
@@ -234,7 +264,8 @@ def run(args: argparse.Namespace) -> int:
 
     print(
         f'decompressor="{args.decompressor}" payload="{args.payload}" '
-        f"size={args.width}x{args.height} frames={args.frames} "
+        f"codec={args.codec} size={args.width}x{args.height} "
+        f"frames={args.frames} "
         f"consumed={source_offset} trailing={len(payload) - source_offset} "
         "status=ok"
     )
@@ -244,13 +275,25 @@ def run(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--decompressor", required=True, type=Path)
+    parser.add_argument("--codec", type=int, choices=(7, 19), default=19)
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--size", required=True)
-    parser.add_argument("--previous", type=Path)
+    previous_group = parser.add_mutually_exclusive_group()
+    previous_group.add_argument("--previous", type=Path)
+    previous_group.add_argument(
+        "--previous-words16", type=Path,
+        help="native little-endian 16-bit key image expanded to ARM words",
+    )
     output_group = parser.add_mutually_exclusive_group(required=True)
     output_group.add_argument("--output", type=Path)
     output_group.add_argument("--output-prefix", type=Path)
     parser.add_argument("--payload-prefix", type=Path)
+    parser.add_argument("--output-words-prefix", type=Path)
+    parser.add_argument(
+        "--output-layout", choices=("6y5uv", "yuv555-to-6y5uv"),
+        default="6y5uv",
+        help="interpret output words directly or convert type-7 YUV555",
+    )
     parser.add_argument("--frames", type=int, default=1)
     args = parser.parse_args()
     try:

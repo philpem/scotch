@@ -47,3 +47,17 @@ cmp "$work/previous.6y5uv" "$work/frame-000000.6y5uv"
 cmp "$work/frame-000000.6y5uv" "$work/frame-000001.6y5uv"
 test -f "$work/payload-000000.mb19"
 test -f "$work/payload-000001.mb19"
+
+# Format 7, Moving Blocks uses five instances of the same classic unaligned
+# header load and no format-19 Huffman lookahead signatures.
+printf '\000\000\000\000\016\360\240\341' > "$work/decompressor7"
+printf '\340\037\262\350\340\037\241\350' >> "$work/decompressor7"
+printf '\340\037\262\350\340\037\241\350' >> "$work/decompressor7"
+printf '\016\360\240\341' >> "$work/decompressor7"
+printf '\140\000\227\350\140\000\227\350' >> "$work/decompressor7"
+printf '\140\000\227\350\140\000\227\350' >> "$work/decompressor7"
+printf '\140\000\227\350' >> "$work/decompressor7"
+"$python" "$harness" --codec 7 --decompressor "$work/decompressor7" \
+    --payload "$work/payload" --size 4x4 \
+    --previous "$work/previous.6y5uv" --output "$work/output7.6y5uv"
+cmp "$work/previous.6y5uv" "$work/output7.6y5uv"

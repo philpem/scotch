@@ -1,7 +1,8 @@
 # Decomp19 ARM Harness
 
-`tools/decomp19_unicorn.py` executes the original generated type 19, Super
-Moving Blocks decompressor without RISC OS. A compiled copy is present at
+`tools/decomp19_unicorn.py` executes the original generated Moving Blocks
+decompressors without RISC OS. Its historical name remains because type 19,
+Super Moving Blocks was the first supported target. A compiled copy is present at
 `!ARMovie_compiled/Decomp19/Decompress,ffd`; its SHA-256 digest is
 `3d302da5f71efbc43a2cb677db75c4e46c791ec2d65bd272617e01e0656d8678`.
 
@@ -45,6 +46,12 @@ bits 16..31  zero
 
 The harness converts those words to the corpus's packed byte triplets. Previous
 frames are converted in the opposite direction before execution.
+
+`--codec 7` also supports the compiled type 7 (Moving Blocks) decoder. Its five
+classic unaligned header loads use the same compatibility hook. The harness can
+preserve raw ARM words with `--output-words-prefix`, initialize from a native
+16-bit Replay key image with `--previous-words16`, or convert unpatched YUV555
+words to 6Y5UV components with `--output-layout yuv555-to-6y5uv`.
 
 The decoder uses unaligned `LDMIA` lookahead loads for four block/sub-block
 headers and two Huffman paths. Classic Acorn ARM cores ignore the low two

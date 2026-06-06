@@ -107,6 +107,10 @@ endif()
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
+add_test(NAME test_replay_encode_cli
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_encode_cli.sh
+        $<TARGET_FILE:replay-encode>
+        $<TARGET_FILE:replay-verify>)
 add_test(NAME test_format19_corpus
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_format19_corpus.sh
         $<TARGET_FILE:replay-verify>)

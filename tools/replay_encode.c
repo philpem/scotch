@@ -10,8 +10,9 @@
 /*
  * This program is intentionally a thin development harness around the codec:
  *
- *   RGB24 frame -> CompLib-style 6Y5UV -> encode -> independent decode
- *               -> compare reconstruction -> write raw payload
+ *   RGB24 frame -> CompLib-style 6Y5UV --\
+ *   packed 6Y5UV -------------------------> encode -> independent decode
+ *                                        -> compare -> write raw payload
  *
  * Raw payloads are written separately because concatenating variable-length
  * frames would invent a container unrelated to Replay. The later Replay
@@ -23,11 +24,17 @@ typedef enum {
     FRAME_READ_ERROR
 } FrameReadResult;
 
+typedef enum {
+    INPUT_RGB24,
+    INPUT_6Y5UV
+} InputFormat;
+
 static void usage(FILE *stream)
 {
     fprintf(stream,
             "usage: replay-encode --codec 19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
+            "[--input-format rgb24|6y5uv] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--target-bytes N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
@@ -49,13 +56,36 @@ static FrameReadResult read_frame(FILE *file, const char *name, uint8_t *data,
             if (offset == 0U) {
                 return FRAME_READ_EOF;
             }
-            fprintf(stderr, "%s: truncated RGB24 frame (%zu of %zu bytes)\n",
+            fprintf(stderr, "%s: truncated input frame (%zu of %zu bytes)\n",
                     name, offset, size);
             return FRAME_READ_ERROR;
         }
         offset += count;
     }
     return FRAME_READ_OK;
+}
+
+static ReplayStatus unpack_6y5uv(const uint8_t *packed, MbFrame *frame)
+{
+    unsigned y;
+
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+
+        for (x = 0U; x < frame->width; ++x) {
+            size_t input_offset =
+                ((size_t)y * (size_t)frame->width + (size_t)x) * 3U;
+            MbPixel *pixel = &frame->pixels[(size_t)y * frame->stride + x];
+
+            pixel->y = packed[input_offset];
+            pixel->u = packed[input_offset + 1U];
+            pixel->v = packed[input_offset + 2U];
+            if (pixel->y > 63U || pixel->u > 31U || pixel->v > 31U) {
+                return REPLAY_MALFORMED_STREAM;
+            }
+        }
+    }
+    return REPLAY_OK;
 }
 
 static int require_eof(FILE *file, const char *name)
@@ -212,6 +242,7 @@ int main(int argc, char **argv)
     unsigned current_loss_level;
     size_t target_bytes = 0U;
     size_t frame_limit = 0U;
+    InputFormat input_format = INPUT_RGB24;
     int data_only = 0;
     uint8_t *rgb = NULL;
     MbPixel *source_pixels = NULL;
@@ -238,6 +269,18 @@ int main(int argc, char **argv)
             codec = (unsigned)value;
         } else if (strcmp(argv[i], "--input") == 0 && i + 1 < argc) {
             input_path = argv[++i];
+        } else if (strcmp(argv[i], "--input-format") == 0 &&
+                   i + 1 < argc) {
+            const char *format = argv[++i];
+
+            if (strcmp(format, "rgb24") == 0) {
+                input_format = INPUT_RGB24;
+            } else if (strcmp(format, "6y5uv") == 0) {
+                input_format = INPUT_6Y5UV;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
             payload_path = argv[++i];
         } else if (strcmp(argv[i], "--payload-prefix") == 0 && i + 1 < argc) {
@@ -365,10 +408,12 @@ int main(int argc, char **argv)
         if (read_result == FRAME_READ_ERROR) {
             goto free_payload;
         }
-        status = mb_color_rgb24_to_6y5uv(
-            rgb, (size_t)width * 3U, &source);
+        status = input_format == INPUT_RGB24
+                     ? mb_color_rgb24_to_6y5uv(
+                           rgb, (size_t)width * 3U, &source)
+                     : unpack_6y5uv(rgb, &source);
         if (status != REPLAY_OK) {
-            fprintf(stderr, "RGB conversion failed: %s\n",
+            fprintf(stderr, "input conversion failed: %s\n",
                     replay_status_string(status));
             goto free_payload;
         }
@@ -460,7 +505,7 @@ int main(int argc, char **argv)
         }
     }
     if (frame_number == 0U) {
-        fprintf(stderr, "%s: no complete RGB24 frames\n", input_path);
+        fprintf(stderr, "%s: no complete input frames\n", input_path);
         goto free_payload;
     }
     if ((payload_path != NULL || frame_limit != 0U) &&
