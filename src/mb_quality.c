@@ -2,7 +2,11 @@
 
 #include <stddef.h>
 
-/* Copied from PROCReadQualTable in the original Moving Blocks compressors. */
+/*
+ * Copied from PROCReadQualTable in Decomp19's BatchComp source. Each row is
+ * {ordinary per-component limit, exceptional luma limit, 4x4 total, 2x2
+ * total}. The first row is therefore exact matching, not a special code path.
+ */
 static const MbQualityThresholds quality_table[MB_QUALITY_LEVEL_COUNT] = {
     { 0U, 0U,   0U,  0U }, { 0U, 1U,   2U,  1U },
     { 0U, 1U,   4U,  2U }, { 1U, 1U,   6U,  2U },
@@ -34,6 +38,7 @@ static unsigned absolute_difference(int left, int right)
 
 static int floor_average(int sum, unsigned count)
 {
+    /* Match ARM ASR: negative values round down, unlike C integer division. */
     if (sum >= 0) {
         return sum / (int)count;
     }
@@ -92,6 +97,7 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
             unsigned difference = absolute_difference(
                 target_pixel->y, reference_pixel->y);
 
+            /* No luma sample may exceed maxe. Only a few may exceed maxi. */
             if (difference > thresholds->max_exceptional_error) {
                 return 0;
             }
@@ -117,6 +123,7 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
             v_difference > thresholds->max_individual_error) {
             return 0;
         }
+        /* One block-average chroma error applies to every reconstructed pixel. */
         total += area * (u_difference + v_difference);
     }
     if (total > total_limit) {

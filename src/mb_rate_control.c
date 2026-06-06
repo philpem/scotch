@@ -30,7 +30,7 @@ ReplayStatus mb_rate_control_init_window(MbRateControl *control,
         return REPLAY_INVALID_ARGUMENT;
     }
 
-    /* BBC BASIC converted both positive real expressions to integers. */
+    /* Express the BASIC real formulas directly, then make truncation explicit. */
     control->target_min_bytes = (size_t)trunc(minimum_bytes);
     control->target_max_bytes = (size_t)trunc(maximum_bytes);
     control->loss_level = initial_loss_level;

@@ -24,12 +24,17 @@ typedef struct {
     size_t target_max_bytes;
     unsigned loss_level;
     unsigned retry_count;
+    /* -1 means making output larger, +1 means making it smaller, 0 undecided. */
     int direction;
 } MbRateControl;
 
 ReplayStatus mb_rate_control_init(MbRateControl *control, size_t target_bytes,
                                   unsigned initial_loss_level);
 
+/*
+ * Configure a custom inclusive target window. Each positive floating-point
+ * product is truncated toward zero to produce its byte limit.
+ */
 ReplayStatus mb_rate_control_init_window(MbRateControl *control,
                                          size_t target_bytes,
                                          unsigned initial_loss_level,

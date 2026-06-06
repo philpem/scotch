@@ -98,7 +98,8 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(test_decomp19_unicorn PROPERTIES SKIP_RETURN_CODE 77)
 
     set(DECOMP19_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-19 Decompress file")
     if(EXISTS "${DECOMP19_COMPILED}")
         add_test(NAME test_decomp19_compiled
             COMMAND sh

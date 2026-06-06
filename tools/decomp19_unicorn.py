@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run Acorn's generated format-19 decompressor under Unicorn.
 
-The source snapshot contains MakeDecomp but not its generated Decompress file.
-Generate that file on RISC OS, then pass it here unchanged. The harness leaves
+A compiled binary is bundled under !ARMovie_compiled/Decomp19. Another binary
+with the same CodecIf contract may be supplied explicitly. The harness leaves
 the colour-lookup patch table untouched so each output word remains packed as
 the codec's native 6Y5UV value: Y in bits 0..5, U in 6..10, V in 11..15.
 """
@@ -96,12 +96,12 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
         bytes.fromhex("400196e8"): UC_ARM_REG_R8,  # LDMIA r6,{r6,r8}
         bytes.fromhex("c00096e8"): UC_ARM_REG_R7,  # LDMIA r6,{r6,r7}
     }
-    found = 0
-
     for instruction, second_register in lookaheads.items():
         offset = decompressor.find(instruction)
         if offset < 0:
             raise ValueError("Decomp19 Huffman lookahead instruction not found")
+        if decompressor.find(instruction, offset + 1) >= 0:
+            raise ValueError("Decomp19 Huffman lookahead signature is ambiguous")
         address = CODE_BASE + offset
 
         def emulate(machine: Uc, current: int, size: int, user_data: int) -> None:
@@ -117,10 +117,6 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
         machine.hook_add(
             UC_HOOK_CODE, emulate, second_register, address, address
         )
-        found += 1
-
-    if found != len(lookaheads):
-        raise ValueError("incomplete Decomp19 lookahead hook installation")
 
 
 def run(args: argparse.Namespace) -> int:

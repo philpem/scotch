@@ -3,10 +3,15 @@
 Portable C tooling for inspecting, verifying, and encoding Acorn Replay video
 streams.
 
-The first implemented target is compression type 19, Super Moving Blocks. The
-current milestone provides byte/bitstream primitives, Moving Blocks codec
-descriptors, a complete format-19 payload verifier, and a deterministic
-format-19 encoder with the original 29-level copy-match threshold table.
+The implemented target is compression type 19, Super Moving Blocks. The project
+currently provides byte/bitstream primitives, Moving Blocks codec descriptors,
+a complete format-19 payload verifier, a deterministic encoder with the
+original 29-level copy-match table, frame-level rate retries, and automated
+cross-checks against Acorn's compiled ARM decompressor.
+
+See [docs/implementation-status.md](docs/implementation-status.md) for the
+implemented surface, verified claims, and known differences from the original
+compressor.
 
 ## Build
 
@@ -16,7 +21,12 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Run the current verifier milestone with:
+The C implementation has no third-party runtime dependency. The optional ARM
+cross-check tests require Python 3 with Unicorn bindings. CMake automatically
+uses `../!ARMovie_compiled/Decomp19/Decompress,ffd` when present; another copy
+can be selected with `-DDECOMP19_COMPILED=/path/to/Decompress,ffd`.
+
+Check the format-19 Huffman table with:
 
 ```sh
 build/replay-verify --codec 19 --verify-huffman
@@ -54,15 +64,16 @@ ffmpeg -i input.mp4 -vf scale=320:256 -frames:v 1 \
 
 The encoder converts RGB with CompLib's non-dithered fixed-point path, decodes
 every generated payload, and compares the result with its reconstructed frame
-before writing the payload. Single-frame mode emits only 4x4 data blocks and
-requires EOF after that frame.
+before writing the payload. A first/key frame cannot use temporal modes, but it
+may use spatial and split modes unless `--data-only` is supplied. Single-frame
+mode requires EOF after that frame.
 
 Encode all complete frames from an RGB24 stream as separate raw payloads:
 
 ```sh
 ffmpeg -i input.mp4 -vf scale=320:256,fps=12.5 \
     -pix_fmt rgb24 -f rawvideo - | \
-build/replay-encode --codec 19 --input - --size 320x256 \
+    build/replay-encode --codec 19 --input - --size 320x256 \
     --payload-prefix frames/frame- --loss-level 7 --target-bytes 4096 \
     --trace frames/decisions.txt
 ```
@@ -86,6 +97,14 @@ oscillation, and carries the accepted level into the next frame. Trace output
 records every verifier-clean attempt, including rejected retries. Library
 callers can override both floating-point window factors through
 `mb_rate_control_init_window`; calculated byte limits are explicitly truncated.
+
+## Acorn Cross-Check
+
+When `../!ARMovie_compiled/Decomp19/Decompress,ffd` and Python Unicorn bindings
+are present, CTest runs the compiled Acorn decompressor against generated data
+and stationary frames and compares its packed `6Y5UV` output byte-for-byte with
+the portable verifier. Details, including the classic ARM alignment shim, are
+in [docs/decomp19-arm-harness.md](docs/decomp19-arm-harness.md).
 
 ## Naming
 

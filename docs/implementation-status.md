@@ -1,0 +1,59 @@
+# Format-19 Implementation Status
+
+This document separates implemented behavior, verified compatibility, and
+known gaps. Source descriptions live in the project-level `notes` directory;
+this file describes the current portable code in `replay-tooling`.
+
+## Implemented
+
+- Growable byte buffers and LSB-first bit readers/writers.
+- Source-derived format-19 Huffman, temporal-motion, spatial-motion, and
+  29-level quality tables.
+- Full format-19 payload verification: 4x4 data, stationary, temporal, spatial,
+  and split 2x2 forms.
+- RGB24 to CompLib-style non-dithered `6Y5UV` conversion.
+- Deterministic format-19 encoding with reconstructed-frame feedback.
+- Stationary, temporal, and spatial matching at loss levels `0..28`.
+- Real bit-cost comparison between 4x4 data and a four-quadrant split.
+- Whole-frame target-byte retries using configurable floating-point window
+  factors; defaults are `0.90` and `1.025`, explicitly truncated to bytes.
+- Raw RGB24 input from a file or FFmpeg pipe, numbered payload output, traces,
+  and reconstructed PPM output.
+- Packed `Y,U,V` corpus import/export and first-pixel comparison diagnostics.
+- Unicorn execution of the compiled Acorn Decomp19 binary through `CodecIf`.
+
+## Verified Claims
+
+- Hand-reviewed golden tests cover bit order, Huffman symbols, data blocks, and
+  all block-mode decoder paths.
+- Every encoder attempt is decoded independently and compared with the
+  encoder's reconstructed frame before output is accepted.
+- Acorn's compiled `Decompress,ffd` and the portable verifier produce identical
+  `6Y5UV` for a C-generated data frame and following stationary frame.
+- Normal and ASan/UBSan test suites cover the C implementation; Unicorn tests
+  run when its Python bindings and the compiled decoder are available.
+
+## Deliberate Policy Choices
+
+- The codec core performs one deterministic pass. Target-size retry policy is
+  in shared `mb_rate_control` code.
+- Top-level copy-mode priority is stationary, temporal, then spatial. Temporal
+  and spatial searches retain the lowest accepted error, with table order as
+  the tie-break. This is compatible stream generation, not yet proven Acorn
+  encoder-decision parity.
+- A 4x4 data candidate wins a bit-cost tie with a split candidate.
+- Raw payload sequences are separate files; no undocumented temporary
+  container is invented.
+
+## Known Gaps
+
+- Original-compressor format-19 payloads and decoded outputs are not yet in the
+  corpus. Current ARM checks validate our streams against Acorn's decoder.
+- ARM cross-checks still need focused temporal, spatial, and split payloads.
+- CompLib RGB conversion constants are source-derived but not yet compared
+  byte-for-byte with an ARM conversion fixture.
+- Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
+  they require real Replay container/chunk accounting.
+- There is no AE7/Replay container writer or player acceptance test.
+- Formats 7, 17, and 20 have descriptors and notes but no complete portable
+  encoder/decoder cores. Moving Lines remains separate future work.

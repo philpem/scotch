@@ -10,7 +10,9 @@
 
 /* One row of the QP% table shared by Moving Blocks formats 7, 17, 19 and 20. */
 typedef struct {
+    /* `maxi`: normal per-component limit. */
     uint8_t max_individual_error;
+    /* `maxe`: larger luma limit allowed for 4 pixels in 4x4, 1 in 2x2. */
     uint8_t max_exceptional_error;
     uint16_t total_error_4x4;
     uint16_t total_error_2x2;

@@ -41,13 +41,15 @@
   provenance and expected dimensions.
 - [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
   runner with previous-frame support.
-- [ ] Decode the corpus with the portable verifier and export raw `6Y5UV`.
+- [ ] Decode an original-compressor corpus with the portable verifier and
+  export raw `6Y5UV` (portable export is implemented; fixtures are pending).
 - [x] Create a Unicorn harness for the generated Decomp19 entry point and
   document its register and pixel-packing contract.
 - [x] Run the compiled Decomp19 binary under Unicorn and capture raw decoded
   pixels for data and stationary frames.
 - [x] Compare portable and Acorn output byte-for-byte for those fixtures.
-- [ ] Keep any compatibility quirks as named regression fixtures.
+- [x] Keep the compiled decoder's classic unaligned-`LDMIA` behavior as a named
+  and documented harness regression.
 
 ## Milestone 5: Data-Only Encoder
 
@@ -63,11 +65,11 @@
 
 ## Milestone 6: Compression Modes
 
-- [x] Add exact stationary 4x4 candidates and cross-frame reconstruction
-  state.
-- [x] Add exact temporal 4x4 candidates in canonical code-length/table order.
-- [x] Add exact spatial 4x4 candidates, including use within key frames.
-- [x] Complete exact 4x4 versus split-2x2 bit-cost selection, including data,
+- [x] Add stationary 4x4 candidates and cross-frame reconstruction state;
+  level 0 is exact and higher levels use source-derived thresholds.
+- [x] Add temporal 4x4 search in canonical code-length/table order.
+- [x] Add spatial 4x4 search, including use within key frames.
+- [x] Complete 4x4 versus split-2x2 bit-cost selection, including data,
   stationary, temporal, and spatial 2x2 modes.
 - [x] Add the 29-level threshold table and fixed-loss tests.
 - [x] Add target-byte retries after deterministic single-pass encoding works.

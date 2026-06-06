@@ -20,11 +20,15 @@
  * are broadly I-frame-like and P-frame-like respectively; there is no future
  * reference comparable to an MPEG B-frame.
  *
- * The original compressor contains lossy matching and target-size retry
- * policy. This implementation currently accepts copy candidates only when
- * their decoded 6Y5UV pixels satisfy the selected source-derived quality row.
- * That restriction gives a deterministic baseline while the source-derived
- * threshold policy is implemented separately.
+ * Copy acceptance uses the original 29-row quality table. Level zero requires
+ * exact decoder-visible pixels; higher levels permit the bounded luma/chroma
+ * error implemented in mb_quality.c. Whole-frame target-size retries are kept
+ * outside this codec core in mb_rate_control.c, so one call is deterministic.
+ *
+ * The current top-level decision policy is intentionally simple: stationary,
+ * then the lowest-error temporal candidate, then the lowest-error spatial
+ * candidate, then literal 4x4-versus-split bit cost. This is stream-compatible
+ * but is not yet claimed to reproduce every Acorn compressor decision.
  */
 #define HUFF(bits_, count_) { UINT16_C(bits_), UINT8_C(count_) }
 
@@ -971,8 +975,9 @@ ReplayStatus codec_supermovingblocks_encode_frame(
 
             /*
              * Copy modes use the selected original-compressor quality row.
-             * Mode priority remains stationary, temporal, spatial; searches
-             * within temporal and spatial choose the lowest accepted error.
+             * Priority between mode families is current encoder policy, not a
+             * bitstream rule. Searches within temporal and spatial choose the
+             * lowest accepted error, retaining table order on equal error.
              */
             if (allow_stationary && block_matches_data_reconstruction(
                                         source, previous, x, y, u, v,
