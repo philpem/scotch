@@ -18,6 +18,8 @@ printf '\000\000\000\000\016\360\240\341' > "$work/decompressor"
 printf '\340\037\262\350\340\037\241\350' >> "$work/decompressor"
 printf '\340\037\262\350\340\037\241\350' >> "$work/decompressor"
 printf '\016\360\240\341' >> "$work/decompressor"
+# Unreachable signatures used to install the classic-alignment hooks.
+printf '\100\001\226\350\300\000\226\350' >> "$work/decompressor"
 printf '\000' > "$work/payload"
 : > "$work/previous.6y5uv"
 i=0

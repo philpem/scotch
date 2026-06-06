@@ -15,15 +15,21 @@ import sys
 from pathlib import Path
 
 try:
-    from unicorn import Uc, UcError, UC_ARCH_ARM, UC_MODE_ARM, UC_PROT_ALL
+    from unicorn import (
+        Uc, UcError, UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_ARM, UC_PROT_ALL
+    )
     from unicorn.arm_const import (
         UC_ARM_REG_R0,
         UC_ARM_REG_R1,
         UC_ARM_REG_R2,
         UC_ARM_REG_R3,
         UC_ARM_REG_R4,
+        UC_ARM_REG_R6,
+        UC_ARM_REG_R7,
+        UC_ARM_REG_R8,
         UC_ARM_REG_R13,
         UC_ARM_REG_R14,
+        UC_ARM_REG_R15,
     )
 except ImportError as error:
     raise SystemExit("the Python Unicorn bindings are required") from error
@@ -79,6 +85,44 @@ def map_and_write(machine: Uc, address: int, data: bytes,
         machine.mem_write(address, data)
 
 
+def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
+    """Emulate pre-ARMv6 alignment for Decomp19's two bitstream LDMs.
+
+    Unicorn performs these LDMIA instructions from the literal unaligned byte
+    address. Acorn ARM cores ignored the low address bits; the following ARM
+    shifts then selected the requested bit position within the aligned words.
+    """
+    lookaheads = {
+        bytes.fromhex("400196e8"): UC_ARM_REG_R8,  # LDMIA r6,{r6,r8}
+        bytes.fromhex("c00096e8"): UC_ARM_REG_R7,  # LDMIA r6,{r6,r7}
+    }
+    found = 0
+
+    for instruction, second_register in lookaheads.items():
+        offset = decompressor.find(instruction)
+        if offset < 0:
+            raise ValueError("Decomp19 Huffman lookahead instruction not found")
+        address = CODE_BASE + offset
+
+        def emulate(machine: Uc, current: int, size: int, user_data: int) -> None:
+            source = machine.reg_read(UC_ARM_REG_R6)
+            if source & 3:
+                first, second = struct.unpack(
+                    "<II", bytes(machine.mem_read(source & ~3, 8))
+                )
+                machine.reg_write(UC_ARM_REG_R6, first)
+                machine.reg_write(user_data, second)
+                machine.reg_write(UC_ARM_REG_R15, current + size)
+
+        machine.hook_add(
+            UC_HOOK_CODE, emulate, second_register, address, address
+        )
+        found += 1
+
+    if found != len(lookaheads):
+        raise ValueError("incomplete Decomp19 lookahead hook installation")
+
+
 def run(args: argparse.Namespace) -> int:
     if args.width == 0 or args.height == 0 or args.width % 4 or args.height % 4:
         raise ValueError("dimensions must be positive multiples of four")
@@ -114,6 +158,7 @@ def run(args: argparse.Namespace) -> int:
     map_and_write(machine, PREVIOUS_BASE, previous_words)
     map_and_write(machine, STACK_BASE, b"", PAGE_SIZE)
     map_and_write(machine, RETURN_ADDRESS, struct.pack("<I", 0xE1A00000))
+    install_classic_ldm_lookahead(machine, decompressor)
 
     machine.reg_write(UC_ARM_REG_R0, args.width)
     machine.reg_write(UC_ARM_REG_R1, args.height)
@@ -131,8 +176,8 @@ def run(args: argparse.Namespace) -> int:
     machine.reg_write(UC_ARM_REG_R3, 0)
     machine.reg_write(UC_ARM_REG_R4, RETURN_ADDRESS)
     machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
-    # CodecIf assigns r4 in the default IRQ call and r14 in the C call. The
-    # generated Decomp19 routine saves r14 internally, so provide both.
+    # The Info file's `,C` selects CodecIf's r14 C-call return convention.
+    # Also set r4 because the generator's older interface comment names it.
     machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
     machine.emu_start(CODE_BASE + 8, RETURN_ADDRESS)
 

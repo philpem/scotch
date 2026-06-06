@@ -96,4 +96,16 @@ if(Python3_Interpreter_FOUND)
             ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py)
     set_tests_properties(test_decomp19_unicorn PROPERTIES SKIP_RETURN_CODE 77)
+
+    set(DECOMP19_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+    if(EXISTS "${DECOMP19_COMPILED}")
+        add_test(NAME test_decomp19_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp19_compiled.sh
+                $<TARGET_FILE:replay-encode> $<TARGET_FILE:replay-verify>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP19_COMPILED})
+    endif()
 endif()

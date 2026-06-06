@@ -1,9 +1,9 @@
 # Decomp19 ARM Harness
 
 `tools/decomp19_unicorn.py` executes the original generated format-19
-decompressor without RISC OS. The 2003 snapshot contains its BBC BASIC source
-generator but does not contain the generated `Video.Decomp19.Decompress` file,
-so that binary must first be produced under RISC OS.
+decompressor without RISC OS. A compiled copy is present at
+`!ARMovie_compiled/Decomp19/Decompress,ffd`; its SHA-256 digest is
+`3d302da5f71efbc43a2cb677db75c4e46c791ec2d65bd272617e01e0656d8678`.
 
 ## Documented Interface
 
@@ -26,11 +26,11 @@ external state.
 Decode receives the source byte pointer in `r0`, word-aligned output pointer in
 `r1`, previous-frame pointer in `r2`, colour lookup pointer in `r3`, and return
 address in `r4` for the default call sequence. `CodecIf` reserves `r14` as the
-return address for the C calling sequence. Decomp19's generated entry saves
-`r14` internally even though its source comments describe the default `r4`
-interface, so the harness supplies the same sentinel return address in both
-registers. This is a codec-specific accommodation, not a redefinition of the
-documented interface.
+return address for the C calling sequence. The compiled Decomp19 `Info` file's
+bit-depth/calling line is `,C`, so `r14` is authoritative for this codec and the
+generated entry saves it internally. The older interface comment retained in
+`MakeDecomp` still names `r4`; the harness supplies the same sentinel there as
+a harmless compatibility measure.
 
 The patch table is intentionally left untouched. Its placeholder instructions
 are register-to-same-register moves, so the 32-bit output remains:
@@ -44,6 +44,13 @@ bits 16..31  zero
 
 The harness converts those words to the corpus's packed byte triplets. Previous
 frames are converted in the opposite direction before execution.
+
+The Huffman reader uses two unaligned `LDMIA` lookahead loads. Classic Acorn ARM
+cores ignore the low two address bits for these multiple loads; Unicorn uses
+the literal unaligned address even when configured as its oldest available ARM
+models. The harness therefore intercepts those two source-derived instruction
+signatures and performs aligned loads before allowing execution to continue.
+Without this compatibility shim, the bit offset is effectively applied twice.
 
 ## Use
 
@@ -65,8 +72,7 @@ in that case; a valid key-frame payload must not read it.
 ## Remaining Validation
 
 The general register contract comes from `CodecIf`; pixel packing and the
-Decomp19 `r14` behavior are directly visible in `MakeDecomp,ffb.txt`. The
-harness cannot be run against the real codec until the missing generated binary
-is supplied. The first execution should use a one-block data payload, then
-stationary, temporal, spatial, and split fixtures. Preserve the generated
-decompressor's digest and RISC OS source snapshot in corpus provenance.
+Decomp19 `r14` behavior are directly visible in `MakeDecomp,ffb.txt`.
+`test_decomp19_compiled` currently cross-checks a data-coded frame and a
+stationary frame byte-for-byte against the portable verifier. Temporal,
+spatial, split, and original-compressor payload fixtures remain to be added.

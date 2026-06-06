@@ -44,8 +44,9 @@
 - [ ] Decode the corpus with the portable verifier and export raw `6Y5UV`.
 - [x] Create a Unicorn harness for the generated Decomp19 entry point and
   document its register and pixel-packing contract.
-- [ ] Run the harness in an emulator and capture raw decoded pixels.
-- [ ] Compare portable and Acorn output byte-for-byte.
+- [x] Run the compiled Decomp19 binary under Unicorn and capture raw decoded
+  pixels for data and stationary frames.
+- [x] Compare portable and Acorn output byte-for-byte for those fixtures.
 - [ ] Keep any compatibility quirks as named regression fixtures.
 
 ## Milestone 5: Data-Only Encoder
