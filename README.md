@@ -28,6 +28,17 @@ cross-check tests require Python 3 with Unicorn bindings. CMake automatically
 uses `../!ARMovie_compiled/Decomp19/Decompress,ffd` when present; another copy
 can be selected with `-DDECOMP19_COMPILED=/path/to/Decompress,ffd`.
 
+Inspect an ARMovie/AE7 header and its validated chunk catalogue with:
+
+```sh
+build/replay-inspect ../LionFish19,ae7
+```
+
+The inspector labels known compression identifiers by both number and name,
+for example type 19, Super Moving Blocks. In the AE7 header, `number of chunks`
+is the last zero-based chunk index, so the tool reports both that value and the
+derived catalogue-entry count.
+
 Check the type 19, Super Moving Blocks Huffman table with:
 
 ```sh
@@ -115,6 +126,8 @@ are present, CTest runs the compiled Acorn decompressor against generated data
 and stationary frames and compares its packed `6Y5UV` output byte-for-byte with
 the portable verifier. Details, including the classic ARM alignment shim, are
 in [docs/decomp19-arm-harness.md](docs/decomp19-arm-harness.md).
+The checked-in corpus also contains two frames made by the original Acorn type
+19, Super Moving Blocks compressor, including one temporal dependency.
 
 ## Naming
 

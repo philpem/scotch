@@ -38,16 +38,16 @@
 - [x] Inventory bundled Replay movies; all discovered video samples are type 7,
   Moving Blocks, so a type 19, Super Moving Blocks corpus must be generated or
   sourced separately.
-- [ ] Build a small corpus of original type 19, Super Moving Blocks Replay
+- [x] Build a small corpus of original type 19, Super Moving Blocks Replay
   payloads, preserving
   provenance and expected dimensions.
 - [x] Receive and checksum the Acorn-compressed `LionFish19,ae7` type 19,
   Super Moving Blocks comparison movie.
-- [ ] Parse `LionFish19,ae7` and extract its frame payloads and metadata.
+- [x] Parse `LionFish19,ae7` and extract its frame payloads and metadata.
 - [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
   runner with previous-frame support.
-- [ ] Decode an original-compressor corpus with the portable verifier and
-  export raw `6Y5UV` (portable export is implemented; fixtures are pending).
+- [x] Decode an original-compressor corpus with the portable verifier and
+  export raw `6Y5UV`.
 - [x] Create a Unicorn harness for the generated Decomp19 entry point and
   document its register and pixel-packing contract.
 - [x] Run the compiled Decomp19 binary under Unicorn and capture raw decoded

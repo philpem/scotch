@@ -27,6 +27,9 @@ this file describes the current portable code in `replay-tooling`.
 - Native 6Y5UV SSE/MSE, PSNR, and maximum-error metrics in encoder traces and
   verifier comparisons.
 - Unicorn execution of the compiled Acorn Decomp19 binary through `CodecIf`.
+- Bounded AE7 header and chunk-catalogue parsing plus a `replay-inspect` CLI.
+- Sequential ARM decoding that uses returned source pointers to split Replay
+  chunks into exact frame payloads.
 
 ## Verified Claims
 
@@ -37,6 +40,8 @@ this file describes the current portable code in `replay-tooling`.
 - Acorn's compiled `Decompress,ffd` and the portable verifier produce identical
   `6Y5UV` for focused stationary, temporal, spatial, split, and lossy fixtures,
   including both 4x4 and motion-coded 2x2 paths.
+- The same decoders agree byte-for-byte on all 25 original-compressor frames
+  in chunk 0 of `LionFish19,ae7`; the first two are permanent corpus fixtures.
 - Normal and ASan/UBSan test suites cover the C implementation; Unicorn tests
   run when its Python bindings and the compiled decoder are available.
 
@@ -55,14 +60,13 @@ this file describes the current portable code in `replay-tooling`.
 
 ## Known Gaps
 
-- Original-compressor type 19, Super Moving Blocks payloads and decoded outputs
-  are not yet in the corpus. Current ARM checks validate our streams against
-  Acorn's decoder.
 - CompLib RGB conversion constants are source-derived but not yet compared
   byte-for-byte with an ARM conversion fixture.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
   they require real Replay container/chunk accounting.
-- There is no AE7/Replay container writer or player acceptance test.
+- There is no AE7/Replay container writer or player acceptance test. The
+  reader currently exposes chunk boundaries; type 19 frame splitting remains
+  a decoder-assisted operation because AE7 stores no per-frame size table.
 - Formats 7, 17, and 20 have descriptors and notes but no complete portable
   encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
   type 20, Moving Blocks Beta. Moving Lines remains separate future work.

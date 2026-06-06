@@ -35,3 +35,15 @@ done
     --payload "$work/payload" --size 4x4 \
     --previous "$work/previous.6y5uv" --output "$work/output.6y5uv"
 cmp "$work/previous.6y5uv" "$work/output.6y5uv"
+
+# Repeated mode must carry the first reconstruction into the second call and
+# expose one numbered output and payload slice per decoder return.
+printf '\000' > "$work/payload-two"
+"$python" "$harness" --decompressor "$work/decompressor" \
+    --payload "$work/payload-two" --size 4x4 --frames 2 \
+    --previous "$work/previous.6y5uv" \
+    --output-prefix "$work/frame-" --payload-prefix "$work/payload-"
+cmp "$work/previous.6y5uv" "$work/frame-000000.6y5uv"
+cmp "$work/frame-000000.6y5uv" "$work/frame-000001.6y5uv"
+test -f "$work/payload-000000.mb19"
+test -f "$work/payload-000001.mb19"

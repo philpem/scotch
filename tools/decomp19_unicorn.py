@@ -139,6 +139,10 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
             )
 
 
+def numbered_path(prefix: Path, frame: int, suffix: str) -> Path:
+    return Path(f"{prefix}{frame:06d}{suffix}")
+
+
 def run(args: argparse.Namespace) -> int:
     if args.width == 0 or args.height == 0 or args.width % 4 or args.height % 4:
         raise ValueError("dimensions must be positive multiples of four")
@@ -186,29 +190,53 @@ def run(args: argparse.Namespace) -> int:
     machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
     machine.emu_start(CODE_BASE + 4, RETURN_ADDRESS)
 
-    machine.reg_write(UC_ARM_REG_R0, SOURCE_BASE)
-    machine.reg_write(UC_ARM_REG_R1, OUTPUT_BASE)
-    machine.reg_write(UC_ARM_REG_R2, PREVIOUS_BASE)
-    machine.reg_write(UC_ARM_REG_R3, 0)
-    machine.reg_write(UC_ARM_REG_R4, RETURN_ADDRESS)
-    machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
-    # The Info file's `,C` selects CodecIf's r14 C-call return convention.
-    # Also set r4 because the generator's older interface comment names it.
-    machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
-    machine.emu_start(CODE_BASE + 8, RETURN_ADDRESS)
+    source_offset = 0
+    for frame in range(args.frames):
+        # Alternate buffers so the just-decoded reconstruction becomes the
+        # immutable previous frame for the following CodecIf call.
+        output_address = OUTPUT_BASE if frame % 2 == 0 else PREVIOUS_BASE
+        previous_address = PREVIOUS_BASE if frame % 2 == 0 else OUTPUT_BASE
+        machine.reg_write(UC_ARM_REG_R0, SOURCE_BASE + source_offset)
+        machine.reg_write(UC_ARM_REG_R1, output_address)
+        machine.reg_write(UC_ARM_REG_R2, previous_address)
+        machine.reg_write(UC_ARM_REG_R3, 0)
+        machine.reg_write(UC_ARM_REG_R4, RETURN_ADDRESS)
+        machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
+        # The Info file's `,C` selects CodecIf's r14 C-call return convention.
+        # Also set r4 because the generator's older interface comment names it.
+        machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
+        machine.emu_start(CODE_BASE + 8, RETURN_ADDRESS)
 
-    next_source = machine.reg_read(UC_ARM_REG_R0)
-    consumed = next_source - SOURCE_BASE
-    if consumed < 0 or consumed > len(payload):
-        raise ValueError(
-            f"decompressor returned invalid source consumption: {consumed}"
+        next_source = machine.reg_read(UC_ARM_REG_R0)
+        consumed = next_source - SOURCE_BASE
+        if consumed < source_offset or consumed > len(payload):
+            raise ValueError(
+                "decompressor returned invalid source consumption for "
+                f"frame {frame}: {consumed} after {source_offset}"
+            )
+        output_words = bytes(machine.mem_read(output_address, arm_frame_bytes))
+        output_yuv = words_to_yuv_bytes(output_words)
+        if args.output is not None:
+            output_path = args.output
+        else:
+            output_path = numbered_path(args.output_prefix, frame, ".6y5uv")
+        output_path.write_bytes(output_yuv)
+        if args.payload_prefix is not None:
+            numbered_path(args.payload_prefix, frame, ".mb19").write_bytes(
+                payload[source_offset:consumed]
+            )
+        print(
+            f"frame={frame} source_start={source_offset} "
+            f"source_end={consumed} bytes={consumed - source_offset} "
+            f'output="{output_path}" status=ok'
         )
-    output_words = bytes(machine.mem_read(OUTPUT_BASE, arm_frame_bytes))
-    args.output.write_bytes(words_to_yuv_bytes(output_words))
+        source_offset = consumed
+
     print(
         f'decompressor="{args.decompressor}" payload="{args.payload}" '
-        f"size={args.width}x{args.height} consumed={consumed} "
-        f'output="{args.output}" status=ok'
+        f"size={args.width}x{args.height} frames={args.frames} "
+        f"consumed={source_offset} trailing={len(payload) - source_offset} "
+        "status=ok"
     )
     return 0
 
@@ -219,7 +247,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--size", required=True)
     parser.add_argument("--previous", type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    output_group = parser.add_mutually_exclusive_group(required=True)
+    output_group.add_argument("--output", type=Path)
+    output_group.add_argument("--output-prefix", type=Path)
+    parser.add_argument("--payload-prefix", type=Path)
+    parser.add_argument("--frames", type=int, default=1)
     args = parser.parse_args()
     try:
         width, height = (int(value) for value in args.size.lower().split("x", 1))
@@ -228,6 +260,10 @@ def parse_args() -> argparse.Namespace:
         raise AssertionError from error
     args.width = width
     args.height = height
+    if args.frames <= 0:
+        parser.error("--frames must be positive")
+    if args.frames != 1 and args.output is not None:
+        parser.error("--output can only be used with --frames 1")
     return args
 
 

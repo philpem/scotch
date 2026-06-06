@@ -71,6 +71,23 @@ build/replay-verify --codec 19 --payload frame.mb19 --size 320x256 \
 Omit `--previous` for a key frame. The harness allocates a zero previous frame
 in that case; a valid key-frame payload must not read it.
 
+To split a complete Replay chunk into exact type 19, Super Moving Blocks frame
+payloads, ask the decoder to process the chunk sequentially:
+
+```sh
+tools/decomp19_unicorn.py \
+    --decompressor Decompress,ffd \
+    --payload chunk-000.video --size 160x128 --frames 25 \
+    --output-prefix decoded/frame- --payload-prefix payload/frame-
+```
+
+The harness initializes the codec once, alternates two reconstruction buffers,
+and passes each decoded frame back as the next frame's temporal reference. The
+source pointer returned by one `CodecIf` call is the next frame's start, so the
+saved `.mb19` files are decoder-established boundaries rather than inferred
+sizes. The final summary reports any catalogue video bytes left after the
+requested frame count.
+
 ## Remaining Validation
 
 The general register contract comes from `CodecIf`; pixel packing and the

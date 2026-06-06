@@ -10,6 +10,7 @@ add_library(replay STATIC
     src/replay_status.c
     src/replay_buffer.c
     src/replay_bitstream.c
+    src/replay_ae7.c
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
@@ -42,10 +43,15 @@ target_link_libraries(replay-verify PRIVATE replay)
 add_executable(replay-encode tools/replay_encode.c)
 target_link_libraries(replay-encode PRIVATE replay)
 
+add_executable(replay-inspect tools/replay_inspect.c)
+target_link_libraries(replay-inspect PRIVATE replay)
+
 if(NOT MSVC)
     target_compile_options(replay-verify PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
     target_compile_options(replay-encode PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+    target_compile_options(replay-inspect PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
@@ -63,6 +69,7 @@ endfunction()
 
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
+add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
@@ -99,6 +106,9 @@ endif()
 
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
+        $<TARGET_FILE:replay-verify>)
+add_test(NAME test_format19_corpus
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_format19_corpus.sh
         $<TARGET_FILE:replay-verify>)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
