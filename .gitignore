@@ -1,0 +1,4 @@
+/build/
+/build-sanitize/
+/.cache/
+compile_commands.json
