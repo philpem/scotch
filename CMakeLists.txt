@@ -88,3 +88,12 @@ add_replay_test(test_supermovingblocks_split_motion
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME test_decomp19_unicorn
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp19_unicorn.sh
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py)
+    set_tests_properties(test_decomp19_unicorn PROPERTIES SKIP_RETURN_CODE 77)
+endif()

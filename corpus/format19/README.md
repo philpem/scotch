@@ -30,6 +30,10 @@ Run every populated row with:
 tools/check_format19_corpus.sh build/replay-verify
 ```
 
+The original ARM decompressor can produce `expected_6y5uv` without booting a
+full player once its generated binary is available; see
+`docs/decomp19-arm-harness.md`.
+
 The portable verifier reports the first differing pixel and both `Y,U,V`
 triples. A successful comparison proves decoder agreement for the payload; it
 does not by itself prove that the portable encoder makes identical decisions.

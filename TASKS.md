@@ -42,7 +42,8 @@
 - [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
   runner with previous-frame support.
 - [ ] Decode the corpus with the portable verifier and export raw `6Y5UV`.
-- [ ] Create a RISC OS harness that invokes the original Decomp19 entry point.
+- [x] Create a Unicorn harness for the generated Decomp19 entry point and
+  document its register and pixel-packing contract.
 - [ ] Run the harness in an emulator and capture raw decoded pixels.
 - [ ] Compare portable and Acorn output byte-for-byte.
 - [ ] Keep any compatibility quirks as named regression fixtures.
