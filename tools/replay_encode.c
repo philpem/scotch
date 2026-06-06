@@ -4,6 +4,7 @@
 
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
+#include "replay/mb_rate_control.h"
 
 /*
  * This program is intentionally a thin development harness around the codec:
@@ -26,7 +27,8 @@ static void usage(FILE *stream)
     fprintf(stream,
             "usage: replay-encode --codec 19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
-            "[--frames N] [--data-only] [--loss-level 0..28] [--trace FILE] "
+            "[--frames N] [--data-only] [--loss-level 0..28] "
+            "[--target-bytes N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
 }
 
@@ -140,19 +142,22 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        unsigned height,
                        const CodecSuperMovingBlocksEncodeStats *stats,
-                       size_t bytes, unsigned loss_level)
+                       size_t bytes, unsigned loss_level, unsigned retry,
+                       size_t target_min, size_t target_max)
 {
     if (trace == NULL) {
         return EXIT_SUCCESS;
     }
     if (fprintf(trace,
-                "frame=%zu codec=19 size=%ux%u loss_level=%u data4x4=%zu "
+                "frame=%zu codec=19 size=%ux%u retry=%u loss_level=%u "
+                "target_min=%zu target_max=%zu data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                 "temporal2x2=%zu spatial2x2=%zu "
                 "bits=%zu bytes=%zu "
                 "verify=ok\n",
-                frame_number, width, height, loss_level, stats->data4x4_blocks,
+                frame_number, width, height, retry, loss_level,
+                target_min, target_max, stats->data4x4_blocks,
                 stats->stationary4x4_blocks, stats->temporal4x4_blocks,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
                 stats->data2x2_blocks, stats->stationary2x2_blocks,
@@ -176,6 +181,8 @@ int main(int argc, char **argv)
     unsigned height = 0U;
     unsigned codec = 0U;
     unsigned loss_level = 0U;
+    unsigned current_loss_level;
+    size_t target_bytes = 0U;
     size_t frame_limit = 0U;
     int data_only = 0;
     uint8_t *rgb = NULL;
@@ -231,6 +238,14 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
             loss_level = (unsigned)value;
+        } else if (strcmp(argv[i], "--target-bytes") == 0 && i + 1 < argc) {
+            char *end;
+            unsigned long long value = strtoull(argv[++i], &end, 10);
+            if (*end != '\0' || value == 0ULL || value > SIZE_MAX) {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+            target_bytes = (size_t)value;
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -246,7 +261,8 @@ int main(int argc, char **argv)
         (payload_path == NULL) == (payload_prefix == NULL) ||
         (recon_ppm_path != NULL && recon_prefix != NULL) ||
         (payload_path != NULL && (frame_limit > 1U || recon_prefix != NULL)) ||
-        (payload_prefix != NULL && recon_ppm_path != NULL) || width == 0U ||
+        (payload_prefix != NULL && recon_ppm_path != NULL) ||
+        (data_only && target_bytes != 0U) || width == 0U ||
         height == 0U || (width & 3U) != 0U || (height & 3U) != 0U ||
         (size_t)width > SIZE_MAX / (size_t)height) {
         usage(stderr);
@@ -282,6 +298,7 @@ int main(int argc, char **argv)
         }
     }
     replay_buffer_init(&payload);
+    current_loss_level = loss_level;
 
     /*
      * The previous buffer always contains decoder-visible reconstruction, not
@@ -300,7 +317,7 @@ int main(int argc, char **argv)
             !data_only && frame_number != 0U,
             !data_only,
             !data_only,
-            loss_level
+            current_loss_level
         };
         CodecSuperMovingBlocksEncodeStats stats;
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
@@ -309,6 +326,9 @@ int main(int argc, char **argv)
         const char *frame_payload = payload_path;
         const char *frame_ppm = recon_ppm_path;
         size_t consumed_bits;
+        MbRateControl rate_control;
+        int rate_control_enabled = target_bytes != 0U && frame_number != 0U;
+        unsigned retry = 0U;
         ReplayStatus status;
 
         if (read_result == FRAME_READ_EOF) {
@@ -324,23 +344,50 @@ int main(int argc, char **argv)
                     replay_status_string(status));
             goto free_payload;
         }
-        status = codec_supermovingblocks_encode_frame(
-            &source, previous_arg, &options, &payload, &reconstructed, &stats);
-        if (status != REPLAY_OK) {
-            fprintf(stderr, "encoding failed: %s\n",
-                    replay_status_string(status));
+        if (target_bytes != 0U &&
+            mb_rate_control_init(&rate_control, target_bytes,
+                                 current_loss_level) != REPLAY_OK) {
+            fprintf(stderr, "invalid rate-control target\n");
             goto free_payload;
         }
-        status = codec_supermovingblocks_verify_frame(
-            payload.data, payload.size, previous_arg, &decoded,
-            &consumed_bits, NULL);
-        if (status != REPLAY_OK || consumed_bits != stats.bits_written ||
-            memcmp(decoded_pixels, reconstructed_pixels,
-                   pixel_count * sizeof(*decoded_pixels)) != 0) {
-            fprintf(stderr, "internal decode cross-check failed: %s\n",
-                    replay_status_string(status));
-            goto free_payload;
+        for (;;) {
+            options.loss_level = rate_control_enabled
+                                     ? rate_control.loss_level
+                                     : current_loss_level;
+            status = codec_supermovingblocks_encode_frame(
+                &source, previous_arg, &options, &payload, &reconstructed,
+                &stats);
+            if (status != REPLAY_OK) {
+                fprintf(stderr, "encoding failed: %s\n",
+                        replay_status_string(status));
+                goto free_payload;
+            }
+            status = codec_supermovingblocks_verify_frame(
+                payload.data, payload.size, previous_arg, &decoded,
+                &consumed_bits, NULL);
+            if (status != REPLAY_OK || consumed_bits != stats.bits_written ||
+                memcmp(decoded_pixels, reconstructed_pixels,
+                       pixel_count * sizeof(*decoded_pixels)) != 0) {
+                fprintf(stderr, "internal decode cross-check failed: %s\n",
+                        replay_status_string(status));
+                goto free_payload;
+            }
+            if (trace_frame(
+                    trace, frame_number, width, height, &stats, payload.size,
+                    options.loss_level, retry,
+                    target_bytes != 0U ? rate_control.target_min_bytes : 0U,
+                    target_bytes != 0U ? rate_control.target_max_bytes : 0U) !=
+                EXIT_SUCCESS) {
+                goto free_payload;
+            }
+            if (!rate_control_enabled ||
+                mb_rate_control_observe(&rate_control, payload.size) ==
+                    MB_RATE_ACCEPT) {
+                break;
+            }
+            ++retry;
         }
+        current_loss_level = options.loss_level;
         if (payload_prefix != NULL) {
             if (make_frame_path(generated_payload, sizeof(generated_payload),
                                 payload_prefix, frame_number, ".mb19") !=
@@ -359,17 +406,16 @@ int main(int argc, char **argv)
         }
         if (write_payload(frame_payload, &payload) != EXIT_SUCCESS ||
             write_reconstructed_ppm(frame_ppm, &reconstructed, rgb,
-                                    (size_t)width * 3U) != EXIT_SUCCESS ||
-            trace_frame(trace, frame_number, width, height, &stats,
-                        payload.size, loss_level) != EXIT_SUCCESS) {
+                                    (size_t)width * 3U) != EXIT_SUCCESS) {
             goto free_payload;
         }
-        printf("frame=%zu codec=19 loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
+        printf("frame=%zu codec=19 retry=%u loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
                "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                "temporal2x2=%zu spatial2x2=%zu verify=ok "
                "payload=\"%s\"\n",
-               frame_number, loss_level, stats.bits_written, payload.size,
+               frame_number, retry, options.loss_level, stats.bits_written,
+               payload.size,
                stats.data4x4_blocks, stats.stationary4x4_blocks,
                stats.temporal4x4_blocks, stats.spatial4x4_blocks,
                stats.split4x4_blocks, stats.data2x2_blocks,

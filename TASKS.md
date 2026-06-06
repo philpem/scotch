@@ -66,7 +66,7 @@
 - [x] Complete exact 4x4 versus split-2x2 bit-cost selection, including data,
   stationary, temporal, and spatial 2x2 modes.
 - [x] Add the 29-level threshold table and fixed-loss tests.
-- [ ] Add target-byte retries after deterministic single-pass encoding works.
+- [x] Add target-byte retries after deterministic single-pass encoding works.
 
 ## Milestone 7: Replay Container And Playback
 

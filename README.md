@@ -52,8 +52,9 @@ Encode all complete frames from an RGB24 stream as separate raw payloads:
 ```sh
 ffmpeg -i input.mp4 -vf scale=320:256,fps=12.5 \
     -pix_fmt rgb24 -f rawvideo - | \
-    build/replay-encode --codec 19 --input - --size 320x256 \
-    --payload-prefix frames/frame- --trace frames/decisions.txt
+build/replay-encode --codec 19 --input - --size 320x256 \
+    --payload-prefix frames/frame- --loss-level 7 --target-bytes 4096 \
+    --trace frames/decisions.txt
 ```
 
 This writes `frame-000000.mb19`, `frame-000001.mb19`, and so on. After the
@@ -67,6 +68,12 @@ than 4x4 data.
 exact copy matches. `--data-only` disables copy and split decisions, and
 `--frames N` requires exactly N input frames. The output files remain raw
 codec payloads rather than an undocumented temporary container.
+
+`--target-bytes N` enables Acorn-style whole-frame retries after the first
+frame. The accepted size window is 90% through 102.5% of the target. The
+encoder moves one loss level per retry, keeps the initial direction to avoid
+oscillation, and carries the accepted level into the next frame. Trace output
+records every verifier-clean attempt, including rejected retries.
 
 ## Naming
 
