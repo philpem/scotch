@@ -66,3 +66,7 @@ add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
 add_replay_test(test_supermovingblocks_encoder
     tests/test_supermovingblocks_encoder.c)
+add_replay_test(test_supermovingblocks_stationary
+    tests/test_supermovingblocks_stationary.c)
+add_replay_test(test_supermovingblocks_temporal
+    tests/test_supermovingblocks_temporal.c)

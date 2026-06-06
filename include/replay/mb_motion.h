@@ -19,5 +19,13 @@ ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
                                      MbMotionBlockSize block_size,
                                      MbMotionVector *motion);
 
-#endif
+/* Write the family/index after the caller has written the move prefix. */
+ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
+                                      MbMotionBlockSize block_size,
+                                      const MbMotionVector *motion);
 
+/* Enumerate temporal vectors in increasing code-length and table order. */
+ReplayStatus mb_motion_format19_temporal_at(unsigned index,
+                                            MbMotionVector *motion);
+
+#endif

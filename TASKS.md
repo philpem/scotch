@@ -54,12 +54,14 @@
 - [x] Decode every emitted frame and compare it with encoder reconstruction.
 - [x] Add a frame-level decision trace.
 - [x] Add reconstructed-frame PPM output for visual inspection.
-- [ ] Generalise raw input and output from one frame to a frame sequence.
+- [x] Generalise raw input to a frame sequence and write explicitly numbered
+  raw payloads without inventing an intermediate container.
 
 ## Milestone 6: Compression Modes
 
-- [ ] Add stationary candidates and cross-frame state.
-- [ ] Add temporal motion candidates.
+- [x] Add exact stationary 4x4 candidates and cross-frame reconstruction
+  state.
+- [x] Add exact temporal 4x4 candidates in canonical code-length/table order.
 - [ ] Add spatial candidates.
 - [ ] Add 4x4 versus split-2x2 bit-cost selection.
 - [ ] Add the 29-level threshold table and fixed-loss tests.

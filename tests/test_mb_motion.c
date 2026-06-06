@@ -31,6 +31,27 @@ static int decode_motion(uint32_t family, unsigned index_bits,
     return status;
 }
 
+static int round_trip_motion(int dx, int dy, int spatial,
+                             MbMotionBlockSize block_size)
+{
+    ReplayBuffer buffer;
+    ReplayBitWriter writer;
+    ReplayBitReader reader;
+    MbMotionVector expected = { dx, dy, spatial };
+    MbMotionVector actual;
+
+    replay_buffer_init(&buffer);
+    replay_bitwriter_init(&writer, &buffer);
+    CHECK(mb_motion_write_format19(&writer, block_size, &expected) ==
+          REPLAY_OK);
+    CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    replay_bitreader_init(&reader, buffer.data, buffer.size);
+    CHECK(mb_motion_read_format19(&reader, block_size, &actual) == REPLAY_OK);
+    CHECK(actual.dx == dx && actual.dy == dy && actual.spatial == spatial);
+    replay_buffer_free(&buffer);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     MbMotionVector motion;
@@ -65,5 +86,12 @@ int main(void)
 
     CHECK(decode_motion(3U, 8U, 240U, MB_MOTION_BLOCK_4X4, &motion) ==
           REPLAY_MALFORMED_STREAM);
+
+    CHECK(round_trip_motion(1, 0, 0, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
+    CHECK(round_trip_motion(-2, 2, 0, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
+    CHECK(round_trip_motion(3, -1, 0, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
+    CHECK(round_trip_motion(8, 8, 0, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
+    CHECK(round_trip_motion(-4, 0, 1, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
+    CHECK(round_trip_motion(-2, -1, 1, MB_MOTION_BLOCK_2X2) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

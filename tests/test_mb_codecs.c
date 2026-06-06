@@ -12,6 +12,8 @@ int main(void)
     CHECK(codec->y_bits == 6U);
     CHECK(codec->u_bits == 5U);
     CHECK(codec->luma_huffman != NULL);
+    CHECK(codec->encoder_implemented);
+    CHECK(codec->verifier_implemented);
 
     CHECK(mb_codec_find(7U) == &codec_movingblocks);
     CHECK(mb_codec_find(17U) == &codec_movingblockshq);
@@ -19,4 +21,3 @@ int main(void)
     CHECK(mb_codec_find(18U) == NULL);
     return EXIT_SUCCESS;
 }
-

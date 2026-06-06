@@ -5,57 +5,72 @@
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
 
+typedef enum {
+    FRAME_READ_OK,
+    FRAME_READ_EOF,
+    FRAME_READ_ERROR
+} FrameReadResult;
+
 static void usage(FILE *stream)
 {
     fprintf(stream,
-            "usage: replay-encode --codec 19 --input FILE|- --size WIDTHxHEIGHT "
-            "--payload FILE [--trace FILE] [--recon-ppm FILE]\n");
+            "usage: replay-encode --codec 19 --input FILE|- --size WxH "
+            "(--payload FILE | --payload-prefix PREFIX) "
+            "[--frames N] [--data-only] [--trace FILE] "
+            "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
 }
 
-static int read_exact_frame(const char *path, uint8_t *data, size_t size)
+static FrameReadResult read_frame(FILE *file, const char *name, uint8_t *data,
+                                  size_t size)
 {
-    FILE *file = strcmp(path, "-") == 0 ? stdin : fopen(path, "rb");
     size_t offset = 0U;
-    int result = EXIT_FAILURE;
 
-    if (file == NULL) {
-        perror(path);
-        return EXIT_FAILURE;
-    }
     while (offset < size) {
         size_t count = fread(data + offset, 1U, size - offset, file);
         if (count == 0U) {
             if (ferror(file)) {
-                perror(path);
-            } else {
-                fprintf(stderr, "%s: truncated RGB24 frame (%zu of %zu bytes)\n",
-                        path, offset, size);
+                perror(name);
+                return FRAME_READ_ERROR;
             }
-            goto done;
+            if (offset == 0U) {
+                return FRAME_READ_EOF;
+            }
+            fprintf(stderr, "%s: truncated RGB24 frame (%zu of %zu bytes)\n",
+                    name, offset, size);
+            return FRAME_READ_ERROR;
         }
         offset += count;
     }
-    {
-        uint8_t extra;
-        size_t count = fread(&extra, 1U, 1U, file);
-        if (count != 0U) {
-            fprintf(stderr, "%s: input contains more than one RGB24 frame\n",
-                    path);
-            goto done;
-        }
-        if (ferror(file)) {
-            perror(path);
-            goto done;
-        }
-    }
-    result = EXIT_SUCCESS;
+    return FRAME_READ_OK;
+}
 
-done:
-    if (file != stdin && fclose(file) != 0 && result == EXIT_SUCCESS) {
-        perror(path);
-        result = EXIT_FAILURE;
+static int require_eof(FILE *file, const char *name)
+{
+    uint8_t extra;
+
+    if (fread(&extra, 1U, 1U, file) != 0U) {
+        fprintf(stderr, "%s: input contains more frames than requested\n",
+                name);
+        return EXIT_FAILURE;
     }
-    return result;
+    if (ferror(file)) {
+        perror(name);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int make_frame_path(char *path, size_t path_size, const char *prefix,
+                           size_t frame_number, const char *suffix)
+{
+    int length = snprintf(path, path_size, "%s%06zu%s", prefix,
+                          frame_number, suffix);
+
+    if (length < 0 || (size_t)length >= path_size) {
+        fprintf(stderr, "generated frame path is too long\n");
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
 }
 
 static int write_payload(const char *path, const ReplayBuffer *payload)
@@ -76,30 +91,6 @@ static int write_payload(const char *path, const ReplayBuffer *payload)
         result = EXIT_FAILURE;
     }
     return result;
-}
-
-static int write_trace(const char *path, unsigned width, unsigned height,
-                       size_t bits, size_t bytes)
-{
-    FILE *file;
-
-    if (path == NULL) {
-        return EXIT_SUCCESS;
-    }
-    file = fopen(path, "w");
-    if (file == NULL) {
-        perror(path);
-        return EXIT_FAILURE;
-    }
-    fprintf(file,
-            "frame=0 codec=19 size=%ux%u mode=data4x4 blocks=%u "
-            "bits=%zu bytes=%zu verify=ok\n",
-            width, height, (width / 4U) * (height / 4U), bits, bytes);
-    if (fclose(file) != 0) {
-        perror(path);
-        return EXIT_FAILURE;
-    }
-    return EXIT_SUCCESS;
 }
 
 static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
@@ -135,28 +126,51 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
     return EXIT_SUCCESS;
 }
 
+static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
+                       unsigned height,
+                       const CodecSuperMovingBlocksEncodeStats *stats,
+                       size_t bytes)
+{
+    if (trace == NULL) {
+        return EXIT_SUCCESS;
+    }
+    if (fprintf(trace,
+                "frame=%zu codec=19 size=%ux%u data4x4=%zu "
+                "stationary4x4=%zu temporal4x4=%zu bits=%zu bytes=%zu "
+                "verify=ok\n",
+                frame_number, width, height, stats->data4x4_blocks,
+                stats->stationary4x4_blocks, stats->temporal4x4_blocks,
+                stats->bits_written, bytes) < 0) {
+        perror("trace output");
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL;
     const char *payload_path = NULL;
+    const char *payload_prefix = NULL;
     const char *trace_path = NULL;
     const char *recon_ppm_path = NULL;
+    const char *recon_prefix = NULL;
     unsigned width = 0U;
     unsigned height = 0U;
     unsigned codec = 0U;
+    size_t frame_limit = 0U;
+    int data_only = 0;
     uint8_t *rgb = NULL;
     MbPixel *source_pixels = NULL;
     MbPixel *reconstructed_pixels = NULL;
+    MbPixel *previous_pixels = NULL;
     MbPixel *decoded_pixels = NULL;
     ReplayBuffer payload;
-    MbFrame source;
-    MbFrame reconstructed;
-    MbFrame decoded;
+    FILE *input = NULL;
+    FILE *trace = NULL;
     size_t pixel_count;
     size_t rgb_size;
-    size_t bits_written;
-    size_t bits_consumed;
-    ReplayStatus status;
+    size_t frame_number = 0U;
     int result = EXIT_FAILURE;
     int i;
 
@@ -173,10 +187,24 @@ int main(int argc, char **argv)
             input_path = argv[++i];
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
             payload_path = argv[++i];
+        } else if (strcmp(argv[i], "--payload-prefix") == 0 && i + 1 < argc) {
+            payload_prefix = argv[++i];
         } else if (strcmp(argv[i], "--trace") == 0 && i + 1 < argc) {
             trace_path = argv[++i];
         } else if (strcmp(argv[i], "--recon-ppm") == 0 && i + 1 < argc) {
             recon_ppm_path = argv[++i];
+        } else if (strcmp(argv[i], "--recon-prefix") == 0 && i + 1 < argc) {
+            recon_prefix = argv[++i];
+        } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+            char *end;
+            unsigned long value = strtoul(argv[++i], &end, 10);
+            if (*end != '\0' || value == 0UL || value > SIZE_MAX) {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+            frame_limit = (size_t)value;
+        } else if (strcmp(argv[i], "--data-only") == 0) {
+            data_only = 1;
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -188,9 +216,13 @@ int main(int argc, char **argv)
             return EXIT_FAILURE;
         }
     }
-    if (codec != 19U || input_path == NULL || payload_path == NULL ||
-        width == 0U || height == 0U || (width & 3U) != 0U ||
-        (height & 3U) != 0U || (size_t)width > SIZE_MAX / (size_t)height) {
+    if (codec != 19U || input_path == NULL ||
+        (payload_path == NULL) == (payload_prefix == NULL) ||
+        (recon_ppm_path != NULL && recon_prefix != NULL) ||
+        (payload_path != NULL && (frame_limit > 1U || recon_prefix != NULL)) ||
+        (payload_prefix != NULL && recon_ppm_path != NULL) || width == 0U ||
+        height == 0U || (width & 3U) != 0U || (height & 3U) != 0U ||
+        (size_t)width > SIZE_MAX / (size_t)height) {
         usage(stderr);
         return EXIT_FAILURE;
     }
@@ -204,59 +236,140 @@ int main(int argc, char **argv)
     rgb = malloc(rgb_size);
     source_pixels = malloc(pixel_count * sizeof(*source_pixels));
     reconstructed_pixels = malloc(pixel_count * sizeof(*reconstructed_pixels));
+    previous_pixels = malloc(pixel_count * sizeof(*previous_pixels));
     decoded_pixels = malloc(pixel_count * sizeof(*decoded_pixels));
     if (rgb == NULL || source_pixels == NULL || reconstructed_pixels == NULL ||
-        decoded_pixels == NULL) {
+        previous_pixels == NULL || decoded_pixels == NULL) {
         fprintf(stderr, "unable to allocate frame buffers\n");
         goto done;
     }
-    if (read_exact_frame(input_path, rgb, rgb_size) != EXIT_SUCCESS) {
+    input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
+    if (input == NULL) {
+        perror(input_path);
         goto done;
     }
-
-    source = (MbFrame){ width, height, width, source_pixels };
-    reconstructed =
-        (MbFrame){ width, height, width, reconstructed_pixels };
-    decoded = (MbFrame){ width, height, width, decoded_pixels };
-    status = mb_color_rgb24_to_6y5uv(rgb, (size_t)width * 3U, &source);
-    if (status != REPLAY_OK) {
-        fprintf(stderr, "RGB conversion failed: %s\n",
-                replay_status_string(status));
-        goto done;
+    if (trace_path != NULL) {
+        trace = fopen(trace_path, "w");
+        if (trace == NULL) {
+            perror(trace_path);
+            goto done;
+        }
     }
     replay_buffer_init(&payload);
-    status = codec_supermovingblocks_encode_data_frame(
-        &source, &payload, &reconstructed, &bits_written);
-    if (status != REPLAY_OK) {
-        fprintf(stderr, "encoding failed: %s\n", replay_status_string(status));
-        replay_buffer_free(&payload);
-        goto done;
+
+    for (;;) {
+        FrameReadResult read_result = read_frame(input, input_path, rgb, rgb_size);
+        MbFrame source = { width, height, width, source_pixels };
+        MbFrame reconstructed =
+            { width, height, width, reconstructed_pixels };
+        MbFrame previous = { width, height, width, previous_pixels };
+        MbFrame decoded = { width, height, width, decoded_pixels };
+        CodecSuperMovingBlocksEncodeOptions options = {
+            !data_only && frame_number != 0U,
+            !data_only && frame_number != 0U
+        };
+        CodecSuperMovingBlocksEncodeStats stats;
+        const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
+        char generated_payload[4096];
+        char generated_ppm[4096];
+        const char *frame_payload = payload_path;
+        const char *frame_ppm = recon_ppm_path;
+        size_t consumed_bits;
+        ReplayStatus status;
+
+        if (read_result == FRAME_READ_EOF) {
+            break;
+        }
+        if (read_result == FRAME_READ_ERROR) {
+            goto free_payload;
+        }
+        status = mb_color_rgb24_to_6y5uv(
+            rgb, (size_t)width * 3U, &source);
+        if (status != REPLAY_OK) {
+            fprintf(stderr, "RGB conversion failed: %s\n",
+                    replay_status_string(status));
+            goto free_payload;
+        }
+        status = codec_supermovingblocks_encode_frame(
+            &source, previous_arg, &options, &payload, &reconstructed, &stats);
+        if (status != REPLAY_OK) {
+            fprintf(stderr, "encoding failed: %s\n",
+                    replay_status_string(status));
+            goto free_payload;
+        }
+        status = codec_supermovingblocks_verify_frame(
+            payload.data, payload.size, previous_arg, &decoded,
+            &consumed_bits, NULL);
+        if (status != REPLAY_OK || consumed_bits != stats.bits_written ||
+            memcmp(decoded_pixels, reconstructed_pixels,
+                   pixel_count * sizeof(*decoded_pixels)) != 0) {
+            fprintf(stderr, "internal decode cross-check failed: %s\n",
+                    replay_status_string(status));
+            goto free_payload;
+        }
+        if (payload_prefix != NULL) {
+            if (make_frame_path(generated_payload, sizeof(generated_payload),
+                                payload_prefix, frame_number, ".mb19") !=
+                EXIT_SUCCESS) {
+                goto free_payload;
+            }
+            frame_payload = generated_payload;
+        }
+        if (recon_prefix != NULL) {
+            if (make_frame_path(generated_ppm, sizeof(generated_ppm),
+                                recon_prefix, frame_number, ".ppm") !=
+                EXIT_SUCCESS) {
+                goto free_payload;
+            }
+            frame_ppm = generated_ppm;
+        }
+        if (write_payload(frame_payload, &payload) != EXIT_SUCCESS ||
+            write_reconstructed_ppm(frame_ppm, &reconstructed, rgb,
+                                    (size_t)width * 3U) != EXIT_SUCCESS ||
+            trace_frame(trace, frame_number, width, height, &stats,
+                        payload.size) != EXIT_SUCCESS) {
+            goto free_payload;
+        }
+        printf("frame=%zu codec=19 bits=%zu bytes=%zu data4x4=%zu "
+               "stationary4x4=%zu temporal4x4=%zu verify=ok "
+               "payload=\"%s\"\n",
+               frame_number, stats.bits_written, payload.size,
+               stats.data4x4_blocks, stats.stationary4x4_blocks,
+               stats.temporal4x4_blocks, frame_payload);
+        memcpy(previous_pixels, reconstructed_pixels,
+               pixel_count * sizeof(*previous_pixels));
+        ++frame_number;
+        if (payload_path != NULL ||
+            (frame_limit != 0U && frame_number == frame_limit)) {
+            break;
+        }
     }
-    status = codec_supermovingblocks_verify_frame(
-        payload.data, payload.size, NULL, &decoded, &bits_consumed, NULL);
-    if (status != REPLAY_OK || bits_consumed != bits_written ||
-        memcmp(decoded_pixels, reconstructed_pixels,
-               pixel_count * sizeof(*decoded_pixels)) != 0) {
-        fprintf(stderr, "internal decode cross-check failed: %s\n",
-                replay_status_string(status));
-        replay_buffer_free(&payload);
-        goto done;
+    if (frame_number == 0U) {
+        fprintf(stderr, "%s: no complete RGB24 frames\n", input_path);
+        goto free_payload;
     }
-    if (write_payload(payload_path, &payload) != EXIT_SUCCESS ||
-        write_trace(trace_path, width, height, bits_written,
-                    payload.size) != EXIT_SUCCESS ||
-        write_reconstructed_ppm(recon_ppm_path, &reconstructed, rgb,
-                                (size_t)width * 3U) != EXIT_SUCCESS) {
-        replay_buffer_free(&payload);
-        goto done;
+    if ((payload_path != NULL || frame_limit != 0U) &&
+        require_eof(input, input_path) != EXIT_SUCCESS) {
+        goto free_payload;
     }
-    printf("codec=19 size=%ux%u bits=%zu bytes=%zu verify=ok payload=\"%s\"\n",
-           width, height, bits_written, payload.size, payload_path);
     replay_buffer_free(&payload);
     result = EXIT_SUCCESS;
+    goto done;
 
+free_payload:
+    replay_buffer_free(&payload);
 done:
+    if (trace != NULL && fclose(trace) != 0 && result == EXIT_SUCCESS) {
+        perror(trace_path);
+        result = EXIT_FAILURE;
+    }
+    if (input != NULL && input != stdin && fclose(input) != 0 &&
+        result == EXIT_SUCCESS) {
+        perror(input_path);
+        result = EXIT_FAILURE;
+    }
     free(decoded_pixels);
+    free(previous_pixels);
     free(reconstructed_pixels);
     free(source_pixels);
     free(rgb);

@@ -56,6 +56,96 @@ static ReplayStatus far_vector(unsigned index, MbMotionVector *motion)
     return REPLAY_MALFORMED_STREAM;
 }
 
+ReplayStatus mb_motion_format19_temporal_at(unsigned index,
+                                            MbMotionVector *motion)
+{
+    if (motion == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    if (index < 8U) {
+        *motion = ring_vector(1U, index);
+        return REPLAY_OK;
+    }
+    if (index < 24U) {
+        *motion = ring_vector(2U, index - 8U);
+        return REPLAY_OK;
+    }
+    if (index < 48U) {
+        *motion = ring_vector(3U, index - 24U);
+        return REPLAY_OK;
+    }
+    if (index < 288U) {
+        return far_vector(index - 48U, motion);
+    }
+    return REPLAY_INVALID_ARGUMENT;
+}
+
+static int same_vector(const MbMotionVector *left, const MbMotionVector *right)
+{
+    return left->dx == right->dx && left->dy == right->dy &&
+           left->spatial == right->spatial;
+}
+
+static ReplayStatus write_index(ReplayBitWriter *writer, unsigned family,
+                                unsigned index, unsigned index_bits)
+{
+    ReplayStatus status = replay_bitwriter_write(writer, family, 2U);
+
+    return status == REPLAY_OK
+               ? replay_bitwriter_write(writer, index, index_bits)
+               : status;
+}
+
+ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
+                                      MbMotionBlockSize block_size,
+                                      const MbMotionVector *motion)
+{
+    unsigned index;
+
+    if (writer == NULL || motion == NULL ||
+        (block_size != MB_MOTION_BLOCK_2X2 &&
+         block_size != MB_MOTION_BLOCK_4X4)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    if (motion->spatial != 0) {
+        const MbMotionVector *table = block_size == MB_MOTION_BLOCK_4X4
+                                          ? spatial_4x4
+                                          : spatial_2x2;
+        for (index = 0U; index < 8U; ++index) {
+            if (same_vector(&table[index], motion)) {
+                return write_index(writer, 1U, index, 5U);
+            }
+        }
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    for (index = 0U; index < 8U; ++index) {
+        MbMotionVector candidate = ring_vector(1U, index);
+        if (same_vector(&candidate, motion)) {
+            return write_index(writer, 0U, index, 3U);
+        }
+    }
+    for (index = 0U; index < 16U; ++index) {
+        MbMotionVector candidate = ring_vector(2U, index);
+        if (same_vector(&candidate, motion)) {
+            return write_index(writer, 2U, index, 4U);
+        }
+    }
+    for (index = 0U; index < 24U; ++index) {
+        MbMotionVector candidate = ring_vector(3U, index);
+        if (same_vector(&candidate, motion)) {
+            return write_index(writer, 1U, index + 8U, 5U);
+        }
+    }
+    for (index = 0U; index < 240U; ++index) {
+        MbMotionVector candidate;
+        if (far_vector(index, &candidate) == REPLAY_OK &&
+            same_vector(&candidate, motion)) {
+            return write_index(writer, 3U, index, 8U);
+        }
+    }
+    return REPLAY_INVALID_ARGUMENT;
+}
+
 ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
                                      MbMotionBlockSize block_size,
                                      MbMotionVector *motion)

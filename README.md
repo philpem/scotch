@@ -42,11 +42,26 @@ ffmpeg -i input.mp4 -vf scale=320:256 -frames:v 1 \
     --payload frame.mb19 --trace frame.trace --recon-ppm frame.ppm
 ```
 
-This first encoder emits only 4x4 data blocks. It converts RGB with CompLib's
-non-dithered fixed-point path, decodes every generated payload, and compares
-the result with its reconstructed frame before writing the payload. The CLI
-requires EOF after one frame; sequence framing belongs in the later Replay
-container layer.
+The encoder converts RGB with CompLib's non-dithered fixed-point path, decodes
+every generated payload, and compares the result with its reconstructed frame
+before writing the payload. Single-frame mode emits only 4x4 data blocks and
+requires EOF after that frame.
+
+Encode all complete frames from an RGB24 stream as separate raw payloads:
+
+```sh
+ffmpeg -i input.mp4 -vf scale=320:256,fps=12.5 \
+    -pix_fmt rgb24 -f rawvideo - | \
+    build/replay-encode --codec 19 --input - --size 320x256 \
+    --payload-prefix frames/frame- --trace frames/decisions.txt
+```
+
+This writes `frame-000000.mb19`, `frame-000001.mb19`, and so on. After the
+first frame, unchanged 4x4 reconstructions use two-bit stationary blocks, and
+exact matches elsewhere in the previous frame use temporal motion codes.
+`--data-only` disables these decisions, and `--frames N` requires exactly N
+input frames. The output files remain raw codec payloads rather than an
+undocumented temporary container.
 
 ## Naming
 
