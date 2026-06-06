@@ -117,6 +117,10 @@ def run(args: argparse.Namespace) -> int:
 
     machine.reg_write(UC_ARM_REG_R0, args.width)
     machine.reg_write(UC_ARM_REG_R1, args.height)
+    # CodecIf: any value other than "PARM" means no parameter list. This
+    # decompressor ignores both registers, but zero states that intent clearly.
+    machine.reg_write(UC_ARM_REG_R2, 0)
+    machine.reg_write(UC_ARM_REG_R3, 0)
     machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
     machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
     machine.emu_start(CODE_BASE + 4, RETURN_ADDRESS)
@@ -127,6 +131,8 @@ def run(args: argparse.Namespace) -> int:
     machine.reg_write(UC_ARM_REG_R3, 0)
     machine.reg_write(UC_ARM_REG_R4, RETURN_ADDRESS)
     machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
+    # CodecIf assigns r4 in the default IRQ call and r14 in the C call. The
+    # generated Decomp19 routine saves r14 internally, so provide both.
     machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
     machine.emu_start(CODE_BASE + 8, RETURN_ADDRESS)
 
