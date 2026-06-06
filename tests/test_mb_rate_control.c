@@ -29,5 +29,13 @@ int main(void)
     CHECK(mb_rate_control_init(&control, 0U, 0U) == REPLAY_INVALID_ARGUMENT);
     CHECK(mb_rate_control_init(&control, 100U, 29U) ==
           REPLAY_INVALID_ARGUMENT);
+
+    /* Custom factors use explicit floating-point truncation toward zero. */
+    CHECK(mb_rate_control_init_window(
+              &control, 101U, 4U, 0.875, 1.125) == REPLAY_OK);
+    CHECK(control.target_min_bytes == 88U);
+    CHECK(control.target_max_bytes == 113U);
+    CHECK(mb_rate_control_init_window(
+              &control, 100U, 4U, 1.1, 1.0) == REPLAY_INVALID_ARGUMENT);
     return EXIT_SUCCESS;
 }

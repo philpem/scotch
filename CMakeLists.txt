@@ -24,6 +24,10 @@ add_library(replay STATIC
 
 target_include_directories(replay PUBLIC include)
 
+if(NOT MSVC)
+    target_link_libraries(replay PUBLIC m)
+endif()
+
 if(MSVC)
     target_compile_options(replay PRIVATE /W4 /WX)
 else()

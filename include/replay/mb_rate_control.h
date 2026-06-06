@@ -5,6 +5,9 @@
 
 #include "replay/replay_status.h"
 
+#define MB_RATE_DEFAULT_MIN_FACTOR 0.90
+#define MB_RATE_DEFAULT_MAX_FACTOR 1.025
+
 typedef enum {
     MB_RATE_ACCEPT,
     MB_RATE_RETRY
@@ -26,6 +29,12 @@ typedef struct {
 
 ReplayStatus mb_rate_control_init(MbRateControl *control, size_t target_bytes,
                                   unsigned initial_loss_level);
+
+ReplayStatus mb_rate_control_init_window(MbRateControl *control,
+                                         size_t target_bytes,
+                                         unsigned initial_loss_level,
+                                         double minimum_factor,
+                                         double maximum_factor);
 
 MbRateDecision mb_rate_control_observe(MbRateControl *control,
                                        size_t encoded_bytes);

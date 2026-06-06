@@ -73,7 +73,9 @@ codec payloads rather than an undocumented temporary container.
 frame. The accepted size window is 90% through 102.5% of the target. The
 encoder moves one loss level per retry, keeps the initial direction to avoid
 oscillation, and carries the accepted level into the next frame. Trace output
-records every verifier-clean attempt, including rejected retries.
+records every verifier-clean attempt, including rejected retries. Library
+callers can override both floating-point window factors through
+`mb_rate_control_init_window`; calculated byte limits are explicitly truncated.
 
 ## Naming
 
