@@ -1,4 +1,4 @@
-# Original Format-19 Cross-Check Corpus
+# Original Type 19, Super Moving Blocks Cross-Check Corpus
 
 This directory is reserved for payloads produced by the original Acorn
 compressor and decoded by the original `Decomp19` implementation. Do not add
@@ -10,7 +10,7 @@ Each manifest row names:
 
 1. a stable fixture name;
 2. width and height in pixels;
-3. the raw format-19 payload;
+3. the raw type 19, Super Moving Blocks payload;
 4. the previous reconstructed frame, or `-` for a key frame;
 5. the expected decoded frame captured from the Acorn decompressor;
 6. a provenance note.

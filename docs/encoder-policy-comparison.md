@@ -1,4 +1,4 @@
-# Format-19 Encoder Policy Comparison
+# Type 19, Super Moving Blocks Encoder Policy Comparison
 
 Bitstream compatibility does not require reproducing every decision made by
 Acorn's compressor. The useful requirement is to identify policy differences
@@ -51,8 +51,8 @@ block when Acorn's broader search would find a closer temporal or spatial
 match. This can reduce bitrate at the cost of local reconstruction quality.
 
 Temporal priority over spatial has no fixed bitrate direction. Temporal motion
-codes vary with vector family, while a format-19 spatial code occupies the
-shared radius-three family. A selected temporal vector may therefore be either
+codes vary with vector family, while a type 19, Super Moving Blocks spatial
+code occupies the shared radius-three family. A selected temporal vector may therefore be either
 shorter or longer than an available spatial vector. It may also have greater
 error because the portable encoder does not compare the winning temporal and
 spatial errors with each other.
@@ -83,5 +83,7 @@ PSNR in the codec's 6Y5UV domain, and maximum component error. RGB metrics may
 be added for presentation, but 6Y5UV is the authoritative comparison because
 that is what the codec actually preserves.
 
-Until original-compressor fixtures are available, the expected directions
-above are qualitative. No numerical bitrate or quality advantage is claimed.
+The portable tooling now emits these block traces and reports native 6Y5UV
+SSE/MSE, PSNR, and maximum component errors. Original-compressor fixtures are
+still required before the expected directions above can be quantified. No
+numerical bitrate or quality advantage is currently claimed.

@@ -1,15 +1,16 @@
 # Decomp19 ARM Harness
 
-`tools/decomp19_unicorn.py` executes the original generated format-19
-decompressor without RISC OS. A compiled copy is present at
+`tools/decomp19_unicorn.py` executes the original generated type 19, Super
+Moving Blocks decompressor without RISC OS. A compiled copy is present at
 `!ARMovie_compiled/Decomp19/Decompress,ffd`; its SHA-256 digest is
 `3d302da5f71efbc43a2cb677db75c4e46c791ec2d65bd272617e01e0656d8678`.
 
 ## Documented Interface
 
 The authoritative general interface is `Resources/Documents/CodecIf`. The
-format-19 generator, `Video/Decomp19/bas/MakeDecomp,ffb.txt`, confirms how that
-interface is used by this particular codec.
+type 19, Super Moving Blocks generator,
+`Video/Decomp19/bas/MakeDecomp,ffb.txt`, confirms how that interface is used by
+this particular codec.
 
 The generated file starts with three words, as specified by `CodecIf`:
 

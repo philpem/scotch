@@ -1,4 +1,4 @@
-# Format-19 Implementation Status
+# Type 19, Super Moving Blocks Implementation Status
 
 This document separates implemented behavior, verified compatibility, and
 known gaps. Source descriptions live in the project-level `notes` directory;
@@ -7,12 +7,15 @@ this file describes the current portable code in `replay-tooling`.
 ## Implemented
 
 - Growable byte buffers and LSB-first bit readers/writers.
-- Source-derived format-19 Huffman, temporal-motion, spatial-motion, and
+- Source-derived type 19, Super Moving Blocks Huffman, temporal-motion,
+  spatial-motion, and
   29-level quality tables.
-- Full format-19 payload verification: 4x4 data, stationary, temporal, spatial,
+- Full type 19, Super Moving Blocks payload verification: 4x4 data, stationary,
+  temporal, spatial,
   and split 2x2 forms.
 - RGB24 to CompLib-style non-dithered `6Y5UV` conversion.
-- Deterministic format-19 encoding with reconstructed-frame feedback.
+- Deterministic type 19, Super Moving Blocks encoding with reconstructed-frame
+  feedback.
 - Stationary, temporal, and spatial matching at loss levels `0..28`.
 - Real bit-cost comparison between 4x4 data and a four-quadrant split.
 - Whole-frame target-byte retries using configurable floating-point window
@@ -20,6 +23,9 @@ this file describes the current portable code in `replay-tooling`.
 - Raw RGB24 input from a file or FFmpeg pipe, numbered payload output, traces,
   and reconstructed PPM output.
 - Packed `Y,U,V` corpus import/export and first-pixel comparison diagnostics.
+- Per-block decode traces with exact bit ranges and motion vectors.
+- Native 6Y5UV SSE/MSE, PSNR, and maximum-error metrics in encoder traces and
+  verifier comparisons.
 - Unicorn execution of the compiled Acorn Decomp19 binary through `CodecIf`.
 
 ## Verified Claims
@@ -49,12 +55,14 @@ this file describes the current portable code in `replay-tooling`.
 
 ## Known Gaps
 
-- Original-compressor format-19 payloads and decoded outputs are not yet in the
-  corpus. Current ARM checks validate our streams against Acorn's decoder.
+- Original-compressor type 19, Super Moving Blocks payloads and decoded outputs
+  are not yet in the corpus. Current ARM checks validate our streams against
+  Acorn's decoder.
 - CompLib RGB conversion constants are source-derived but not yet compared
   byte-for-byte with an ARM conversion fixture.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
   they require real Replay container/chunk accounting.
 - There is no AE7/Replay container writer or player acceptance test.
 - Formats 7, 17, and 20 have descriptors and notes but no complete portable
-  encoder/decoder cores. Moving Lines remains separate future work.
+  encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
+  type 20, Moving Blocks Beta. Moving Lines remains separate future work.

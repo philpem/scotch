@@ -4,6 +4,7 @@
 
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
+#include "replay/mb_metrics.h"
 #include "replay/mb_rate_control.h"
 
 /*
@@ -142,19 +143,32 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        unsigned height,
                        const CodecSuperMovingBlocksEncodeStats *stats,
+                       const MbFrame *source, const MbFrame *reconstructed,
                        size_t bytes, unsigned loss_level, unsigned retry,
                        size_t target_min, size_t target_max)
 {
+    MbFrameMetrics metrics;
+
     if (trace == NULL) {
         return EXIT_SUCCESS;
     }
+    if (mb_metrics_compare_6y5uv(source, reconstructed, &metrics) !=
+        REPLAY_OK) {
+        fprintf(stderr, "unable to calculate 6Y5UV quality metrics\n");
+        return EXIT_FAILURE;
+    }
     if (fprintf(trace,
                 "frame=%zu codec=19 size=%ux%u retry=%u loss_level=%u "
+                "name=\"Super Moving Blocks\" "
                 "target_min=%zu target_max=%zu data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                 "temporal2x2=%zu spatial2x2=%zu "
                 "bits=%zu bytes=%zu "
+                "sse_y=%llu sse_u=%llu sse_v=%llu "
+                "mse_y=%.6f mse_u=%.6f mse_v=%.6f "
+                "psnr_y=%.6f psnr_u=%.6f psnr_v=%.6f "
+                "max_error_y=%u max_error_u=%u max_error_v=%u "
                 "verify=ok\n",
                 frame_number, width, height, retry, loss_level,
                 target_min, target_max, stats->data4x4_blocks,
@@ -162,7 +176,21 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
                 stats->data2x2_blocks, stats->stationary2x2_blocks,
                 stats->temporal2x2_blocks, stats->spatial2x2_blocks,
-                stats->bits_written, bytes) < 0) {
+                stats->bits_written, bytes,
+                (unsigned long long)metrics.squared_error_y,
+                (unsigned long long)metrics.squared_error_u,
+                (unsigned long long)metrics.squared_error_v,
+                mb_metrics_mse(metrics.squared_error_y, metrics.pixel_count),
+                mb_metrics_mse(metrics.squared_error_u, metrics.pixel_count),
+                mb_metrics_mse(metrics.squared_error_v, metrics.pixel_count),
+                mb_metrics_psnr(metrics.squared_error_y,
+                                metrics.pixel_count, 63U),
+                mb_metrics_psnr(metrics.squared_error_u,
+                                metrics.pixel_count, 31U),
+                mb_metrics_psnr(metrics.squared_error_v,
+                                metrics.pixel_count, 31U),
+                metrics.max_error_y, metrics.max_error_u,
+                metrics.max_error_v) < 0) {
         perror("trace output");
         return EXIT_FAILURE;
     }
@@ -373,7 +401,8 @@ int main(int argc, char **argv)
                 goto free_payload;
             }
             if (trace_frame(
-                    trace, frame_number, width, height, &stats, payload.size,
+                    trace, frame_number, width, height, &stats, &source,
+                    &reconstructed, payload.size,
                     options.loss_level, retry,
                     target_bytes != 0U ? rate_control.target_min_bytes : 0U,
                     target_bytes != 0U ? rate_control.target_max_bytes : 0U) !=
@@ -409,7 +438,8 @@ int main(int argc, char **argv)
                                     (size_t)width * 3U) != EXIT_SUCCESS) {
             goto free_payload;
         }
-        printf("frame=%zu codec=19 retry=%u loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
+        printf("frame=%zu codec=19 name=\"Super Moving Blocks\" "
+               "retry=%u loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
                "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                "temporal2x2=%zu spatial2x2=%zu verify=ok "

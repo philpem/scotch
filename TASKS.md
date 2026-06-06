@@ -7,14 +7,14 @@
 - [x] Implement growable byte buffering.
 - [x] Implement independent LSB-first bit writer and reader.
 - [x] Define Moving Blocks codec descriptors for types 7, 17, 19, and 20.
-- [x] Add the complete format-19 luma Huffman table.
+- [x] Add the complete type 19, Super Moving Blocks luma Huffman table.
 - [x] Implement shared table-driven Huffman write/decode helpers.
 - [x] Test byte growth, bit ordering, truncation, and all 64 residual symbols.
 - [x] Add source-derived golden byte tests that do not decode through the
   writer's implementation.
 - [x] Add a verifier CLI for descriptor and Huffman-table checks.
 
-## Milestone 2: Format-19 Data Blocks
+## Milestone 2: Type 19, Super Moving Blocks Data Blocks
 
 - [x] Define working `6Y5UV` pixel and predictor state.
 - [x] Implement verifier decoding for one data-coded 4x4 block.
@@ -24,7 +24,7 @@
 - [x] Implement matching data-block writers only after the golden decoder tests
   pass.
 
-## Milestone 3: Complete Format-19 Payload Verifier
+## Milestone 3: Complete Type 19, Super Moving Blocks Payload Verifier
 
 - [x] Decode stationary 4x4 and 2x2 blocks.
 - [x] Decode temporal motion codes against a supplied previous frame.
@@ -36,8 +36,10 @@
 ## Milestone 4: Independent Acorn Cross-Check
 
 - [x] Inventory bundled Replay movies; all discovered video samples are type 7,
-  so a format-19 corpus must be generated or sourced separately.
-- [ ] Build a small corpus of original format-19 Replay payloads, preserving
+  Moving Blocks, so a type 19, Super Moving Blocks corpus must be generated or
+  sourced separately.
+- [ ] Build a small corpus of original type 19, Super Moving Blocks Replay
+  payloads, preserving
   provenance and expected dimensions.
 - [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
   runner with previous-frame support.
@@ -54,6 +56,9 @@
   temporal and spatial 2x2 modes.
 - [ ] Compare portable and original-compressor decisions and quantify bitrate
   and decoder-visible quality differences; exact decision parity is not a goal.
+- [x] Add per-block decoder traces and native 6Y5UV quality metrics.
+- [ ] Add selectable `--policy portable|acorn` encoder policy after comparison
+  data justifies and defines the Acorn-compatible behavior.
 
 ## Milestone 5: Data-Only Encoder
 
@@ -89,7 +94,7 @@
 
 ## Later Codecs
 
-- [ ] Add type 17 through `codec_movingblockshq`.
-- [ ] Add type 20 through `codec_movingblocksbeta`.
-- [ ] Add type 7 through `codec_movingblocks`.
+- [ ] Add type 17, Moving Blocks HQ, through `codec_movingblockshq`.
+- [ ] Add type 20, Moving Blocks Beta, through `codec_movingblocksbeta`.
+- [ ] Add type 7, Moving Blocks, through `codec_movingblocks`.
 - [ ] Add Moving Lines as a separate codec core sharing only general tooling.

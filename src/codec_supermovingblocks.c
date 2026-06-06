@@ -1285,7 +1285,8 @@ static ReplayStatus copy_stationary(const MbFrame *previous, MbFrame *decoded,
 static ReplayStatus copy_motion(ReplayBitReader *reader,
                                 MbMotionBlockSize block_size,
                                 const MbFrame *previous, MbFrame *decoded,
-                                unsigned x, unsigned y, MbVerifyError *error)
+                                unsigned x, unsigned y, MbVerifyError *error,
+                                MbMotionVector *decoded_motion)
 {
     MbMotionVector motion;
     const MbFrame *source;
@@ -1331,13 +1332,41 @@ static ReplayStatus copy_motion(ReplayBitReader *reader,
                                (unsigned)source_x + column];
         }
     }
+    if (decoded_motion != NULL) {
+        *decoded_motion = motion;
+    }
     return REPLAY_OK;
+}
+
+static void trace_decoded_block(CodecSuperMovingBlocksDecodeTrace trace,
+                                void *opaque, unsigned x, unsigned y,
+                                unsigned size,
+                                CodecSuperMovingBlocksMode mode,
+                                size_t bit_start, size_t bit_end,
+                                const MbMotionVector *motion)
+{
+    CodecSuperMovingBlocksDecodeEvent event;
+
+    if (trace == NULL) {
+        return;
+    }
+    event.x = x;
+    event.y = y;
+    event.size = size;
+    event.mode = mode;
+    event.bit_start = bit_start;
+    event.bit_end = bit_end;
+    event.motion_dx = motion != NULL ? motion->dx : 0;
+    event.motion_dy = motion != NULL ? motion->dy : 0;
+    trace(&event, opaque);
 }
 
 static ReplayStatus verify_2x2(ReplayBitReader *reader,
                                MbPredictor *predictor,
                                const MbFrame *previous, MbFrame *decoded,
-                               unsigned x, unsigned y, MbVerifyError *error)
+                               unsigned x, unsigned y, MbVerifyError *error,
+                               CodecSuperMovingBlocksDecodeTrace trace,
+                               void *trace_opaque)
 {
     /*
      * 2x2 opcodes are prefix-shaped rather than a uniform two-bit enum:
@@ -1345,6 +1374,7 @@ static ReplayStatus verify_2x2(ReplayBitReader *reader,
      * Save the reader so the data decoder can consume that header from bit 0.
      */
     ReplayBitReader start = *reader;
+    size_t bit_start = replay_bitreader_position(reader);
     uint32_t first;
     ReplayStatus status = replay_bitreader_read(reader, 1U, &first);
 
@@ -1353,8 +1383,17 @@ static ReplayStatus verify_2x2(ReplayBitReader *reader,
         return status;
     }
     if (first != 0U) {
-        return copy_motion(reader, MB_MOTION_BLOCK_2X2, previous, decoded,
-                           x, y, error);
+        MbMotionVector motion;
+        status = copy_motion(reader, MB_MOTION_BLOCK_2X2, previous, decoded,
+                             x, y, error, &motion);
+        if (status == REPLAY_OK) {
+            trace_decoded_block(
+                trace, trace_opaque, x, y, 2U,
+                motion.spatial != 0 ? CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL
+                                    : CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL,
+                bit_start, replay_bitreader_position(reader), &motion);
+        }
+        return status;
     }
 
     {
@@ -1365,7 +1404,15 @@ static ReplayStatus verify_2x2(ReplayBitReader *reader,
             return status;
         }
         if (second == 0U) {
-            return copy_stationary(previous, decoded, x, y, 2U, reader, error);
+            status = copy_stationary(
+                previous, decoded, x, y, 2U, reader, error);
+            if (status == REPLAY_OK) {
+                trace_decoded_block(
+                    trace, trace_opaque, x, y, 2U,
+                    CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY, bit_start,
+                    replay_bitreader_position(reader), NULL);
+            }
+            return status;
         }
     }
 
@@ -1377,13 +1424,19 @@ static ReplayStatus verify_2x2(ReplayBitReader *reader,
         error->block_x = x;
         error->block_y = y;
     }
+    if (status == REPLAY_OK) {
+        trace_decoded_block(trace, trace_opaque, x, y, 2U,
+                            CODEC_SUPERMOVINGBLOCKS_MODE_DATA, bit_start,
+                            replay_bitreader_position(reader), NULL);
+    }
     return status;
 }
 
-ReplayStatus codec_supermovingblocks_verify_frame(
+ReplayStatus codec_supermovingblocks_verify_frame_traced(
     const uint8_t *payload, size_t payload_size,
     const MbFrame *previous, MbFrame *decoded,
-    size_t *bits_consumed, MbVerifyError *error)
+    size_t *bits_consumed, MbVerifyError *error,
+    CodecSuperMovingBlocksDecodeTrace trace, void *trace_opaque)
 {
     ReplayBitReader reader;
     /* This must evolve exactly as in the original decompressor, independently
@@ -1411,6 +1464,7 @@ ReplayStatus codec_supermovingblocks_verify_frame(
         unsigned x;
         for (x = 0; x < decoded->width; x += 4U) {
             ReplayBitReader start = reader;
+            size_t bit_start = replay_bitreader_position(&reader);
             uint32_t opcode;
             ReplayStatus status = replay_bitreader_read(&reader, 2U, &opcode);
 
@@ -1422,6 +1476,12 @@ ReplayStatus codec_supermovingblocks_verify_frame(
             case 0U:
                 status = copy_stationary(previous, decoded, x, y, 4U,
                                          &reader, error);
+                if (status == REPLAY_OK) {
+                    trace_decoded_block(
+                        trace, trace_opaque, x, y, 4U,
+                        CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY, bit_start,
+                        replay_bitreader_position(&reader), NULL);
+                }
                 break;
             case 1U:
                 reader = start;
@@ -1433,27 +1493,53 @@ ReplayStatus codec_supermovingblocks_verify_frame(
                     error->block_x = x;
                     error->block_y = y;
                 }
+                if (status == REPLAY_OK) {
+                    trace_decoded_block(
+                        trace, trace_opaque, x, y, 4U,
+                        CODEC_SUPERMOVINGBLOCKS_MODE_DATA, bit_start,
+                        replay_bitreader_position(&reader), NULL);
+                }
                 break;
-            case 2U:
+            case 2U: {
+                MbMotionVector motion;
                 status = copy_motion(&reader, MB_MOTION_BLOCK_4X4,
-                                     previous, decoded, x, y, error);
+                                     previous, decoded, x, y, error, &motion);
+                if (status == REPLAY_OK) {
+                    trace_decoded_block(
+                        trace, trace_opaque, x, y, 4U,
+                        motion.spatial != 0
+                            ? CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL
+                            : CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL,
+                        bit_start, replay_bitreader_position(&reader),
+                        &motion);
+                }
                 break;
+            }
             case 3U:
                 /* Split sub-block order is top-left, top-right, bottom-left,
                    bottom-right, matching the original decompressor. */
                 status = verify_2x2(&reader, &predictor, previous, decoded,
-                                    x, y, error);
+                                    x, y, error, trace, trace_opaque);
                 if (status == REPLAY_OK) {
                     status = verify_2x2(&reader, &predictor, previous, decoded,
-                                        x + 2U, y, error);
+                                        x + 2U, y, error, trace,
+                                        trace_opaque);
                 }
                 if (status == REPLAY_OK) {
                     status = verify_2x2(&reader, &predictor, previous, decoded,
-                                        x, y + 2U, error);
+                                        x, y + 2U, error, trace,
+                                        trace_opaque);
                 }
                 if (status == REPLAY_OK) {
                     status = verify_2x2(&reader, &predictor, previous, decoded,
-                                        x + 2U, y + 2U, error);
+                                        x + 2U, y + 2U, error, trace,
+                                        trace_opaque);
+                }
+                if (status == REPLAY_OK) {
+                    trace_decoded_block(
+                        trace, trace_opaque, x, y, 4U,
+                        CODEC_SUPERMOVINGBLOCKS_MODE_SPLIT, bit_start,
+                        replay_bitreader_position(&reader), NULL);
                 }
                 break;
             default:
@@ -1488,6 +1574,16 @@ ReplayStatus codec_supermovingblocks_verify_frame(
         }
     }
     return REPLAY_OK;
+}
+
+ReplayStatus codec_supermovingblocks_verify_frame(
+    const uint8_t *payload, size_t payload_size,
+    const MbFrame *previous, MbFrame *decoded,
+    size_t *bits_consumed, MbVerifyError *error)
+{
+    return codec_supermovingblocks_verify_frame_traced(
+        payload, payload_size, previous, decoded, bits_consumed, error,
+        NULL, NULL);
 }
 
 #undef HUFF

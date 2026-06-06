@@ -40,6 +40,31 @@ typedef struct {
     size_t bits_written;
 } CodecSuperMovingBlocksEncodeStats;
 
+typedef enum {
+    CODEC_SUPERMOVINGBLOCKS_MODE_DATA,
+    CODEC_SUPERMOVINGBLOCKS_MODE_STATIONARY,
+    CODEC_SUPERMOVINGBLOCKS_MODE_TEMPORAL,
+    CODEC_SUPERMOVINGBLOCKS_MODE_SPATIAL,
+    CODEC_SUPERMOVINGBLOCKS_MODE_SPLIT
+} CodecSuperMovingBlocksMode;
+
+/* One successfully decoded block or split container. */
+typedef struct {
+    unsigned x;
+    unsigned y;
+    unsigned size;
+    CodecSuperMovingBlocksMode mode;
+    /* Stream range [bit_start, bit_end), including this block's opcode. */
+    size_t bit_start;
+    size_t bit_end;
+    /* Meaningful only for temporal and spatial events. */
+    int motion_dx;
+    int motion_dy;
+} CodecSuperMovingBlocksDecodeEvent;
+
+typedef void (*CodecSuperMovingBlocksDecodeTrace)(
+    const CodecSuperMovingBlocksDecodeEvent *event, void *opaque);
+
 ReplayStatus codec_supermovingblocks_decode_data4x4(
     ReplayBitReader *reader, MbPredictor *predictor,
     MbPixel *pixels, size_t stride, MbVerifyError *error);
@@ -82,5 +107,15 @@ ReplayStatus codec_supermovingblocks_verify_frame(
     const uint8_t *payload, size_t payload_size,
     const MbFrame *previous, MbFrame *decoded,
     size_t *bits_consumed, MbVerifyError *error);
+
+/*
+ * Decode as above and report every selected mode. Split children are reported
+ * first, followed by the enclosing split event and its complete bit range.
+ */
+ReplayStatus codec_supermovingblocks_verify_frame_traced(
+    const uint8_t *payload, size_t payload_size,
+    const MbFrame *previous, MbFrame *decoded,
+    size_t *bits_consumed, MbVerifyError *error,
+    CodecSuperMovingBlocksDecodeTrace trace, void *trace_opaque);
 
 #endif

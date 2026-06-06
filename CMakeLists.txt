@@ -14,6 +14,7 @@ add_library(replay STATIC
     src/mb_huffman.c
     src/mb_codec.c
     src/mb_motion.c
+    src/mb_metrics.c
     src/mb_quality.c
     src/mb_rate_control.c
     src/codec_movingblocks.c
@@ -65,6 +66,7 @@ add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
+add_replay_test(test_mb_metrics tests/test_mb_metrics.c)
 add_replay_test(test_mb_quality tests/test_mb_quality.c)
 add_replay_test(test_mb_rate_control tests/test_mb_rate_control.c)
 add_replay_test(test_mb_color tests/test_mb_color.c)
@@ -84,6 +86,8 @@ add_replay_test(test_supermovingblocks_split
     tests/test_supermovingblocks_split.c)
 add_replay_test(test_supermovingblocks_split_motion
     tests/test_supermovingblocks_split_motion.c)
+add_replay_test(test_supermovingblocks_trace
+    tests/test_supermovingblocks_trace.c)
 
 add_executable(make_decomp19_crosscheck_fixtures
     tests/make_decomp19_crosscheck_fixtures.c)

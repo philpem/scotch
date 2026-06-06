@@ -5,7 +5,8 @@ streams.
 
 The implemented target is compression type 19, Super Moving Blocks. The project
 currently provides byte/bitstream primitives, Moving Blocks codec descriptors,
-a complete format-19 payload verifier, a deterministic encoder with the
+a complete type 19, Super Moving Blocks payload verifier, a deterministic
+encoder with the
 original 29-level copy-match table, frame-level rate retries, and automated
 cross-checks against Acorn's compiled ARM decompressor.
 
@@ -27,13 +28,14 @@ cross-check tests require Python 3 with Unicorn bindings. CMake automatically
 uses `../!ARMovie_compiled/Decomp19/Decompress,ffd` when present; another copy
 can be selected with `-DDECOMP19_COMPILED=/path/to/Decompress,ffd`.
 
-Check the format-19 Huffman table with:
+Check the type 19, Super Moving Blocks Huffman table with:
 
 ```sh
 build/replay-verify --codec 19 --verify-huffman
 ```
 
-Verify a raw format-19 frame payload with no temporal dependencies:
+Verify a raw type 19, Super Moving Blocks frame payload with no temporal
+dependencies:
 
 ```sh
 build/replay-verify --codec 19 --payload frame.mb19 --size 320x256
@@ -47,14 +49,16 @@ build/replay-verify --codec 19 --payload frame.mb19 --size 320x256 \
     --expect-6y5uv acorn-decoded.6y5uv
 ```
 
-The payload verifier currently accepts all format-19 block modes. A payload
+The payload verifier currently accepts all type 19, Super Moving Blocks block
+modes. A payload
 containing temporal references requires the library API so the caller can
 supply the previous reconstructed frame, or the CLI's `--previous-6y5uv`
 option. The CLI rejects temporal payloads when no reference is supplied rather
 than inventing pixels. The original-codec corpus contract is documented in
 `corpus/format19/README.md`.
 
-Encode exactly one packed RGB24 frame as a raw format-19 payload:
+Encode exactly one packed RGB24 frame as a raw type 19, Super Moving Blocks
+payload:
 
 ```sh
 ffmpeg -i input.mp4 -vf scale=320:256 -frames:v 1 \
@@ -98,6 +102,11 @@ oscillation, and carries the accepted level into the next frame. Trace output
 records every verifier-clean attempt, including rejected retries. Library
 callers can override both floating-point window factors through
 `mb_rate_control_init_window`; calculated byte limits are explicitly truncated.
+
+Encoder traces include native 6Y5UV error metrics for every attempt. The
+verifier can produce a per-block trace and compare decoded output with a source
+frame using `--reference-6y5uv`. See
+[docs/acorn-comparison-workflow.md](docs/acorn-comparison-workflow.md).
 
 ## Acorn Cross-Check
 
