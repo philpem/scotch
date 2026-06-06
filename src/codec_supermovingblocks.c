@@ -11,6 +11,19 @@
  * Bits within fields are emitted least-significant first. Data blocks carry
  * one signed five-bit U/V pair for the whole block and Huffman-coded six-bit
  * luma residuals. Copy blocks do not alter the luma predictor.
+ *
+ * A key frame is independently decodable: it may contain data and spatial
+ * blocks, because spatial references stay within the current frame. An inter
+ * frame may additionally contain stationary and temporal blocks referencing
+ * the previous reconstructed frame. In MPEG terminology these dependencies
+ * are broadly I-frame-like and P-frame-like respectively; there is no future
+ * reference comparable to an MPEG B-frame.
+ *
+ * The original compressor contains lossy matching and target-size retry
+ * policy. This implementation currently accepts copy candidates only when
+ * their decoded 6Y5UV pixels exactly match the data-block reconstruction.
+ * That restriction gives a deterministic baseline while the source-derived
+ * threshold policy is implemented separately.
  */
 #define HUFF(bits_, count_) { UINT16_C(bits_), UINT8_C(count_) }
 
@@ -521,6 +534,7 @@ static int temporal_block_matches(const MbFrame *source,
                 &previous->pixels[((size_t)source_y + row) * previous->stride +
                                   (size_t)source_x + column];
 
+            /* Compare decoder-visible pixels: source luma and averaged chroma. */
             if (target->y != reference->y || u != reference->u ||
                 v != reference->v) {
                 return 0;
@@ -610,6 +624,7 @@ static int find_spatial4x4(const MbFrame *source,
 {
     unsigned index;
 
+    /* Spatial codes all have equal length, so source table order breaks ties. */
     for (index = 0U; index < 8U; ++index) {
         if (mb_motion_format19_spatial_at(
                 MB_MOTION_BLOCK_4X4, index, motion) != REPLAY_OK) {
@@ -696,6 +711,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     ReplayBitWriter writer;
     ReplayBuffer data_candidate;
     ReplayBuffer split_candidate;
+    /* Predictor lifetime is one frame and its specified initial value is zero. */
     MbPredictor predictor = { 0 };
     CodecSuperMovingBlocksEncodeStats local_stats = { 0 };
     int allow_stationary = options != NULL && options->allow_stationary != 0;
@@ -722,6 +738,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     /* Reused scratch buffers avoid allocating twice for every data decision. */
     replay_buffer_init(&data_candidate);
     replay_buffer_init(&split_candidate);
+    /* Raster order is part of the format, not an optimization choice. */
     for (y = 0; y < source->height; y += 4U) {
         unsigned x;
         for (x = 0; x < source->width; x += 4U) {
@@ -767,6 +784,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                     ++local_stats.spatial4x4_blocks;
                 }
             } else {
+                /* No exact copy exists; compare literal block organizations. */
                 MbPredictor data_predictor;
                 MbPredictor split_predictor;
                 size_t data_bits;
@@ -1136,6 +1154,8 @@ ReplayStatus codec_supermovingblocks_verify_frame(
     size_t *bits_consumed, MbVerifyError *error)
 {
     ReplayBitReader reader;
+    /* This must evolve exactly as in the original decompressor, independently
+       of which choices the portable encoder currently knows how to make. */
     MbPredictor predictor = { 0 };
     unsigned y;
 

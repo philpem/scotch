@@ -1,5 +1,9 @@
 #include "replay/mb_codec.h"
 
+/*
+ * Type 20 is the 6Y6UV beta branch. Its wider chroma precision changes data
+ * representation and tables, so format-19 code must not silently handle it.
+ */
 const MbCodec codec_movingblocksbeta = {
     REPLAY_CODEC_MOVINGBLOCKSBETA,
     "Moving Blocks Beta",

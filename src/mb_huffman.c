@@ -2,6 +2,17 @@
 
 #include <limits.h>
 
+/*
+ * Replay's Huffman tables are recorded as the bit patterns seen by its
+ * LSB-first reader. They must not be reversed into the MSB-first notation
+ * commonly used when documenting canonical Huffman codes.
+ *
+ * This decoder intentionally performs a linear table search. The format-19
+ * alphabet has only 64 symbols, and a simple implementation is easier to
+ * audit against the original table. A faster lookup table can be added later
+ * without changing this representation or its tests.
+ */
+
 static uint16_t low_mask(unsigned count)
 {
     if (count == 16U) {
@@ -39,6 +50,7 @@ ReplayStatus mb_huffman_read(ReplayBitReader *reader,
         return REPLAY_INVALID_ARGUMENT;
     }
 
+    /* A prefix can only be recognized after each successive stream bit. */
     for (length = 1U; length <= table->max_bits; ++length) {
         uint32_t bit;
         size_t candidate;
@@ -76,6 +88,7 @@ ReplayStatus mb_huffman_validate(const MbHuffmanTable *table)
             (a->bits & (uint16_t)~low_mask(a->bit_count)) != 0U) {
             return REPLAY_MALFORMED_STREAM;
         }
+        /* No complete code may be the low-bit prefix of another code. */
         for (second = first + 1U; second < table->symbol_count; ++second) {
             const MbHuffmanCode *b = &table->codes[second];
             const MbHuffmanCode *shorter = a;

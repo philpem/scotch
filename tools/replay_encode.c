@@ -5,6 +5,16 @@
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
 
+/*
+ * This program is intentionally a thin development harness around the codec:
+ *
+ *   RGB24 frame -> CompLib-style 6Y5UV -> encode -> independent decode
+ *               -> compare reconstruction -> write raw payload
+ *
+ * Raw payloads are written separately because concatenating variable-length
+ * frames would invent a container unrelated to Replay. The later Replay
+ * writer will provide timing, frame boundaries, and key-frame metadata.
+ */
 typedef enum {
     FRAME_READ_OK,
     FRAME_READ_EOF,
@@ -32,6 +42,7 @@ static FrameReadResult read_frame(FILE *file, const char *name, uint8_t *data,
                 perror(name);
                 return FRAME_READ_ERROR;
             }
+            /* EOF between frames is normal; EOF inside a frame is corruption. */
             if (offset == 0U) {
                 return FRAME_READ_EOF;
             }
@@ -261,6 +272,11 @@ int main(int argc, char **argv)
     }
     replay_buffer_init(&payload);
 
+    /*
+     * The previous buffer always contains decoder-visible reconstruction, not
+     * source pixels. Referencing source pixels here would cause encoder and
+     * player state to diverge after the first chroma-averaged data block.
+     */
     for (;;) {
         FrameReadResult read_result = read_frame(input, input_path, rgb, rgb_size);
         MbFrame source = { width, height, width, source_pixels };

@@ -6,6 +6,12 @@
 #include "replay/mb_codec.h"
 #include "replay/replay_buffer.h"
 
+/*
+ * Verification is kept as a separate executable and decode path so encoder
+ * bugs cannot be hidden by inspecting only encoder-owned reconstruction. Raw
+ * temporal payloads need a caller-provided previous frame, which this simple
+ * one-frame CLI deliberately does not synthesize.
+ */
 static void usage(FILE *stream)
 {
     fprintf(stream,

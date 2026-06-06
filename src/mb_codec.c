@@ -1,5 +1,11 @@
 #include "replay/mb_codec.h"
 
+/*
+ * Keep discovery independent from implementation status. This lets inspection
+ * tools describe known Replay compression types before their encoder and
+ * verifier modules are complete.
+ */
+
 const MbCodec *mb_codec_find(unsigned id)
 {
     switch (id) {
@@ -15,4 +21,3 @@ const MbCodec *mb_codec_find(unsigned id)
         return NULL;
     }
 }
-

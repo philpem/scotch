@@ -7,10 +7,12 @@
 #include "replay/replay_bitstream.h"
 
 typedef struct {
+    /* Low `bit_count` bits, in the LSB-first order stored by Replay. */
     uint16_t bits;
     uint8_t bit_count;
 } MbHuffmanCode;
 
+/* Direct symbol-to-code table; the array index is the decoded symbol. */
 typedef struct {
     const MbHuffmanCode *codes;
     size_t symbol_count;
@@ -26,4 +28,3 @@ ReplayStatus mb_huffman_read(ReplayBitReader *reader,
 ReplayStatus mb_huffman_validate(const MbHuffmanTable *table);
 
 #endif
-

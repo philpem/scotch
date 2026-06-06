@@ -26,6 +26,7 @@ ReplayStatus replay_buffer_reserve(ReplayBuffer *buffer, size_t capacity)
         return REPLAY_OK;
     }
 
+    /* Geometric growth keeps bit-by-bit emission amortized linear. */
     new_capacity = buffer->capacity == 0 ? 64U : buffer->capacity;
     while (new_capacity < capacity) {
         if (new_capacity > SIZE_MAX / 2U) {
@@ -103,4 +104,3 @@ void replay_buffer_free(ReplayBuffer *buffer)
     free(buffer->data);
     replay_buffer_init(buffer);
 }
-
