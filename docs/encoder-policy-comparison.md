@@ -84,10 +84,9 @@ be added for presentation, but 6Y5UV is the authoritative comparison because
 that is what the codec actually preserves.
 
 The portable tooling now emits these block traces and reports native 6Y5UV
-SSE/MSE, PSNR, and maximum component errors. Original-compressor fixtures are
-present, but the exact source movie for the received comparison encode is not
-yet established. No numerical bitrate or quality advantage is currently
-claimed.
+SSE/MSE, PSNR, and maximum component errors. The exact source is confirmed and
+the type 2 intermediate supplies the authoritative words seen by the Acorn
+compressor. Portable-versus-Acorn policy measurement can now proceed.
 
 ## Original Chunk-0 Decision Profile
 
@@ -125,3 +124,9 @@ These sum exactly to the decoded semantic-bit total. They show that split
 selection and temporal 2x2 matching are central to Acorn's output, not rare
 fallbacks. This profile is suitable for structural regression tests even
 before source-referenced quality comparison is available.
+
+The source-referenced chunk-0 Acorn reconstruction has 45.221729 dB luma PSNR
+and maximum luma error 2 against the type 2 intermediate. U and V metrics need
+careful interpretation because the historical path carries YUV555 words into
+the type 19 field layout rather than performing the requested component
+conversion.

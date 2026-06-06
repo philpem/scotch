@@ -71,9 +71,10 @@ this file describes the current portable code in `replay-tooling`.
 - There is no AE7/Replay container writer or player acceptance test. The
   reader currently exposes chunk boundaries; type 19 frame splitting remains
   a decoder-assisted operation because AE7 stores no per-frame size table.
-- The exact source and command used to create `LionFish19,ae7` are not yet
-  established. Its Acorn decision profile is valid, but source-referenced
-  bitrate/quality parity must not be inferred from the bundled LionFish files.
+- The confirmed type 7-to-type 2 source path exposes a CompLib limitation:
+  `-Convert 6Y5UV` changes the type 2 label but does not convert type 7 YUV555
+  words because Decomp7 has no `Dec24`. Comparison tooling must preserve this
+  historical word interpretation when reproducing the Acorn encode.
 - Formats 7, 17, and 20 have descriptors and notes but no complete portable
   encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
   type 20, Moving Blocks Beta. Moving Lines remains separate future work.

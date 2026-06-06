@@ -110,18 +110,32 @@ and tie behavior for comparison or archival output. Both policies must emit
 the same type 19, Super Moving Blocks bitstream syntax and use the same quality
 acceptance table.
 
-## Source Provenance Limit
+## Confirmed Source And Type 2 Intermediate
 
-The received `LionFish19,ae7` cannot yet be tied numerically to a source movie.
-Both plausible bundled candidates were decoded with compiled Decomp7:
+The source is confirmed as `LionFish2,ae7`, type 7 (Moving Blocks), 160x128 at
+12.5 fps. Its exact size is 3,598,406 bytes and its SHA-256 is
+`1aca14e46dcd9b3ac797d4c7145ad26fa6a3855619cd43d8eee5d24da44f4328`.
 
-- `LionFish2,ae7`, type 7 (Moving Blocks), 160x128 at 12.5 fps;
-- `HiRes/LionFish,ae7`, type 7 (Moving Blocks), 160x128 at 25 fps, sampled at
-  half rate.
+`LionFishT2,ae7` was generated as type 2 (16 bit colour uncompressed) with
+`-Convert 6Y5UV`. Its structure and frame sizes are valid, but it does not play
+correctly because CompLib did not convert the type 7 source words. CompLib only
+enters its component-conversion path when the source codec supplies `Dec24`;
+Decomp7 has no `Dec24`. The output payload therefore remains YUV555 while the
+header says `[6Y5UV]`, making Replay apply the wrong colour mapping.
 
-Neither produces credible native-domain error against `LionFish19` output,
-under either literal unpatched-word interpretation or documented YUV555 to
-6Y5UV component conversion. Supplying the type 7 key image does not change
-chunk 0 because its first frame is self-contained. Therefore no bitrate or
-quality parity number is claimed until the exact source path and compressor
-command are known.
+This is measurable in chunk 0: none of 512,000 halfwords has bit 15 set, all
+three YUV555 fields span `0..31`, and interpreting the same words as 6Y5UV
+restricts V to `0..15`. The incorrect header accounts for the visible blocks
+of extreme colour.
+
+The payload is nevertheless the authoritative word stream presented to the
+type 19 (Super Moving Blocks) compressor. Interpreting those words through the
+type 19 field layout and comparing the 25 chunk-0 frames gives Acorn's output
+45.221729 dB luma PSNR with maximum luma error 2. This validates the source
+alignment and supersedes the earlier Decomp7-emulation hypothesis.
+
+For a type 2 movie that also plays correctly, repeat the conversion without
+`-Convert 6Y5UV`, leaving the output labelled `YUV`. The pixel payload should
+remain the same. Re-encoding is safer than changing the annotation inside the
+binary AE7 file, although replacing `[6Y5UV]` with `[YUV]  ` while preserving
+the exact header-line length should be sufficient.
