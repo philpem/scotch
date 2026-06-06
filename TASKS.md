@@ -21,20 +21,22 @@
 - [x] Implement verifier decoding for one data-coded 2x2 block.
 - [x] Create hand-calculated golden payloads and reconstructed pixels.
 - [x] Reject malformed/truncated blocks with bit positions.
-- [ ] Implement matching data-block writers only after the golden decoder tests
+- [x] Implement matching data-block writers only after the golden decoder tests
   pass.
 
 ## Milestone 3: Complete Format-19 Payload Verifier
 
-- [ ] Decode stationary 4x4 and 2x2 blocks.
-- [ ] Decode temporal motion codes against a supplied previous frame.
-- [ ] Decode legal spatial copies against the current reconstructed frame.
-- [ ] Decode split 2x2 blocks and validate frame scan completion.
-- [ ] Verify complete data-only synthetic frames.
-- [ ] Add malformed-stream tests for every opcode family.
+- [x] Decode stationary 4x4 and 2x2 blocks.
+- [x] Decode temporal motion codes against a supplied previous frame.
+- [x] Decode legal spatial copies against the current reconstructed frame.
+- [x] Decode split 2x2 blocks and validate frame scan completion.
+- [x] Verify complete data-only synthetic frames.
+- [x] Add malformed/truncated stream tests and strict payload padding checks.
 
 ## Milestone 4: Independent Acorn Cross-Check
 
+- [x] Inventory bundled Replay movies; all discovered video samples are type 7,
+  so a format-19 corpus must be generated or sourced separately.
 - [ ] Build a small corpus of original format-19 Replay payloads, preserving
   provenance and expected dimensions.
 - [ ] Decode the corpus with the portable verifier and export raw `6Y5UV`.

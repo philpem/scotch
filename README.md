@@ -21,6 +21,17 @@ Run the current verifier milestone with:
 build/replay-verify --codec 19 --verify-huffman
 ```
 
+Verify a raw format-19 frame payload with no temporal dependencies:
+
+```sh
+build/replay-verify --codec 19 --payload frame.mb19 --size 320x256
+```
+
+The payload verifier currently accepts all format-19 block modes. A payload
+containing temporal references requires the library API so the caller can
+supply the previous reconstructed frame; the standalone CLI intentionally
+rejects such a payload rather than inventing reference pixels.
+
 ## Naming
 
 - Shared Moving Blocks files and public symbols use the `mb_` prefix.

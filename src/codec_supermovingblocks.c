@@ -1,4 +1,5 @@
 #include "replay/codec_supermovingblocks.h"
+#include "replay/mb_motion.h"
 
 #define HUFF(bits_, count_) { UINT16_C(bits_), UINT8_C(count_) }
 
@@ -35,7 +36,7 @@ const MbCodec codec_supermovingblocks = {
     4, 4,
     8, 8,
     &codec_supermovingblocks_luma_huffman,
-    0, 0
+    0, 1
 };
 
 static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
@@ -64,6 +65,18 @@ static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
     return REPLAY_OK;
 }
 
+static ReplayStatus write_header(ReplayBitWriter *writer, uint32_t opcode,
+                                 uint8_t u, uint8_t v)
+{
+    uint32_t header;
+
+    if (writer == NULL || u > 31U || v > 31U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    header = opcode | ((uint32_t)u << 2U) | ((uint32_t)v << 7U);
+    return replay_bitwriter_write(writer, header, 12U);
+}
+
 static ReplayStatus read_residual(ReplayBitReader *reader, uint8_t *residual,
                                   MbVerifyError *error)
 {
@@ -85,6 +98,56 @@ static ReplayStatus read_residual(ReplayBitReader *reader, uint8_t *residual,
 static uint8_t add6(unsigned prediction, uint8_t residual)
 {
     return (uint8_t)((prediction + residual) & 63U);
+}
+
+ReplayStatus codec_supermovingblocks_write_data4x4(
+    ReplayBitWriter *writer, uint8_t u, uint8_t v,
+    const uint8_t residuals[16])
+{
+    size_t i;
+    ReplayStatus status;
+
+    if (writer == NULL || residuals == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    status = write_header(writer, UINT32_C(1), u, v);
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    for (i = 0; i < 16U; ++i) {
+        status = mb_huffman_write(writer,
+                                  &codec_supermovingblocks_luma_huffman,
+                                  residuals[i]);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+    }
+    return REPLAY_OK;
+}
+
+ReplayStatus codec_supermovingblocks_write_data2x2(
+    ReplayBitWriter *writer, uint8_t u, uint8_t v,
+    const uint8_t residuals[4])
+{
+    size_t i;
+    ReplayStatus status;
+
+    if (writer == NULL || residuals == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    status = write_header(writer, UINT32_C(2), u, v);
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    for (i = 0; i < 4U; ++i) {
+        status = mb_huffman_write(writer,
+                                  &codec_supermovingblocks_luma_huffman,
+                                  residuals[i]);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+    }
+    return REPLAY_OK;
 }
 
 ReplayStatus codec_supermovingblocks_decode_data4x4(
@@ -193,6 +256,237 @@ ReplayStatus codec_supermovingblocks_decode_data2x2(
     }
     predictor->luma =
         (uint8_t)(((unsigned)y[0] + y[1] + y[2] + y[3]) >> 2U);
+    return REPLAY_OK;
+}
+
+static void set_verify_error(MbVerifyError *error, const ReplayBitReader *reader,
+                             unsigned x, unsigned y, const char *detail)
+{
+    if (error != NULL) {
+        error->bit_position = replay_bitreader_position(reader);
+        error->block_x = x;
+        error->block_y = y;
+        error->detail = detail;
+    }
+}
+
+static ReplayStatus copy_stationary(const MbFrame *previous, MbFrame *decoded,
+                                    unsigned x, unsigned y, unsigned size,
+                                    const ReplayBitReader *reader,
+                                    MbVerifyError *error)
+{
+    unsigned row;
+
+    if (previous == NULL || previous->pixels == NULL) {
+        set_verify_error(error, reader, x, y,
+                         "stationary block requires a previous frame");
+        return REPLAY_MALFORMED_STREAM;
+    }
+    if (previous->width != decoded->width ||
+        previous->height != decoded->height || previous->stride < decoded->width) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    for (row = 0; row < size; ++row) {
+        unsigned column;
+        for (column = 0; column < size; ++column) {
+            decoded->pixels[(y + row) * decoded->stride + x + column] =
+                previous->pixels[(y + row) * previous->stride + x + column];
+        }
+    }
+    return REPLAY_OK;
+}
+
+static ReplayStatus copy_motion(ReplayBitReader *reader,
+                                MbMotionBlockSize block_size,
+                                const MbFrame *previous, MbFrame *decoded,
+                                unsigned x, unsigned y, MbVerifyError *error)
+{
+    MbMotionVector motion;
+    const MbFrame *source;
+    int source_x;
+    int source_y;
+    unsigned row;
+    ReplayStatus status =
+        mb_motion_read_format19(reader, block_size, &motion);
+
+    if (status != REPLAY_OK) {
+        set_verify_error(error, reader, x, y,
+                         "invalid or truncated motion code");
+        return status;
+    }
+    source = motion.spatial ? decoded : previous;
+    if (source == NULL || source->pixels == NULL) {
+        set_verify_error(error, reader, x, y,
+                         "temporal motion requires a previous frame");
+        return REPLAY_MALFORMED_STREAM;
+    }
+    if (source->width != decoded->width || source->height != decoded->height ||
+        source->stride < source->width) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+
+    source_x = (int)x + motion.dx;
+    source_y = (int)y + motion.dy;
+    if (source_x < 0 || source_y < 0 ||
+        source_x + (int)block_size > (int)source->width ||
+        source_y + (int)block_size > (int)source->height) {
+        set_verify_error(error, reader, x, y,
+                         "motion reference lies outside the frame");
+        return REPLAY_MALFORMED_STREAM;
+    }
+
+    for (row = 0; row < (unsigned)block_size; ++row) {
+        unsigned column;
+        for (column = 0; column < (unsigned)block_size; ++column) {
+            decoded->pixels[(y + row) * decoded->stride + x + column] =
+                source->pixels[((unsigned)source_y + row) * source->stride +
+                               (unsigned)source_x + column];
+        }
+    }
+    return REPLAY_OK;
+}
+
+static ReplayStatus verify_2x2(ReplayBitReader *reader,
+                               MbPredictor *predictor,
+                               const MbFrame *previous, MbFrame *decoded,
+                               unsigned x, unsigned y, MbVerifyError *error)
+{
+    ReplayBitReader start = *reader;
+    uint32_t first;
+    ReplayStatus status = replay_bitreader_read(reader, 1U, &first);
+
+    if (status != REPLAY_OK) {
+        set_verify_error(error, reader, x, y, "truncated 2x2 opcode");
+        return status;
+    }
+    if (first != 0U) {
+        return copy_motion(reader, MB_MOTION_BLOCK_2X2, previous, decoded,
+                           x, y, error);
+    }
+
+    {
+        uint32_t second;
+        status = replay_bitreader_read(reader, 1U, &second);
+        if (status != REPLAY_OK) {
+            set_verify_error(error, reader, x, y, "truncated 2x2 opcode");
+            return status;
+        }
+        if (second == 0U) {
+            return copy_stationary(previous, decoded, x, y, 2U, reader, error);
+        }
+    }
+
+    *reader = start;
+    status = codec_supermovingblocks_decode_data2x2(
+        reader, predictor, decoded->pixels + y * decoded->stride + x,
+        decoded->stride, error);
+    if (status != REPLAY_OK && error != NULL) {
+        error->block_x = x;
+        error->block_y = y;
+    }
+    return status;
+}
+
+ReplayStatus codec_supermovingblocks_verify_frame(
+    const uint8_t *payload, size_t payload_size,
+    const MbFrame *previous, MbFrame *decoded,
+    size_t *bits_consumed, MbVerifyError *error)
+{
+    ReplayBitReader reader;
+    MbPredictor predictor = { 0 };
+    unsigned y;
+
+    if ((payload == NULL && payload_size != 0U) || decoded == NULL ||
+        decoded->pixels == NULL || decoded->width == 0U ||
+        decoded->height == 0U || decoded->stride < decoded->width ||
+        (decoded->width & 3U) != 0U || (decoded->height & 3U) != 0U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    if (error != NULL) {
+        error->bit_position = 0U;
+        error->block_x = 0U;
+        error->block_y = 0U;
+        error->detail = NULL;
+    }
+    replay_bitreader_init(&reader, payload, payload_size);
+
+    for (y = 0; y < decoded->height; y += 4U) {
+        unsigned x;
+        for (x = 0; x < decoded->width; x += 4U) {
+            ReplayBitReader start = reader;
+            uint32_t opcode;
+            ReplayStatus status = replay_bitreader_read(&reader, 2U, &opcode);
+
+            if (status != REPLAY_OK) {
+                set_verify_error(error, &reader, x, y, "truncated 4x4 opcode");
+                return status;
+            }
+            switch (opcode) {
+            case 0U:
+                status = copy_stationary(previous, decoded, x, y, 4U,
+                                         &reader, error);
+                break;
+            case 1U:
+                reader = start;
+                status = codec_supermovingblocks_decode_data4x4(
+                    &reader, &predictor,
+                    decoded->pixels + y * decoded->stride + x,
+                    decoded->stride, error);
+                if (status != REPLAY_OK && error != NULL) {
+                    error->block_x = x;
+                    error->block_y = y;
+                }
+                break;
+            case 2U:
+                status = copy_motion(&reader, MB_MOTION_BLOCK_4X4,
+                                     previous, decoded, x, y, error);
+                break;
+            case 3U:
+                status = verify_2x2(&reader, &predictor, previous, decoded,
+                                    x, y, error);
+                if (status == REPLAY_OK) {
+                    status = verify_2x2(&reader, &predictor, previous, decoded,
+                                        x + 2U, y, error);
+                }
+                if (status == REPLAY_OK) {
+                    status = verify_2x2(&reader, &predictor, previous, decoded,
+                                        x, y + 2U, error);
+                }
+                if (status == REPLAY_OK) {
+                    status = verify_2x2(&reader, &predictor, previous, decoded,
+                                        x + 2U, y + 2U, error);
+                }
+                break;
+            default:
+                status = REPLAY_INTERNAL_ERROR;
+                break;
+            }
+            if (status != REPLAY_OK) {
+                return status;
+            }
+        }
+    }
+    if (bits_consumed != NULL) {
+        *bits_consumed = replay_bitreader_position(&reader);
+    }
+    {
+        size_t used_bits = replay_bitreader_position(&reader);
+        size_t used_bytes = (used_bits + 7U) / 8U;
+
+        if (used_bytes != payload_size) {
+            set_verify_error(error, &reader, decoded->width - 4U,
+                             decoded->height - 4U,
+                             "payload has trailing bytes");
+            return REPLAY_MALFORMED_STREAM;
+        }
+        if ((used_bits & 7U) != 0U &&
+            (payload[used_bits / 8U] >> (used_bits & 7U)) != 0U) {
+            set_verify_error(error, &reader, decoded->width - 4U,
+                             decoded->height - 4U,
+                             "payload has non-zero padding bits");
+            return REPLAY_MALFORMED_STREAM;
+        }
+    }
     return REPLAY_OK;
 }
 

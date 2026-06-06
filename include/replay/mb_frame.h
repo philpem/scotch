@@ -15,9 +15,17 @@ typedef struct {
 } MbPredictor;
 
 typedef struct {
+    unsigned width;
+    unsigned height;
+    size_t stride;
+    MbPixel *pixels;
+} MbFrame;
+
+typedef struct {
     size_t bit_position;
+    unsigned block_x;
+    unsigned block_y;
     const char *detail;
 } MbVerifyError;
 
 #endif
-
