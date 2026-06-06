@@ -16,7 +16,8 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
             "usage: replay-verify --codec ID [--describe|--verify-huffman] "
-            "[--payload FILE --size WIDTHxHEIGHT]\n");
+            "[--payload FILE --size WIDTHxHEIGHT [--previous-6y5uv FILE] "
+            "[--output-6y5uv FILE] [--expect-6y5uv FILE]]\n");
 }
 
 static int read_file(const char *path, ReplayBuffer *buffer)
@@ -49,11 +50,110 @@ static int read_file(const char *path, ReplayBuffer *buffer)
     return EXIT_SUCCESS;
 }
 
+static int read_6y5uv(const char *path, MbFrame *frame)
+{
+    FILE *file = fopen(path, "rb");
+    unsigned y;
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+        for (x = 0U; x < frame->width; ++x) {
+            MbPixel *pixel = &frame->pixels[(size_t)y * frame->stride + x];
+            uint8_t packed[3];
+
+            if (fread(packed, 1U, sizeof(packed), file) != sizeof(packed)) {
+                fprintf(stderr, "%s: truncated 6Y5UV frame at %u,%u\n",
+                        path, x, y);
+                fclose(file);
+                return EXIT_FAILURE;
+            }
+            pixel->y = packed[0];
+            pixel->u = packed[1];
+            pixel->v = packed[2];
+        }
+    }
+    if (fgetc(file) != EOF || ferror(file)) {
+        fprintf(stderr, "%s: trailing data in 6Y5UV frame\n", path);
+        fclose(file);
+        return EXIT_FAILURE;
+    }
+    if (fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int write_6y5uv(const char *path, const MbFrame *frame)
+{
+    FILE *file = fopen(path, "wb");
+    unsigned y;
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+        for (x = 0U; x < frame->width; ++x) {
+            const MbPixel *pixel =
+                &frame->pixels[(size_t)y * frame->stride + x];
+            uint8_t packed[3] = { pixel->y, pixel->u, pixel->v };
+
+            if (fwrite(packed, 1U, sizeof(packed), file) != sizeof(packed)) {
+                perror(path);
+                fclose(file);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+    if (fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+static int compare_6y5uv(const MbFrame *actual, const MbFrame *expected,
+                         const char *expected_path)
+{
+    unsigned y;
+
+    for (y = 0U; y < actual->height; ++y) {
+        unsigned x;
+        for (x = 0U; x < actual->width; ++x) {
+            const MbPixel *a =
+                &actual->pixels[(size_t)y * actual->stride + x];
+            const MbPixel *e =
+                &expected->pixels[(size_t)y * expected->stride + x];
+
+            if (a->y != e->y || a->u != e->u || a->v != e->v) {
+                fprintf(stderr,
+                        "%s: decoded mismatch at %u,%u: "
+                        "actual=%u,%u,%u expected=%u,%u,%u\n",
+                        expected_path, x, y, a->y, a->u, a->v,
+                        e->y, e->u, e->v);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
 static int verify_payload_file(const MbCodec *codec, const char *path,
-                               unsigned width, unsigned height)
+                               unsigned width, unsigned height,
+                               const char *previous_path,
+                               const char *output_path,
+                               const char *expected_path)
 {
     ReplayBuffer payload;
     MbFrame frame;
+    MbFrame previous = { 0U, 0U, 0U, NULL };
+    MbFrame expected = { 0U, 0U, 0U, NULL };
     MbVerifyError error;
     size_t bits;
     ReplayStatus status;
@@ -90,8 +190,21 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
         return EXIT_FAILURE;
     }
 
+    if (previous_path != NULL) {
+        previous = (MbFrame){ width, height, width, NULL };
+        previous.pixels = malloc(pixel_count * sizeof(*previous.pixels));
+        if (previous.pixels == NULL ||
+            read_6y5uv(previous_path, &previous) != EXIT_SUCCESS) {
+            free(previous.pixels);
+            free(frame.pixels);
+            replay_buffer_free(&payload);
+            return EXIT_FAILURE;
+        }
+    }
+
     status = codec_supermovingblocks_verify_frame(
-        payload.data, payload.size, NULL, &frame, &bits, &error);
+        payload.data, payload.size,
+        previous.pixels != NULL ? &previous : NULL, &frame, &bits, &error);
     if (status == REPLAY_OK) {
         printf("codec=%u payload=\"%s\" size=%ux%u bits=%zu status=ok\n",
                (unsigned)codec->id, path, width, height, bits);
@@ -102,6 +215,21 @@ static int verify_payload_file(const MbCodec *codec, const char *path,
                 error.block_x, error.block_y,
                 error.detail == NULL ? "unspecified" : error.detail);
     }
+    if (status == REPLAY_OK && output_path != NULL &&
+        write_6y5uv(output_path, &frame) != EXIT_SUCCESS) {
+        status = REPLAY_INVALID_ARGUMENT;
+    }
+    if (status == REPLAY_OK && expected_path != NULL) {
+        expected = (MbFrame){ width, height, width, NULL };
+        expected.pixels = malloc(pixel_count * sizeof(*expected.pixels));
+        if (expected.pixels == NULL ||
+            read_6y5uv(expected_path, &expected) != EXIT_SUCCESS ||
+            compare_6y5uv(&frame, &expected, expected_path) != EXIT_SUCCESS) {
+            status = REPLAY_INVALID_ARGUMENT;
+        }
+    }
+    free(expected.pixels);
+    free(previous.pixels);
     free(frame.pixels);
     replay_buffer_free(&payload);
     return status == REPLAY_OK ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -160,6 +288,9 @@ int main(int argc, char **argv)
     int describe = 0;
     int huffman = 0;
     const char *payload_path = NULL;
+    const char *previous_path = NULL;
+    const char *output_path = NULL;
+    const char *expected_path = NULL;
     unsigned width = 0;
     unsigned height = 0;
     int i;
@@ -179,6 +310,12 @@ int main(int argc, char **argv)
             huffman = 1;
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
             payload_path = argv[++i];
+        } else if (strcmp(argv[i], "--previous-6y5uv") == 0 && i + 1 < argc) {
+            previous_path = argv[++i];
+        } else if (strcmp(argv[i], "--output-6y5uv") == 0 && i + 1 < argc) {
+            output_path = argv[++i];
+        } else if (strcmp(argv[i], "--expect-6y5uv") == 0 && i + 1 < argc) {
+            expected_path = argv[++i];
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -192,6 +329,8 @@ int main(int argc, char **argv)
     }
 
     if (codec == NULL || (!describe && !huffman && payload_path == NULL) ||
+        ((previous_path != NULL || output_path != NULL ||
+          expected_path != NULL) && payload_path == NULL) ||
         (payload_path != NULL && (width == 0U || height == 0U))) {
         usage(stderr);
         return EXIT_FAILURE;
@@ -208,5 +347,7 @@ int main(int argc, char **argv)
     }
     return payload_path == NULL
                ? EXIT_SUCCESS
-               : verify_payload_file(codec, payload_path, width, height);
+               : verify_payload_file(codec, payload_path, width, height,
+                                     previous_path, output_path,
+                                     expected_path);
 }

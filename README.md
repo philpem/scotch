@@ -28,10 +28,20 @@ Verify a raw format-19 frame payload with no temporal dependencies:
 build/replay-verify --codec 19 --payload frame.mb19 --size 320x256
 ```
 
+Export decoded packed `Y,U,V` bytes and compare them with an Acorn reference:
+
+```sh
+build/replay-verify --codec 19 --payload frame.mb19 --size 320x256 \
+    --previous-6y5uv previous.6y5uv --output-6y5uv decoded.6y5uv \
+    --expect-6y5uv acorn-decoded.6y5uv
+```
+
 The payload verifier currently accepts all format-19 block modes. A payload
 containing temporal references requires the library API so the caller can
-supply the previous reconstructed frame; the standalone CLI intentionally
-rejects such a payload rather than inventing reference pixels.
+supply the previous reconstructed frame, or the CLI's `--previous-6y5uv`
+option. The CLI rejects temporal payloads when no reference is supplied rather
+than inventing pixels. The original-codec corpus contract is documented in
+`corpus/format19/README.md`.
 
 Encode exactly one packed RGB24 frame as a raw format-19 payload:
 

@@ -39,6 +39,8 @@
   so a format-19 corpus must be generated or sourced separately.
 - [ ] Build a small corpus of original format-19 Replay payloads, preserving
   provenance and expected dimensions.
+- [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
+  runner with previous-frame support.
 - [ ] Decode the corpus with the portable verifier and export raw `6Y5UV`.
 - [ ] Create a RISC OS harness that invokes the original Decomp19 entry point.
 - [ ] Run the harness in an emulator and capture raw decoded pixels.

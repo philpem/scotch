@@ -84,3 +84,7 @@ add_replay_test(test_supermovingblocks_split
     tests/test_supermovingblocks_split.c)
 add_replay_test(test_supermovingblocks_split_motion
     tests/test_supermovingblocks_split_motion.c)
+
+add_test(NAME test_replay_verify_cli
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
+        $<TARGET_FILE:replay-verify>)
