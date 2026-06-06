@@ -32,7 +32,7 @@ static int test_temporal_2x2(void)
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 1, 0, 1 };
+    CodecSuperMovingBlocksEncodeOptions options = { 0, 1, 0, 1, 0U };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;
@@ -73,7 +73,7 @@ static int test_spatial_2x2_key_frame(void)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 1 };
+    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 1, 0U };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;

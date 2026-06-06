@@ -14,6 +14,7 @@ add_library(replay STATIC
     src/mb_huffman.c
     src/mb_codec.c
     src/mb_motion.c
+    src/mb_quality.c
     src/codec_movingblocks.c
     src/codec_movingblockshq.c
     src/codec_supermovingblocks.c
@@ -59,6 +60,7 @@ add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
+add_replay_test(test_mb_quality tests/test_mb_quality.c)
 add_replay_test(test_mb_color tests/test_mb_color.c)
 add_replay_test(test_codec_supermovingblocks
     tests/test_codec_supermovingblocks.c)

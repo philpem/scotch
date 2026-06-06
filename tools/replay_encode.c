@@ -26,7 +26,7 @@ static void usage(FILE *stream)
     fprintf(stream,
             "usage: replay-encode --codec 19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
-            "[--frames N] [--data-only] [--trace FILE] "
+            "[--frames N] [--data-only] [--loss-level 0..28] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
 }
 
@@ -140,19 +140,19 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        unsigned height,
                        const CodecSuperMovingBlocksEncodeStats *stats,
-                       size_t bytes)
+                       size_t bytes, unsigned loss_level)
 {
     if (trace == NULL) {
         return EXIT_SUCCESS;
     }
     if (fprintf(trace,
-                "frame=%zu codec=19 size=%ux%u data4x4=%zu "
+                "frame=%zu codec=19 size=%ux%u loss_level=%u data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                 "temporal2x2=%zu spatial2x2=%zu "
                 "bits=%zu bytes=%zu "
                 "verify=ok\n",
-                frame_number, width, height, stats->data4x4_blocks,
+                frame_number, width, height, loss_level, stats->data4x4_blocks,
                 stats->stationary4x4_blocks, stats->temporal4x4_blocks,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
                 stats->data2x2_blocks, stats->stationary2x2_blocks,
@@ -175,6 +175,7 @@ int main(int argc, char **argv)
     unsigned width = 0U;
     unsigned height = 0U;
     unsigned codec = 0U;
+    unsigned loss_level = 0U;
     size_t frame_limit = 0U;
     int data_only = 0;
     uint8_t *rgb = NULL;
@@ -222,6 +223,14 @@ int main(int argc, char **argv)
             frame_limit = (size_t)value;
         } else if (strcmp(argv[i], "--data-only") == 0) {
             data_only = 1;
+        } else if (strcmp(argv[i], "--loss-level") == 0 && i + 1 < argc) {
+            char *end;
+            unsigned long value = strtoul(argv[++i], &end, 10);
+            if (*end != '\0' || value > 28UL) {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+            loss_level = (unsigned)value;
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -290,7 +299,8 @@ int main(int argc, char **argv)
             !data_only && frame_number != 0U,
             !data_only && frame_number != 0U,
             !data_only,
-            !data_only
+            !data_only,
+            loss_level
         };
         CodecSuperMovingBlocksEncodeStats stats;
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
@@ -351,15 +361,15 @@ int main(int argc, char **argv)
             write_reconstructed_ppm(frame_ppm, &reconstructed, rgb,
                                     (size_t)width * 3U) != EXIT_SUCCESS ||
             trace_frame(trace, frame_number, width, height, &stats,
-                        payload.size) != EXIT_SUCCESS) {
+                        payload.size, loss_level) != EXIT_SUCCESS) {
             goto free_payload;
         }
-        printf("frame=%zu codec=19 bits=%zu bytes=%zu data4x4=%zu "
+        printf("frame=%zu codec=19 loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
                "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                "temporal2x2=%zu spatial2x2=%zu verify=ok "
                "payload=\"%s\"\n",
-               frame_number, stats.bits_written, payload.size,
+               frame_number, loss_level, stats.bits_written, payload.size,
                stats.data4x4_blocks, stats.stationary4x4_blocks,
                stats.temporal4x4_blocks, stats.spatial4x4_blocks,
                stats.split4x4_blocks, stats.data2x2_blocks,

@@ -15,7 +15,7 @@ int main(void)
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 0 };
+    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 0, 0U };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t consumed_bits;
@@ -53,6 +53,38 @@ int main(void)
     CHECK(stats.data4x4_blocks == 0U);
     CHECK(stats.bits_written == 4U);
     CHECK(payload.size == 1U && payload.data[0] == 0U);
+
+    /* Level 7 permits four luma exceptions of two in a 4x4 candidate. */
+    for (i = 0U; i < 4U; ++i) {
+        source_pixels[i].y = (uint8_t)(previous_pixels[i].y + 2U);
+    }
+    options.loss_level = 7U;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.stationary4x4_blocks == 2U);
+    CHECK(stats.data4x4_blocks == 0U);
+    CHECK(memcmp(reconstructed_pixels, previous_pixels,
+                 sizeof(previous_pixels)) == 0);
+    CHECK(codec_supermovingblocks_verify_frame(
+              payload.data, payload.size, &previous, &decoded,
+              &consumed_bits, NULL) == REPLAY_OK);
+    CHECK(memcmp(decoded_pixels, reconstructed_pixels,
+                 sizeof(decoded_pixels)) == 0);
+
+    /* A fifth exception exceeds that row's explicit 4x4 allowance. */
+    source_pixels[8].y = (uint8_t)(previous_pixels[8].y + 2U);
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.stationary4x4_blocks == 1U);
+    CHECK(stats.data4x4_blocks == 1U);
+
+    options.loss_level = 29U;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_INVALID_ARGUMENT);
+    CHECK(payload.size == 0U);
 
     replay_buffer_free(&payload);
     return EXIT_SUCCESS;

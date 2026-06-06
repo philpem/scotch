@@ -7,10 +7,10 @@
 extern const MbHuffmanTable codec_supermovingblocks_luma_huffman;
 
 /*
- * These switches enable lossless alternatives to a 4x4 data block. A mode is
- * used only when it reconstructs exactly the same quantised pixels as the
- * corresponding data representation. Threshold-based lossy matching will be
- * a separate policy layer.
+ * These switches enable alternatives to a 4x4 data block. At loss level 0 a
+ * copy is used only when it reconstructs exactly the same quantised pixels as
+ * the corresponding data representation. Levels 1 through 28 use the
+ * original compressor's progressively looser acceptance table.
  *
  * Stationary and temporal modes require `previous`. Spatial mode only refers
  * to pixels already reconstructed in the current frame, so it is also legal
@@ -22,6 +22,8 @@ typedef struct {
     int allow_temporal;
     int allow_spatial;
     int allow_split;
+    /* 0 is exact; 28 is the loosest source-defined QP% row. */
+    unsigned loss_level;
 } CodecSuperMovingBlocksEncodeOptions;
 
 /* Counts describe the selected stream, not the candidates considered. */
@@ -64,7 +66,7 @@ ReplayStatus codec_supermovingblocks_encode_data_frame(
     size_t *bits_written);
 
 /*
- * Encode one frame using the enabled lossless block decisions.
+ * Encode one frame using the enabled block decisions and selected loss level.
  *
  * `source` contains quantised 6Y5UV samples. `reconstructed` is filled with
  * exactly what a format-19 decoder will retain and must therefore be supplied

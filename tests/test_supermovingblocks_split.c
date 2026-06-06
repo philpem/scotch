@@ -15,7 +15,7 @@ int main(void)
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, reconstructed_pixels };
     MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 1 };
+    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 1, 0U };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;
@@ -45,6 +45,22 @@ int main(void)
                  sizeof(decoded_pixels)) == 0);
     CHECK(memcmp(reconstructed_pixels, source_pixels,
                  sizeof(source_pixels)) == 0);
+
+    /* The 2x2 table permits one level-7 exception of two per quadrant. */
+    source_pixels[0].y = (uint8_t)(previous_pixels[0].y + 2U);
+    options.loss_level = 7U;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.split4x4_blocks == 1U);
+    CHECK(stats.data2x2_blocks == 1U);
+    CHECK(stats.stationary2x2_blocks == 3U);
+    CHECK(reconstructed_pixels[0].y == previous_pixels[0].y);
+    CHECK(codec_supermovingblocks_verify_frame(
+              payload.data, payload.size, &previous, &decoded,
+              NULL, NULL) == REPLAY_OK);
+    CHECK(memcmp(reconstructed_pixels, decoded_pixels,
+                 sizeof(decoded_pixels)) == 0);
     replay_buffer_free(&payload);
     return EXIT_SUCCESS;
 }

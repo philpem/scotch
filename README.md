@@ -6,7 +6,7 @@ streams.
 The first implemented target is compression type 19, Super Moving Blocks. The
 current milestone provides byte/bitstream primitives, Moving Blocks codec
 descriptors, a complete format-19 payload verifier, and a deterministic
-data-only format-19 encoder.
+format-19 encoder with the original 29-level copy-match threshold table.
 
 ## Build
 
@@ -57,15 +57,16 @@ ffmpeg -i input.mp4 -vf scale=320:256,fps=12.5 \
 ```
 
 This writes `frame-000000.mb19`, `frame-000001.mb19`, and so on. After the
-first frame, unchanged 4x4 reconstructions use two-bit stationary blocks, and
-exact matches elsewhere in the previous frame use temporal motion codes.
-Exact spatial copies may reference pixels already reconstructed in the same
+first frame, accepted same-position reconstructions use two-bit stationary
+blocks, and accepted matches elsewhere use temporal motion codes.
+Spatial copies may reference pixels already reconstructed in the same
 frame, including in key frames. Split blocks are selected by emitted bit cost
 when a mixture of 2x2 data, stationary, temporal, and spatial blocks is smaller
 than 4x4 data.
-`--data-only` disables these decisions, and `--frames N` requires exactly N
-input frames. The output files remain raw codec payloads rather than an
-undocumented temporary container.
+`--loss-level N` selects source-defined level 0 through 28; level 0 requires
+exact copy matches. `--data-only` disables copy and split decisions, and
+`--frames N` requires exactly N input frames. The output files remain raw
+codec payloads rather than an undocumented temporary container.
 
 ## Naming
 

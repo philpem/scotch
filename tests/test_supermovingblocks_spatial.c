@@ -13,7 +13,7 @@ int main(void)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 0 };
+    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 0, 0U };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t row;
