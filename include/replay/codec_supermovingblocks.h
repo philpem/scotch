@@ -14,7 +14,8 @@ extern const MbHuffmanTable codec_supermovingblocks_luma_huffman;
  *
  * Stationary and temporal modes require `previous`. Spatial mode only refers
  * to pixels already reconstructed in the current frame, so it is also legal
- * in a key frame. Split currently considers 2x2 data and stationary modes.
+ * in a key frame. Split considers the corresponding data, stationary,
+ * temporal, and spatial 2x2 modes.
  */
 typedef struct {
     int allow_stationary;
@@ -32,6 +33,8 @@ typedef struct {
     size_t split4x4_blocks;
     size_t data2x2_blocks;
     size_t stationary2x2_blocks;
+    size_t temporal2x2_blocks;
+    size_t spatial2x2_blocks;
     size_t bits_written;
 } CodecSuperMovingBlocksEncodeStats;
 

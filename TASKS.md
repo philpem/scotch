@@ -63,9 +63,8 @@
   state.
 - [x] Add exact temporal 4x4 candidates in canonical code-length/table order.
 - [x] Add exact spatial 4x4 candidates, including use within key frames.
-- [ ] Complete 4x4 versus split-2x2 bit-cost selection.
-  Current support compares 4x4 data against mixed 2x2 data/stationary blocks;
-  exact 2x2 temporal and spatial candidates remain.
+- [x] Complete exact 4x4 versus split-2x2 bit-cost selection, including data,
+  stationary, temporal, and spatial 2x2 modes.
 - [ ] Add the 29-level threshold table and fixed-loss tests.
 - [ ] Add target-byte retries after deterministic single-pass encoding works.
 

@@ -149,12 +149,14 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 "frame=%zu codec=19 size=%ux%u data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
+                "temporal2x2=%zu spatial2x2=%zu "
                 "bits=%zu bytes=%zu "
                 "verify=ok\n",
                 frame_number, width, height, stats->data4x4_blocks,
                 stats->stationary4x4_blocks, stats->temporal4x4_blocks,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
                 stats->data2x2_blocks, stats->stationary2x2_blocks,
+                stats->temporal2x2_blocks, stats->spatial2x2_blocks,
                 stats->bits_written, bytes) < 0) {
         perror("trace output");
         return EXIT_FAILURE;
@@ -354,13 +356,15 @@ int main(int argc, char **argv)
         }
         printf("frame=%zu codec=19 bits=%zu bytes=%zu data4x4=%zu "
                "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
-               "split4x4=%zu data2x2=%zu stationary2x2=%zu verify=ok "
+               "split4x4=%zu data2x2=%zu stationary2x2=%zu "
+               "temporal2x2=%zu spatial2x2=%zu verify=ok "
                "payload=\"%s\"\n",
                frame_number, stats.bits_written, payload.size,
                stats.data4x4_blocks, stats.stationary4x4_blocks,
                stats.temporal4x4_blocks, stats.spatial4x4_blocks,
                stats.split4x4_blocks, stats.data2x2_blocks,
-               stats.stationary2x2_blocks, frame_payload);
+               stats.stationary2x2_blocks, stats.temporal2x2_blocks,
+               stats.spatial2x2_blocks, frame_payload);
         memcpy(previous_pixels, reconstructed_pixels,
                pixel_count * sizeof(*previous_pixels));
         ++frame_number;

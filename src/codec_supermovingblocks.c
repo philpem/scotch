@@ -415,24 +415,218 @@ static ReplayStatus build_data4x4_candidate(
     return status;
 }
 
+typedef enum {
+    SPLIT_MODE_DATA,
+    SPLIT_MODE_STATIONARY,
+    SPLIT_MODE_TEMPORAL,
+    SPLIT_MODE_SPATIAL
+} SplitMode;
+
+typedef struct {
+    SplitMode mode;
+    MbMotionVector motion;
+} SplitDecision;
+
+/*
+ * Search the same temporal vector sequence used by 4x4 blocks, but compare a
+ * 2x2 reconstruction target. The first match therefore has the shortest
+ * available motion code, with source table order resolving equal lengths.
+ */
+static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
+                             unsigned x, unsigned y, uint8_t u, uint8_t v,
+                             MbMotionVector *motion)
+{
+    unsigned index;
+
+    for (index = 0U; index < 288U; ++index) {
+        int source_x;
+        int source_y;
+        unsigned row;
+        int matches = 1;
+
+        if (mb_motion_format19_temporal_at(index, motion) != REPLAY_OK) {
+            return 0;
+        }
+        source_x = (int)x + motion->dx;
+        source_y = (int)y + motion->dy;
+        if (source_x < 0 || source_y < 0 ||
+            source_x + 2 > (int)previous->width ||
+            source_y + 2 > (int)previous->height) {
+            continue;
+        }
+        for (row = 0U; matches && row < 2U; ++row) {
+            unsigned column;
+            for (column = 0U; column < 2U; ++column) {
+                const MbPixel *target =
+                    &source->pixels[(size_t)(y + row) * source->stride +
+                                    x + column];
+                const MbPixel *reference =
+                    &previous->pixels[((size_t)source_y + row) *
+                                          previous->stride +
+                                      (size_t)source_x + column];
+                if (target->y != reference->y || u != reference->u ||
+                    v != reference->v) {
+                    matches = 0;
+                    break;
+                }
+            }
+        }
+        if (matches) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const MbPixel *split_spatial_pixel(
+    const MbFrame *reconstructed, const MbPixel tentative[16],
+    unsigned available_mask, unsigned block_x, unsigned block_y,
+    unsigned source_x, unsigned source_y)
+{
+    /*
+     * A spatial source can fall inside the 4x4 block currently being tested.
+     * In that case it is legal only if an earlier 2x2 decision has already
+     * produced the pixel in the private tentative reconstruction.
+     */
+    if (source_x >= block_x && source_x < block_x + 4U &&
+        source_y >= block_y && source_y < block_y + 4U) {
+        unsigned local = (source_y - block_y) * 4U + source_x - block_x;
+        return (available_mask & (1U << local)) != 0U
+                   ? &tentative[local]
+                   : NULL;
+    }
+    return &reconstructed->pixels[(size_t)source_y * reconstructed->stride +
+                                  source_x];
+}
+
+static int match_spatial2x2(const MbFrame *source,
+                            const MbFrame *reconstructed,
+                            const MbPixel tentative[16],
+                            unsigned available_mask, unsigned parent_x,
+                            unsigned parent_y, unsigned x, unsigned y,
+                            uint8_t u, uint8_t v, MbMotionVector *motion)
+{
+    unsigned index;
+
+    for (index = 0U; index < 8U; ++index) {
+        int source_x;
+        int source_y;
+        unsigned row;
+        int matches = 1;
+
+        if (mb_motion_format19_spatial_at(
+                MB_MOTION_BLOCK_2X2, index, motion) != REPLAY_OK) {
+            return 0;
+        }
+        source_x = (int)x + motion->dx;
+        source_y = (int)y + motion->dy;
+        if (source_x < 0 || source_y < 0 ||
+            source_x + 2 > (int)reconstructed->width ||
+            source_y + 2 > (int)reconstructed->height) {
+            continue;
+        }
+        for (row = 0U; matches && row < 2U; ++row) {
+            unsigned column;
+            for (column = 0U; column < 2U; ++column) {
+                const MbPixel *target =
+                    &source->pixels[(size_t)(y + row) * source->stride +
+                                    x + column];
+                const MbPixel *reference = split_spatial_pixel(
+                    reconstructed, tentative, available_mask,
+                    parent_x, parent_y, (unsigned)source_x + column,
+                    (unsigned)source_y + row);
+                if (reference == NULL || target->y != reference->y ||
+                    u != reference->u || v != reference->v) {
+                    matches = 0;
+                    break;
+                }
+            }
+        }
+        if (matches) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void fill_tentative_data2x2(const MbFrame *source,
+                                   MbPixel tentative[16], unsigned parent_x,
+                                   unsigned parent_y, unsigned x, unsigned y,
+                                   uint8_t u, uint8_t v,
+                                   unsigned *available_mask)
+{
+    unsigned row;
+
+    for (row = 0U; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 2U; ++column) {
+            unsigned local = (y + row - parent_y) * 4U + x + column - parent_x;
+            tentative[local].y =
+                source->pixels[(size_t)(y + row) * source->stride +
+                               x + column].y;
+            tentative[local].u = u;
+            tentative[local].v = v;
+            *available_mask |= 1U << local;
+        }
+    }
+}
+
+static void fill_tentative_copy2x2(
+    const MbFrame *reference, const MbFrame *reconstructed,
+    MbPixel tentative[16], unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, const MbMotionVector *motion,
+    unsigned *available_mask)
+{
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+    unsigned row;
+
+    for (row = 0U; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 2U; ++column) {
+            unsigned local = (y + row - parent_y) * 4U + x + column - parent_x;
+            const MbPixel *pixel;
+
+            if (motion->spatial != 0) {
+                pixel = split_spatial_pixel(
+                    reconstructed, tentative, *available_mask,
+                    parent_x, parent_y, source_x + column, source_y + row);
+            } else {
+                pixel = &reference->pixels[(size_t)(source_y + row) *
+                                               reference->stride +
+                                           source_x + column];
+            }
+            tentative[local] = *pixel;
+            *available_mask |= 1U << local;
+        }
+    }
+}
+
 static ReplayStatus build_split_data_candidate(
     const MbFrame *source, unsigned x, unsigned y,
-    const MbFrame *previous, int allow_stationary,
+    const MbFrame *previous, const MbFrame *reconstructed,
+    int allow_stationary, int allow_temporal, int allow_spatial,
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
-    MbPredictor *final_predictor, unsigned *stationary_mask, size_t *bits)
+    MbPredictor *final_predictor, SplitDecision decisions[4], size_t *bits)
 {
     /* Decoder order inside a split block is TL, TR, BL, BR. */
     static const unsigned offsets[4][2] = {
         { 0U, 0U }, { 2U, 0U }, { 0U, 2U }, { 2U, 2U }
     };
     ReplayBitWriter writer;
+    /*
+     * Candidate evaluation cannot write into the live reconstructed frame:
+     * the competing 4x4 data candidate may win. These 16 pixels model exactly
+     * what the decoder would have reconstructed after each tentative quadrant.
+     */
+    MbPixel tentative[16] = { { 0U, 0U, 0U } };
+    unsigned available_mask = 0U;
     unsigned block;
     ReplayStatus status;
 
     replay_buffer_clear(buffer);
     replay_bitwriter_init(&writer, buffer);
     *final_predictor = *initial_predictor;
-    *stationary_mask = 0U;
     status = replay_bitwriter_write(&writer, UINT32_C(3), 2U);
     for (block = 0U; status == REPLAY_OK && block < 4U; ++block) {
         unsigned block_x = x + offsets[block][0];
@@ -442,6 +636,9 @@ static ReplayStatus build_split_data_candidate(
         uint8_t v = average_chroma2x2(source, block_x, block_y, 1);
         unsigned row;
         int stationary = allow_stationary;
+
+        decisions[block].mode = SPLIT_MODE_DATA;
+        decisions[block].motion = (MbMotionVector){ 0, 0, 0 };
 
         /*
          * Compare against the 2x2 data reconstruction: exact luma plus one
@@ -465,9 +662,45 @@ static ReplayStatus build_split_data_candidate(
                 }
             }
         }
+        /*
+         * Current exact-mode policy is stationary, shortest temporal, spatial
+         * table order, then data. Every copy mode is cheaper than a data block;
+         * data alone advances the luma predictor.
+         */
         if (stationary) {
             status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
-            *stationary_mask |= 1U << block;
+            decisions[block].mode = SPLIT_MODE_STATIONARY;
+            fill_tentative_copy2x2(
+                previous, reconstructed, tentative, x, y, block_x, block_y,
+                &decisions[block].motion, &available_mask);
+        } else if (allow_temporal && match_temporal2x2(
+                       source, previous, block_x, block_y, u, v,
+                       &decisions[block].motion)) {
+            status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
+            if (status == REPLAY_OK) {
+                status = mb_motion_write_format19(
+                    &writer, MB_MOTION_BLOCK_2X2,
+                    &decisions[block].motion);
+            }
+            decisions[block].mode = SPLIT_MODE_TEMPORAL;
+            fill_tentative_copy2x2(
+                previous, reconstructed, tentative, x, y, block_x, block_y,
+                &decisions[block].motion, &available_mask);
+        } else if (allow_spatial && match_spatial2x2(
+                       source, reconstructed, tentative, available_mask,
+                       x, y, block_x, block_y, u, v,
+                       &decisions[block].motion)) {
+            status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
+            if (status == REPLAY_OK) {
+                status = mb_motion_write_format19(
+                    &writer, MB_MOTION_BLOCK_2X2,
+                    &decisions[block].motion);
+            }
+            decisions[block].mode = SPLIT_MODE_SPATIAL;
+            fill_tentative_copy2x2(
+                reconstructed, reconstructed, tentative, x, y,
+                block_x, block_y, &decisions[block].motion,
+                &available_mask);
         } else {
             status = make_data2x2(
                 source, block_x, block_y, final_predictor, residuals);
@@ -475,6 +708,9 @@ static ReplayStatus build_split_data_candidate(
                 status = codec_supermovingblocks_write_data2x2(
                     &writer, u, v, residuals);
             }
+            fill_tentative_data2x2(
+                source, tentative, x, y, block_x, block_y, u, v,
+                &available_mask);
         }
     }
     *bits = replay_bitwriter_position(&writer);
@@ -673,6 +909,27 @@ static void copy_block4x4(const MbFrame *source, MbFrame *destination,
     }
 }
 
+static void copy_decision2x2(const MbFrame *previous, MbFrame *reconstructed,
+                             unsigned x, unsigned y,
+                             const SplitDecision *decision)
+{
+    const MbFrame *reference =
+        decision->mode == SPLIT_MODE_SPATIAL ? reconstructed : previous;
+    unsigned source_x = (unsigned)((int)x + decision->motion.dx);
+    unsigned source_y = (unsigned)((int)y + decision->motion.dy);
+    unsigned row;
+
+    for (row = 0U; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 2U; ++column) {
+            reconstructed->pixels[(size_t)(y + row) * reconstructed->stride +
+                                  x + column] =
+                reference->pixels[(size_t)(source_y + row) * reference->stride +
+                                  source_x + column];
+        }
+    }
+}
+
 static int valid_frame_pair(const MbFrame *source,
                             const MbFrame *reconstructed)
 {
@@ -789,7 +1046,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                 MbPredictor split_predictor;
                 size_t data_bits;
                 size_t split_bits = SIZE_MAX;
-                unsigned stationary_mask = 0U;
+                SplitDecision split_decisions[4];
 
                 /*
                  * Encode both representations to scratch bitstreams. Huffman
@@ -801,9 +1058,10 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                     &data_predictor, &data_bits);
                 if (status == REPLAY_OK && allow_split) {
                     status = build_split_data_candidate(
-                        source, x, y, previous, allow_stationary,
+                        source, x, y, previous, reconstructed,
+                        allow_stationary, allow_temporal, allow_spatial,
                         &predictor, &split_candidate, &split_predictor,
-                        &stationary_mask, &split_bits);
+                        split_decisions, &split_bits);
                 }
                 if (status == REPLAY_OK && split_bits < data_bits) {
                     static const unsigned offsets[4][2] = {
@@ -820,22 +1078,24 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                          ++block) {
                         unsigned block_x = x + offsets[block][0];
                         unsigned block_y = y + offsets[block][1];
-                        if ((stationary_mask & (1U << block)) != 0U) {
-                            unsigned row;
-                            for (row = 0U; row < 2U; ++row) {
-                                unsigned column;
-                                for (column = 0U; column < 2U; ++column) {
-                                    reconstructed->pixels[
-                                        (size_t)(block_y + row) *
-                                            reconstructed->stride +
-                                        block_x + column] =
-                                        previous->pixels[
-                                            (size_t)(block_y + row) *
-                                                previous->stride +
-                                            block_x + column];
-                                }
-                            }
+                        if (split_decisions[block].mode ==
+                            SPLIT_MODE_STATIONARY) {
+                            copy_decision2x2(
+                                previous, reconstructed, block_x, block_y,
+                                &split_decisions[block]);
                             ++local_stats.stationary2x2_blocks;
+                        } else if (split_decisions[block].mode ==
+                                   SPLIT_MODE_TEMPORAL) {
+                            copy_decision2x2(
+                                previous, reconstructed, block_x, block_y,
+                                &split_decisions[block]);
+                            ++local_stats.temporal2x2_blocks;
+                        } else if (split_decisions[block].mode ==
+                                   SPLIT_MODE_SPATIAL) {
+                            copy_decision2x2(
+                                previous, reconstructed, block_x, block_y,
+                                &split_decisions[block]);
+                            ++local_stats.spatial2x2_blocks;
                         } else {
                             uint8_t block_u = average_chroma2x2(
                                 source, block_x, block_y, 0);
