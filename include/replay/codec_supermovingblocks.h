@@ -22,6 +22,15 @@ ReplayStatus codec_supermovingblocks_write_data2x2(
     ReplayBitWriter *writer, uint8_t u, uint8_t v,
     const uint8_t residuals[4]);
 
+/*
+ * Encode a complete frame using only 4x4 data blocks. The reconstructed frame
+ * receives the exact pixels a decoder will produce, including block-averaged
+ * chroma. Output is replaced on entry and contains one byte-padded payload.
+ */
+ReplayStatus codec_supermovingblocks_encode_data_frame(
+    const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
+    size_t *bits_written);
+
 ReplayStatus codec_supermovingblocks_verify_frame(
     const uint8_t *payload, size_t payload_size,
     const MbFrame *previous, MbFrame *decoded,

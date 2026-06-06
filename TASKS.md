@@ -47,11 +47,14 @@
 
 ## Milestone 5: Data-Only Encoder
 
-- [ ] Implement CompLib-compatible RGB24 to `6Y5UV` conversion and tests.
-- [ ] Read exact-sized raw RGB24 frames from files or stdin.
-- [ ] Encode complete frames using only data-coded blocks.
-- [ ] Decode every emitted frame and compare it with encoder reconstruction.
-- [ ] Add reconstructed-frame PPM output and decision traces.
+- [x] Implement the non-dithered CompLib RGB24 to `6Y5UV` conversion and
+  focused tests; confirm coefficient rounding against an Acorn reference.
+- [x] Read one exact-sized raw RGB24 frame from a file or stdin.
+- [x] Encode complete frames using only 4x4 data-coded blocks.
+- [x] Decode every emitted frame and compare it with encoder reconstruction.
+- [x] Add a frame-level decision trace.
+- [x] Add reconstructed-frame PPM output for visual inspection.
+- [ ] Generalise raw input and output from one frame to a frame sequence.
 
 ## Milestone 6: Compression Modes
 

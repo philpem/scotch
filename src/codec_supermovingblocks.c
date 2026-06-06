@@ -150,6 +150,151 @@ ReplayStatus codec_supermovingblocks_write_data2x2(
     return REPLAY_OK;
 }
 
+static int signed_chroma(uint8_t value)
+{
+    return value < 16U ? (int)value : (int)value - 32;
+}
+
+static uint8_t average_chroma4x4(const MbFrame *source, unsigned x,
+                                 unsigned y, int use_v)
+{
+    int sum = 0;
+    unsigned row;
+
+    for (row = 0; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0; column < 4U; ++column) {
+            const MbPixel *pixel =
+                &source->pixels[(size_t)(y + row) * source->stride +
+                                x + column];
+            sum += signed_chroma(use_v != 0 ? pixel->v : pixel->u);
+        }
+    }
+    if (sum < 0) {
+        sum = -((-sum + 15) / 16);
+    } else {
+        sum /= 16;
+    }
+    return (uint8_t)(sum & 31);
+}
+
+static ReplayStatus make_data4x4(const MbFrame *source, unsigned x,
+                                 unsigned y, MbPredictor *predictor,
+                                 uint8_t residuals[16])
+{
+    unsigned sum = 0U;
+    unsigned row;
+
+    for (row = 0; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0; column < 4U; ++column) {
+            const MbPixel *pixel =
+                &source->pixels[(size_t)(y + row) * source->stride +
+                                x + column];
+            unsigned prediction;
+            size_t index = row * 4U + column;
+
+            if (pixel->y > 63U || pixel->u > 31U || pixel->v > 31U) {
+                return REPLAY_INVALID_ARGUMENT;
+            }
+            if (row == 0U) {
+                prediction = column == 0U
+                                 ? predictor->luma
+                                 : source->pixels[(size_t)y * source->stride +
+                                                  x + column - 1U].y;
+            } else if (column == 0U) {
+                prediction =
+                    source->pixels[(size_t)(y + row - 1U) * source->stride + x].y;
+            } else {
+                prediction =
+                    ((unsigned)source->pixels[(size_t)(y + row) * source->stride +
+                                             x + column - 1U].y +
+                     (unsigned)source->pixels[(size_t)(y + row - 1U) *
+                                                 source->stride +
+                                             x + column].y) >>
+                    1U;
+            }
+            residuals[index] = (uint8_t)((pixel->y - prediction) & 63U);
+            sum += pixel->y;
+        }
+    }
+    predictor->luma = (uint8_t)(sum >> 4U);
+    return REPLAY_OK;
+}
+
+ReplayStatus codec_supermovingblocks_encode_data_frame(
+    const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
+    size_t *bits_written)
+{
+    ReplayBitWriter writer;
+    MbPredictor predictor = { 0 };
+    unsigned y;
+
+    if (source == NULL || source->pixels == NULL || output == NULL ||
+        reconstructed == NULL || reconstructed->pixels == NULL ||
+        source->width == 0U || source->height == 0U ||
+        (source->width & 3U) != 0U || (source->height & 3U) != 0U ||
+        source->stride < source->width ||
+        reconstructed->width != source->width ||
+        reconstructed->height != source->height ||
+        reconstructed->stride < reconstructed->width) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+
+    replay_buffer_clear(output);
+    replay_bitwriter_init(&writer, output);
+    for (y = 0; y < source->height; y += 4U) {
+        unsigned x;
+        for (x = 0; x < source->width; x += 4U) {
+            uint8_t residuals[16];
+            uint8_t u;
+            uint8_t v;
+            unsigned row;
+            ReplayStatus status =
+                make_data4x4(source, x, y, &predictor, residuals);
+
+            if (status != REPLAY_OK) {
+                replay_buffer_clear(output);
+                return status;
+            }
+            u = average_chroma4x4(source, x, y, 0);
+            v = average_chroma4x4(source, x, y, 1);
+            status = codec_supermovingblocks_write_data4x4(
+                &writer, u, v, residuals);
+            if (status != REPLAY_OK) {
+                replay_buffer_clear(output);
+                return status;
+            }
+            for (row = 0; row < 4U; ++row) {
+                unsigned column;
+                for (column = 0; column < 4U; ++column) {
+                    MbPixel *destination =
+                        &reconstructed->pixels[(size_t)(y + row) *
+                                                   reconstructed->stride +
+                                               x + column];
+                    const MbPixel *input =
+                        &source->pixels[(size_t)(y + row) * source->stride +
+                                        x + column];
+                    destination->y = input->y;
+                    destination->u = u;
+                    destination->v = v;
+                }
+            }
+        }
+    }
+    if (bits_written != NULL) {
+        *bits_written = replay_bitwriter_position(&writer);
+    }
+    {
+        ReplayStatus status = replay_bitwriter_flush_zero(&writer);
+        if (status != REPLAY_OK) {
+            replay_buffer_clear(output);
+            return status;
+        }
+    }
+    return REPLAY_OK;
+}
+
 ReplayStatus codec_supermovingblocks_decode_data4x4(
     ReplayBitReader *reader, MbPredictor *predictor,
     MbPixel *pixels, size_t stride, MbVerifyError *error)

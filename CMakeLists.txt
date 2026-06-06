@@ -10,6 +10,7 @@ add_library(replay STATIC
     src/replay_status.c
     src/replay_buffer.c
     src/replay_bitstream.c
+    src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
     src/mb_motion.c
@@ -31,6 +32,16 @@ endif()
 add_executable(replay-verify tools/replay_verify.c)
 target_link_libraries(replay-verify PRIVATE replay)
 
+add_executable(replay-encode tools/replay_encode.c)
+target_link_libraries(replay-encode PRIVATE replay)
+
+if(NOT MSVC)
+    target_compile_options(replay-verify PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+    target_compile_options(replay-encode PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 enable_testing()
 
 function(add_replay_test name source)
@@ -48,7 +59,10 @@ add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
+add_replay_test(test_mb_color tests/test_mb_color.c)
 add_replay_test(test_codec_supermovingblocks
     tests/test_codec_supermovingblocks.c)
 add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
+add_replay_test(test_supermovingblocks_encoder
+    tests/test_supermovingblocks_encoder.c)
