@@ -1,8 +1,20 @@
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_motion.h"
 
+/*
+ * Format 19 scans 4x4 blocks left-to-right, top-to-bottom. Each block starts
+ * with a two-bit opcode:
+ *
+ *   00 stationary 4x4          01 data 4x4
+ *   10 motion/spatial 4x4      11 split into four 2x2 blocks
+ *
+ * Bits within fields are emitted least-significant first. Data blocks carry
+ * one signed five-bit U/V pair for the whole block and Huffman-coded six-bit
+ * luma residuals. Copy blocks do not alter the luma predictor.
+ */
 #define HUFF(bits_, count_) { UINT16_C(bits_), UINT8_C(count_) }
 
+/* Indexed by the residual's six-bit modulo representation, 0..63. */
 static const MbHuffmanCode luma_codes[64] = {
     HUFF(0x002, 2), HUFF(0x007, 3), HUFF(0x00d, 4), HUFF(0x019, 5),
     HUFF(0x01c, 5), HUFF(0x018, 5), HUFF(0x031, 6), HUFF(0x034, 6),
@@ -60,6 +72,7 @@ static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
         }
         return REPLAY_MALFORMED_STREAM;
     }
+    /* Header layout is opcode:2, U:5, V:5 in stream-bit order. */
     *u = (uint8_t)((header >> 2U) & UINT32_C(31));
     *v = (uint8_t)((header >> 7U) & UINT32_C(31));
     return REPLAY_OK;
@@ -97,6 +110,7 @@ static ReplayStatus read_residual(ReplayBitReader *reader, uint8_t *residual,
 
 static uint8_t add6(unsigned prediction, uint8_t residual)
 {
+    /* Residuals are modulo 64, so symbols 32..63 represent negative deltas. */
     return (uint8_t)((prediction + residual) & 63U);
 }
 
@@ -152,6 +166,7 @@ ReplayStatus codec_supermovingblocks_write_data2x2(
 
 static int signed_chroma(uint8_t value)
 {
+    /* Five-bit chroma is stored as two's-complement modulo 32. */
     return value < 16U ? (int)value : (int)value - 32;
 }
 
@@ -170,6 +185,7 @@ static uint8_t average_chroma4x4(const MbFrame *source, unsigned x,
             sum += signed_chroma(use_v != 0 ? pixel->v : pixel->u);
         }
     }
+    /* Match the source assembler's arithmetic shift, including negatives. */
     if (sum < 0) {
         sum = -((-sum + 15) / 16);
     } else {
@@ -220,6 +236,13 @@ static ReplayStatus make_data4x4(const MbFrame *source, unsigned x,
             if (pixel->y > 63U || pixel->u > 31U || pixel->v > 31U) {
                 return REPLAY_INVALID_ARGUMENT;
             }
+            /*
+             * Predictor topology from the Acorn compressor:
+             * - first pixel: previous data block's average luma;
+             * - remaining top row: pixel immediately to the left;
+             * - first pixel of later rows: pixel immediately above;
+             * - interior: floor((left + above) / 2).
+             */
             if (row == 0U) {
                 prediction = column == 0U
                                  ? predictor->luma
@@ -241,6 +264,7 @@ static ReplayStatus make_data4x4(const MbFrame *source, unsigned x,
             sum += pixel->y;
         }
     }
+    /* Only a data block advances this cross-block predictor. */
     predictor->luma = (uint8_t)(sum >> 4U);
     return REPLAY_OK;
 }
@@ -260,6 +284,7 @@ static ReplayStatus make_data2x2(const MbFrame *source, unsigned x,
         bottom_left->y > 63U || bottom_right->y > 63U) {
         return REPLAY_INVALID_ARGUMENT;
     }
+    /* 2x2 uses the same topology reduced to four pixels. */
     residuals[0] = (uint8_t)((top_left->y - predictor->luma) & 63U);
     residuals[1] = (uint8_t)((top_right->y - top_left->y) & 63U);
     residuals[2] = (uint8_t)((bottom_left->y - top_left->y) & 63U);
@@ -276,6 +301,12 @@ static void reconstruct_data4x4(const MbFrame *source, MbFrame *reconstructed,
 {
     unsigned row;
 
+    /*
+     * Luma data is lossless at its six-bit working precision. Chroma is not:
+     * the decoder expands the one U/V pair from the block header to all 16
+     * pixels. This reconstructed form, not the unaveraged source, is the
+     * reference for future inter-frame decisions.
+     */
     for (row = 0; row < 4U; ++row) {
         unsigned column;
         for (column = 0; column < 4U; ++column) {
@@ -320,6 +351,12 @@ static ReplayStatus append_candidate(ReplayBitWriter *writer,
 {
     ReplayBitReader reader;
 
+    /*
+     * Candidate buffers are flushed to whole bytes for simple ownership, but
+     * only `bits` meaningful bits belong to the stream. Re-reading that exact
+     * count prevents a candidate's temporary zero padding becoming an
+     * accidental gap before the next block.
+     */
     replay_bitreader_init(&reader, buffer->data, buffer->size);
     while (bits != 0U) {
         unsigned count = bits > 32U ? 32U : (unsigned)bits;
@@ -349,6 +386,7 @@ static ReplayStatus build_data4x4_candidate(
     uint8_t v = average_chroma4x4(source, x, y, 1);
     ReplayStatus status;
 
+    /* Work from a predictor copy: considering a candidate must have no side effects. */
     replay_buffer_clear(buffer);
     replay_bitwriter_init(&writer, buffer);
     *final_predictor = *initial_predictor;
@@ -370,6 +408,7 @@ static ReplayStatus build_split_data_candidate(
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
     MbPredictor *final_predictor, unsigned *stationary_mask, size_t *bits)
 {
+    /* Decoder order inside a split block is TL, TR, BL, BR. */
     static const unsigned offsets[4][2] = {
         { 0U, 0U }, { 2U, 0U }, { 0U, 2U }, { 2U, 2U }
     };
@@ -391,6 +430,11 @@ static ReplayStatus build_split_data_candidate(
         unsigned row;
         int stationary = allow_stationary;
 
+        /*
+         * Compare against the 2x2 data reconstruction: exact luma plus one
+         * averaged U/V pair. Comparing raw source chroma would reject a block
+         * that decodes identically to the previous reconstruction.
+         */
         for (row = 0U; stationary && row < 2U; ++row) {
             unsigned column;
             for (column = 0U; column < 2U; ++column) {
@@ -434,6 +478,7 @@ static int block_matches_data_reconstruction(const MbFrame *source,
 {
     unsigned row;
 
+    /* `u` and `v` are the block averages a data block would actually decode. */
     for (row = 0; row < 4U; ++row) {
         unsigned column;
         for (column = 0; column < 4U; ++column) {
@@ -491,6 +536,7 @@ static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
 {
     unsigned index;
 
+    /* Enumeration order makes the first exact match the shortest code. */
     for (index = 0U; index < 288U; ++index) {
         if (mb_motion_format19_temporal_at(index, motion) != REPLAY_OK) {
             return 0;
@@ -531,6 +577,7 @@ static int spatial_block_matches(const MbFrame *source,
     int source_y = (int)y + motion->dy;
     unsigned row;
 
+    /* Legal table entries can still be out of bounds near frame edges. */
     if (source_x < 0 || source_y < 0 ||
         source_x + 4 > (int)reconstructed->width ||
         source_y + 4 > (int)reconstructed->height) {
@@ -582,6 +629,7 @@ static void copy_spatial4x4(MbFrame *reconstructed, unsigned x, unsigned y,
     unsigned source_x = (unsigned)((int)x + motion->dx);
     unsigned source_y = (unsigned)((int)y + motion->dy);
 
+    /* Legal spatial vectors point backward, so source pixels are final already. */
     for (row = 0; row < 4U; ++row) {
         unsigned column;
         for (column = 0; column < 4U; ++column) {
@@ -671,6 +719,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     }
 
     replay_bitwriter_init(&writer, output);
+    /* Reused scratch buffers avoid allocating twice for every data decision. */
     replay_buffer_init(&data_candidate);
     replay_buffer_init(&split_candidate);
     for (y = 0; y < source->height; y += 4U) {
@@ -681,6 +730,11 @@ ReplayStatus codec_supermovingblocks_encode_frame(
             MbMotionVector motion;
             ReplayStatus status;
 
+            /*
+             * Cheap exact copy modes are tried before constructing data
+             * candidates. This is deterministic policy, not yet a lossy
+             * rate/distortion search.
+             */
             if (allow_stationary && block_matches_data_reconstruction(
                                         source, previous, x, y, u, v)) {
                 status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
@@ -719,6 +773,11 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                 size_t split_bits = SIZE_MAX;
                 unsigned stationary_mask = 0U;
 
+                /*
+                 * Encode both representations to scratch bitstreams. Huffman
+                 * lengths and split/header overhead make formula-based guesses
+                 * unnecessarily fragile. A tie stays 4x4 for simpler output.
+                 */
                 status = build_data4x4_candidate(
                     source, x, y, &predictor, &data_candidate,
                     &data_predictor, &data_bits);
@@ -737,6 +796,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
 
                     status = append_candidate(
                         &writer, &split_candidate, split_bits);
+                    /* Commit both the selected bits and their resulting state. */
                     predictor = split_predictor;
                     for (block = 0U; status == REPLAY_OK && block < 4U;
                          ++block) {
@@ -791,6 +851,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
             }
         }
     }
+    /* Report semantic bits; the final payload may contain zero pad bits. */
     local_stats.bits_written = replay_bitwriter_position(&writer);
     {
         ReplayStatus status = replay_bitwriter_flush_zero(&writer);
@@ -848,6 +909,7 @@ ReplayStatus codec_supermovingblocks_decode_data4x4(
         return status;
     }
 
+    /* Decode in the same raster order used to form predictor residuals. */
     for (row = 0; row < 4U; ++row) {
         for (column = 0; column < 4U; ++column) {
             uint8_t residual;
@@ -988,6 +1050,8 @@ static ReplayStatus copy_motion(ReplayBitReader *reader,
                          "invalid or truncated motion code");
         return status;
     }
+    /* Spatial copies read completed current-frame pixels; temporal copies read
+       the immutable previous reconstruction. */
     source = motion.spatial ? decoded : previous;
     if (source == NULL || source->pixels == NULL) {
         set_verify_error(error, reader, x, y,
@@ -1025,6 +1089,11 @@ static ReplayStatus verify_2x2(ReplayBitReader *reader,
                                const MbFrame *previous, MbFrame *decoded,
                                unsigned x, unsigned y, MbVerifyError *error)
 {
+    /*
+     * 2x2 opcodes are prefix-shaped rather than a uniform two-bit enum:
+     * `1` is motion, `00` is stationary, and `01` begins a 12-bit data header.
+     * Save the reader so the data decoder can consume that header from bit 0.
+     */
     ReplayBitReader start = *reader;
     uint32_t first;
     ReplayStatus status = replay_bitreader_read(reader, 1U, &first);
@@ -1084,6 +1153,8 @@ ReplayStatus codec_supermovingblocks_verify_frame(
     }
     replay_bitreader_init(&reader, payload, payload_size);
 
+    /* The scan order is normative because spatial copies and the predictor
+       both depend on all earlier decisions having been reconstructed. */
     for (y = 0; y < decoded->height; y += 4U) {
         unsigned x;
         for (x = 0; x < decoded->width; x += 4U) {
@@ -1116,6 +1187,8 @@ ReplayStatus codec_supermovingblocks_verify_frame(
                                      previous, decoded, x, y, error);
                 break;
             case 3U:
+                /* Split sub-block order is top-left, top-right, bottom-left,
+                   bottom-right, matching the original decompressor. */
                 status = verify_2x2(&reader, &predictor, previous, decoded,
                                     x, y, error);
                 if (status == REPLAY_OK) {
@@ -1147,6 +1220,7 @@ ReplayStatus codec_supermovingblocks_verify_frame(
         size_t used_bits = replay_bitreader_position(&reader);
         size_t used_bytes = (used_bits + 7U) / 8U;
 
+        /* Strict framing catches wrong dimensions and accidental concatenation. */
         if (used_bytes != payload_size) {
             set_verify_error(error, &reader, decoded->width - 4U,
                              decoded->height - 4U,

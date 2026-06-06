@@ -9,8 +9,10 @@ typedef enum {
 } MbMotionBlockSize;
 
 typedef struct {
+    /* Offset is relative to the destination block's top-left pixel. */
     int dx;
     int dy;
+    /* Zero selects the previous frame; non-zero selects the current frame. */
     int spatial;
 } MbMotionVector;
 
@@ -28,6 +30,7 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
 ReplayStatus mb_motion_format19_temporal_at(unsigned index,
                                             MbMotionVector *motion);
 
+/* Enumerate the eight source-defined spatial vectors in bitstream order. */
 ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
                                            unsigned index,
                                            MbMotionVector *motion);

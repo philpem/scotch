@@ -2,6 +2,12 @@
 
 #include <limits.h>
 
+/*
+ * Replay writes fields least-significant bit first. The accumulator therefore
+ * keeps the next stream bit at bit zero; complete low bytes can be emitted or
+ * consumed without reversing individual fields.
+ */
+
 void replay_bitwriter_init(ReplayBitWriter *writer, ReplayBuffer *buffer)
 {
     if (writer == NULL) {
@@ -29,6 +35,7 @@ ReplayStatus replay_bitwriter_write(ReplayBitWriter *writer, uint32_t value,
         return REPLAY_INVALID_ARGUMENT;
     }
 
+    /* Ignore high caller bits rather than allowing them into the next field. */
     masked = value;
     if (count < 32U) {
         masked &= (UINT64_C(1) << count) - UINT64_C(1);
@@ -59,6 +66,7 @@ ReplayStatus replay_bitwriter_flush_zero(ReplayBitWriter *writer)
     if (writer->bit_count == 0U) {
         return REPLAY_OK;
     }
+    /* Unused high bits in the final byte are required to be zero. */
     status = replay_buffer_append_u8(writer->buffer,
                                      (uint8_t)writer->accumulator);
     if (status != REPLAY_OK) {
@@ -102,6 +110,7 @@ ReplayStatus replay_bitreader_read(ReplayBitReader *reader, unsigned count,
         return REPLAY_OK;
     }
 
+    /* Refill above existing bits because the low bits are consumed first. */
     while (reader->bit_count < count) {
         if (reader->byte_pos >= reader->size) {
             return REPLAY_TRUNCATED_INPUT;
@@ -124,4 +133,3 @@ size_t replay_bitreader_position(const ReplayBitReader *reader)
 {
     return reader == NULL ? 0U : reader->total_bits;
 }
-

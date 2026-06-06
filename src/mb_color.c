@@ -2,7 +2,12 @@
 
 #include <stdint.h>
 
-/* Rounded 16.16 forms of the constants assembled by CompLib. */
+/*
+ * Rounded 16.16 forms of the constants assembled by CompLib. They implement
+ * its non-dithered RGB conversion, not a generic full-range YUV transform.
+ * Emulator fixtures still need to confirm the original assembler's exact
+ * real-to-integer rounding at coefficient boundaries.
+ */
 #define MB_Y_R 19595
 #define MB_Y_G 38470
 #define MB_Y_B 7471
@@ -15,6 +20,7 @@ static int floor_div_pow2(int value, unsigned shift)
 {
     int divisor = 1 << shift;
 
+    /* C division truncates toward zero; ARM ASR rounds negatives downward. */
     if (value >= 0) {
         return value / divisor;
     }
@@ -25,6 +31,7 @@ static uint8_t quantise_chroma(int value)
 {
     int scaled = value * 31;
 
+    /* Reproduce CompLib's sign-dependent half-step before its arithmetic ASR. */
     scaled += scaled >= 0 ? 128 : -128;
     return (uint8_t)(floor_div_pow2(scaled, 8U) & 31);
 }
@@ -72,6 +79,7 @@ ReplayStatus mb_color_rgb24_to_6y5uv(const uint8_t *rgb, size_t rgb_stride,
             int green = source[x * 3U + 1U];
             int blue = source[x * 3U + 2U];
             int fixed_y = red * MB_Y_R + green * MB_Y_G + blue * MB_Y_B;
+            /* CompLib derives U from B-Y and V from R-Y using scaled partial Y. */
             int u_base = (red * MB_U_R + green * MB_U_G) >> 16U;
             int v_base = (green * MB_V_G + blue * MB_V_B) >> 16U;
             int u = floor_div_pow2(blue - u_base, 1U);
@@ -111,6 +119,7 @@ ReplayStatus mb_color_6y5uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
             if (pixel->y > 63U || pixel->u > 31U || pixel->v > 31U) {
                 return REPLAY_INVALID_ARGUMENT;
             }
+            /* This inverse is for previews; 6Y5UV quantisation is irreversible. */
             luma = divide_nearest((int)pixel->y * 255, 63);
             u = divide_nearest(signed_chroma(pixel->u) * 256, 31);
             v = divide_nearest(signed_chroma(pixel->v) * 256, 31);

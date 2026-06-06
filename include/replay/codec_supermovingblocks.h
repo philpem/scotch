@@ -6,6 +6,16 @@
 
 extern const MbHuffmanTable codec_supermovingblocks_luma_huffman;
 
+/*
+ * These switches enable lossless alternatives to a 4x4 data block. A mode is
+ * used only when it reconstructs exactly the same quantised pixels as the
+ * corresponding data representation. Threshold-based lossy matching will be
+ * a separate policy layer.
+ *
+ * Stationary and temporal modes require `previous`. Spatial mode only refers
+ * to pixels already reconstructed in the current frame, so it is also legal
+ * in a key frame. Split currently considers 2x2 data and stationary modes.
+ */
 typedef struct {
     int allow_stationary;
     int allow_temporal;
@@ -13,6 +23,7 @@ typedef struct {
     int allow_split;
 } CodecSuperMovingBlocksEncodeOptions;
 
+/* Counts describe the selected stream, not the candidates considered. */
 typedef struct {
     size_t data4x4_blocks;
     size_t stationary4x4_blocks;
@@ -49,7 +60,14 @@ ReplayStatus codec_supermovingblocks_encode_data_frame(
     const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
     size_t *bits_written);
 
-/* Encode one frame using the enabled lossless block decisions. */
+/*
+ * Encode one frame using the enabled lossless block decisions.
+ *
+ * `source` contains quantised 6Y5UV samples. `reconstructed` is filled with
+ * exactly what a format-19 decoder will retain and must therefore be supplied
+ * as `previous` for the next inter frame. `output` is cleared even when source
+ * validation fails, preserving replacement semantics.
+ */
 ReplayStatus codec_supermovingblocks_encode_frame(
     const MbFrame *source, const MbFrame *previous,
     const CodecSuperMovingBlocksEncodeOptions *options, ReplayBuffer *output,

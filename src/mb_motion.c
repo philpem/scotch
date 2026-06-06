@@ -2,6 +2,11 @@
 
 #include <stddef.h>
 
+/*
+ * Spatial references must point wholly into pixels earlier in raster order.
+ * The legal offsets differ for 4x4 and 2x2 blocks; these tables are part of
+ * the format rather than an encoder search policy.
+ */
 static const MbMotionVector spatial_4x4[8] = {
     { -2, -4, 1 }, { -1, -4, 1 }, { 0, -4, 1 }, { 1, -4, 1 },
     { 2, -4, 1 },  { -4, 0, 1 },  { -4, -1, 1 }, { -4, -2, 1 }
@@ -17,6 +22,7 @@ static MbMotionVector ring_vector(unsigned radius, unsigned index)
     MbMotionVector result = { 0, 0, 0 };
     unsigned side = radius * 2U + 1U;
 
+    /* Table order is top edge, alternating left/right edges, then bottom. */
     if (index < side) {
         result.dx = (int)index - (int)radius;
         result.dy = -(int)radius;
@@ -41,6 +47,7 @@ static ReplayStatus far_vector(unsigned index, MbMotionVector *motion)
     for (dy = -8; dy <= 8; ++dy) {
         int dx;
         for (dx = -8; dx <= 8; ++dx) {
+            /* Radii 1-3 have shorter families and are omitted from `far`. */
             if (dx >= -3 && dx <= 3 && dy >= -3 && dy <= 3) {
                 continue;
             }
@@ -62,6 +69,7 @@ ReplayStatus mb_motion_format19_temporal_at(unsigned index,
     if (motion == NULL) {
         return REPLAY_INVALID_ARGUMENT;
     }
+    /* Increasing index also means non-decreasing encoded bit length. */
     if (index < 8U) {
         *motion = ring_vector(1U, index);
         return REPLAY_OK;
@@ -122,6 +130,10 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
          block_size != MB_MOTION_BLOCK_4X4)) {
         return REPLAY_INVALID_ARGUMENT;
     }
+    /*
+     * Family 1 shares its five-bit index space: 0..7 are spatial and 8..31
+     * are the radius-three temporal ring. The other families are temporal.
+     */
     if (motion->spatial != 0) {
         const MbMotionVector *table = block_size == MB_MOTION_BLOCK_4X4
                                           ? spatial_4x4
@@ -181,18 +193,21 @@ ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
 
     switch (family) {
     case 0U:
+        /* Radius one: 2 family bits + 3 index bits. */
         status = replay_bitreader_read(reader, 3U, &index);
         if (status == REPLAY_OK) {
             *motion = ring_vector(1U, index);
         }
         return status;
     case 2U:
+        /* Radius two: 2 family bits + 4 index bits. */
         status = replay_bitreader_read(reader, 4U, &index);
         if (status == REPLAY_OK) {
             *motion = ring_vector(2U, index);
         }
         return status;
     case 1U:
+        /* Spatial index 0..7, otherwise radius-three index 0..23. */
         status = replay_bitreader_read(reader, 5U, &index);
         if (status != REPLAY_OK) {
             return status;
@@ -206,6 +221,7 @@ ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
         }
         return REPLAY_OK;
     case 3U:
+        /* Remaining vectors in the [-8,+8] square. */
         status = replay_bitreader_read(reader, 8U, &index);
         return status == REPLAY_OK ? far_vector(index, motion) : status;
     default:
