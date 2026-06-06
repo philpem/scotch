@@ -33,6 +33,10 @@ as type 19, Super Moving Blocks at fixed quality level 7 with dithering
 disabled. Exact settings and preservation requirements are in
 [acorn-comparison-workflow.md](acorn-comparison-workflow.md).
 
+That sample has now been received as `LionFish19,ae7` (3,554,760 bytes,
+SHA-256 `e4a6539b19a105e80e3171a4753870b184edafded0ee874bf2f470231b661684`).
+Container parsing and payload extraction remain to be implemented.
+
 Any imported fixture should record:
 
 - source path or generation command;

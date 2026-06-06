@@ -34,6 +34,29 @@ the exact command line. BatchComp may create intermediate files as part of the
 Replay build process; preserve the destination directory rather than only the
 final file.
 
+## Received Sample
+
+The recompressed movie is present as:
+
+```text
+../LionFish19,ae7
+```
+
+Recorded properties:
+
+```text
+size     3,554,760 bytes
+SHA-256  e4a6539b19a105e80e3171a4753870b184edafded0ee874bf2f470231b661684
+file     Acorn Replay ARMovie
+```
+
+The next ingestion step is to parse its container metadata and extract type
+19, Super Moving Blocks frame payloads, key-frame state, and source timing.
+
+The Acorn compressor's two-pane display and coloured debug block map are
+documented in the project-level note
+`notes/super-moving-blocks-compressor-display.md`.
+
 ## Portable Comparison
 
 Encode the same decoded RGB24 frame sequence with fixed loss level 7:

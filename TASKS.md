@@ -41,6 +41,9 @@
 - [ ] Build a small corpus of original type 19, Super Moving Blocks Replay
   payloads, preserving
   provenance and expected dimensions.
+- [x] Receive and checksum the Acorn-compressed `LionFish19,ae7` type 19,
+  Super Moving Blocks comparison movie.
+- [ ] Parse `LionFish19,ae7` and extract its frame payloads and metadata.
 - [x] Define packed `6Y5UV` corpus I/O, manifest conventions, and a comparison
   runner with previous-frame support.
 - [ ] Decode an original-compressor corpus with the portable verifier and
