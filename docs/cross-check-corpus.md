@@ -14,10 +14,12 @@ not provide an independent format-19 corpus.
 
 ## Current Format-19 Coverage
 
-The bundled compiled decoder is now exercised under Unicorn for a C-encoded
-data frame and a following stationary frame. This proves those payloads decode
-identically in the portable verifier and Acorn implementation. It does not
-prove that the C encoder chooses the same modes as Acorn's compressor.
+The bundled compiled decoder is now exercised under Unicorn for focused
+stationary, temporal, spatial, split, and lossy C-encoded payloads. This proves
+those payloads decode identically in the portable verifier and Acorn
+implementation. It does not prove that the C encoder chooses the same modes as
+Acorn's compressor; that is a documented comparison target rather than a
+compatibility requirement.
 
 The independent encoder-policy corpus still needs one or more of:
 

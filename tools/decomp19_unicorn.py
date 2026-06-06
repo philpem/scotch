@@ -24,6 +24,7 @@ try:
         UC_ARM_REG_R2,
         UC_ARM_REG_R3,
         UC_ARM_REG_R4,
+        UC_ARM_REG_R5,
         UC_ARM_REG_R6,
         UC_ARM_REG_R7,
         UC_ARM_REG_R8,
@@ -86,37 +87,56 @@ def map_and_write(machine: Uc, address: int, data: bytes,
 
 
 def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes) -> None:
-    """Emulate pre-ARMv6 alignment for Decomp19's two bitstream LDMs.
+    """Emulate pre-ARMv6 alignment for Decomp19's bitstream LDMs.
 
     Unicorn performs these LDMIA instructions from the literal unaligned byte
-    address. Acorn ARM cores ignored the low address bits; the following ARM
-    shifts then selected the requested bit position within the aligned words.
+    address. Acorn ARM cores ignored the low address bits; the surrounding ARM
+    shifts then selected the requested bit position within aligned words.
     """
     lookaheads = {
-        bytes.fromhex("400196e8"): UC_ARM_REG_R8,  # LDMIA r6,{r6,r8}
-        bytes.fromhex("c00096e8"): UC_ARM_REG_R7,  # LDMIA r6,{r6,r7}
+        # Four block/sub-block headers use LDMIA r7,{r5,r6}.
+        bytes.fromhex("600097e8"): (4, UC_ARM_REG_R7,
+                                    UC_ARM_REG_R5, UC_ARM_REG_R6),
+        # The two Huffman paths use r6 as both base and first destination.
+        bytes.fromhex("400196e8"): (1, UC_ARM_REG_R6,
+                                    UC_ARM_REG_R6, UC_ARM_REG_R8),
+        bytes.fromhex("c00096e8"): (1, UC_ARM_REG_R6,
+                                    UC_ARM_REG_R6, UC_ARM_REG_R7),
     }
-    for instruction, second_register in lookaheads.items():
-        offset = decompressor.find(instruction)
-        if offset < 0:
-            raise ValueError("Decomp19 Huffman lookahead instruction not found")
-        if decompressor.find(instruction, offset + 1) >= 0:
-            raise ValueError("Decomp19 Huffman lookahead signature is ambiguous")
-        address = CODE_BASE + offset
 
-        def emulate(machine: Uc, current: int, size: int, user_data: int) -> None:
-            source = machine.reg_read(UC_ARM_REG_R6)
-            if source & 3:
-                first, second = struct.unpack(
-                    "<II", bytes(machine.mem_read(source & ~3, 8))
-                )
-                machine.reg_write(UC_ARM_REG_R6, first)
-                machine.reg_write(user_data, second)
-                machine.reg_write(UC_ARM_REG_R15, current + size)
+    def emulate(machine: Uc, current: int, size: int,
+                registers: tuple[int, int, int]) -> None:
+        base_register, first_register, second_register = registers
+        source = machine.reg_read(base_register)
+        if source & 3:
+            first, second = struct.unpack(
+                "<II", bytes(machine.mem_read(source & ~3, 8))
+            )
+            machine.reg_write(first_register, first)
+            machine.reg_write(second_register, second)
+            machine.reg_write(UC_ARM_REG_R15, current + size)
 
-        machine.hook_add(
-            UC_HOOK_CODE, emulate, second_register, address, address
+    for instruction, description in lookaheads.items():
+        expected_count, base_register, first_register, second_register = (
+            description
         )
+        offsets = []
+        offset = decompressor.find(instruction)
+        while offset >= 0:
+            offsets.append(offset)
+            offset = decompressor.find(instruction, offset + 1)
+        if len(offsets) != expected_count:
+            raise ValueError(
+                "unexpected Decomp19 bitstream lookahead signature count: "
+                f"found {len(offsets)}, expected {expected_count}"
+            )
+        for offset in offsets:
+            address = CODE_BASE + offset
+            machine.hook_add(
+                UC_HOOK_CODE, emulate,
+                (base_register, first_register, second_register),
+                address, address
+            )
 
 
 def run(args: argparse.Namespace) -> int:

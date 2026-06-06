@@ -45,12 +45,13 @@ bits 16..31  zero
 The harness converts those words to the corpus's packed byte triplets. Previous
 frames are converted in the opposite direction before execution.
 
-The Huffman reader uses two unaligned `LDMIA` lookahead loads. Classic Acorn ARM
-cores ignore the low two address bits for these multiple loads; Unicorn uses
-the literal unaligned address even when configured as its oldest available ARM
-models. The harness therefore intercepts those two source-derived instruction
-signatures and performs aligned loads before allowing execution to continue.
-Without this compatibility shim, the bit offset is effectively applied twice.
+The decoder uses unaligned `LDMIA` lookahead loads for four block/sub-block
+headers and two Huffman paths. Classic Acorn ARM cores ignore the low two
+address bits for these multiple loads; Unicorn uses the literal unaligned
+address even when configured as its oldest available ARM models. The harness
+therefore intercepts those source-derived instruction signatures and performs
+aligned loads before allowing execution to continue. Without this compatibility
+shim, a variable-length block can shift the following opcode or Huffman value.
 
 ## Use
 
@@ -73,6 +74,7 @@ in that case; a valid key-frame payload must not read it.
 
 The general register contract comes from `CodecIf`; pixel packing and the
 Decomp19 `r14` behavior are directly visible in `MakeDecomp,ffb.txt`.
-`test_decomp19_compiled` currently cross-checks a data-coded frame and a
-stationary frame byte-for-byte against the portable verifier. Temporal,
-spatial, split, and original-compressor payload fixtures remain to be added.
+`test_decomp19_compiled` cross-checks stationary, temporal, spatial, split, and
+lossy payloads byte-for-byte against the portable verifier. It covers 4x4
+temporal and spatial blocks plus temporal and spatial 2x2 blocks inside split
+blocks. Original-compressor payload fixtures remain to be added.

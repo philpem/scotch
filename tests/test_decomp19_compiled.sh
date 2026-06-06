@@ -1,34 +1,42 @@
 #!/bin/sh
 set -eu
 
-encoder=$1
+fixtures=$1
 verify=$2
 python=$3
 harness=$4
 decompressor=$5
 work=${TMPDIR:-/tmp}/decomp19-compiled-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-mkdir -p "$work/frames"
+mkdir -p "$work"
+"$fixtures" "$work"
 
-# Two identical frames exercise a data-coded key frame followed by stationary.
-: > "$work/input.rgb"
-i=0
-while [ "$i" -lt 32 ]; do
-    printf '\000\000\000' >> "$work/input.rgb"
-    i=$((i + 1))
-done
-"$encoder" --codec 19 --input "$work/input.rgb" --size 4x4 --frames 2 \
-    --payload-prefix "$work/frames/frame-" >/dev/null
+check_fixture()
+{
+    stem=$1
+    size=$2
+    previous=$3
 
-"$python" "$harness" --decompressor "$decompressor" \
-    --payload "$work/frames/frame-000000.mb19" --size 4x4 \
-    --output "$work/acorn-0.6y5uv"
-"$verify" --codec 19 --payload "$work/frames/frame-000000.mb19" --size 4x4 \
-    --expect-6y5uv "$work/acorn-0.6y5uv"
+    if [ -n "$previous" ]; then
+        "$python" "$harness" --decompressor "$decompressor" \
+            --payload "$work/$stem.mb19" --size "$size" \
+            --previous "$work/$previous" \
+            --output "$work/$stem.acorn.6y5uv"
+        "$verify" --codec 19 --payload "$work/$stem.mb19" --size "$size" \
+            --previous-6y5uv "$work/$previous" \
+            --expect-6y5uv "$work/$stem.acorn.6y5uv"
+    else
+        "$python" "$harness" --decompressor "$decompressor" \
+            --payload "$work/$stem.mb19" --size "$size" \
+            --output "$work/$stem.acorn.6y5uv"
+        "$verify" --codec 19 --payload "$work/$stem.mb19" --size "$size" \
+            --expect-6y5uv "$work/$stem.acorn.6y5uv"
+    fi
+    cmp "$work/$stem.expected.6y5uv" "$work/$stem.acorn.6y5uv"
+}
 
-"$python" "$harness" --decompressor "$decompressor" \
-    --payload "$work/frames/frame-000001.mb19" --size 4x4 \
-    --previous "$work/acorn-0.6y5uv" --output "$work/acorn-1.6y5uv"
-"$verify" --codec 19 --payload "$work/frames/frame-000001.mb19" --size 4x4 \
-    --previous-6y5uv "$work/acorn-0.6y5uv" \
-    --expect-6y5uv "$work/acorn-1.6y5uv"
+check_fixture temporal4x4 8x4 temporal4x4.previous.6y5uv
+check_fixture spatial4x4 8x4 ""
+check_fixture temporal2x2 8x4 temporal2x2.previous.6y5uv
+check_fixture spatial2x2 8x4 ""
+check_fixture lossy-split 4x4 lossy-split.previous.6y5uv

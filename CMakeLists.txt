@@ -85,6 +85,14 @@ add_replay_test(test_supermovingblocks_split
 add_replay_test(test_supermovingblocks_split_motion
     tests/test_supermovingblocks_split_motion.c)
 
+add_executable(make_decomp19_crosscheck_fixtures
+    tests/make_decomp19_crosscheck_fixtures.c)
+target_link_libraries(make_decomp19_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_decomp19_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
@@ -104,7 +112,8 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME test_decomp19_compiled
             COMMAND sh
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp19_compiled.sh
-                $<TARGET_FILE:replay-encode> $<TARGET_FILE:replay-verify>
+                $<TARGET_FILE:make_decomp19_crosscheck_fixtures>
+                $<TARGET_FILE:replay-verify>
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP19_COMPILED})

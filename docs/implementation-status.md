@@ -29,7 +29,8 @@ this file describes the current portable code in `replay-tooling`.
 - Every encoder attempt is decoded independently and compared with the
   encoder's reconstructed frame before output is accepted.
 - Acorn's compiled `Decompress,ffd` and the portable verifier produce identical
-  `6Y5UV` for a C-generated data frame and following stationary frame.
+  `6Y5UV` for focused stationary, temporal, spatial, split, and lossy fixtures,
+  including both 4x4 and motion-coded 2x2 paths.
 - Normal and ASan/UBSan test suites cover the C implementation; Unicorn tests
   run when its Python bindings and the compiled decoder are available.
 
@@ -39,8 +40,9 @@ this file describes the current portable code in `replay-tooling`.
   in shared `mb_rate_control` code.
 - Top-level copy-mode priority is stationary, temporal, then spatial. Temporal
   and spatial searches retain the lowest accepted error, with table order as
-  the tie-break. This is compatible stream generation, not yet proven Acorn
-  encoder-decision parity.
+  the tie-break. This is compatible stream generation; Acorn decision parity
+  is not required, but its bitrate and quality effects must be measured and
+  documented.
 - A 4x4 data candidate wins a bit-cost tie with a split candidate.
 - Raw payload sequences are separate files; no undocumented temporary
   container is invented.
@@ -49,7 +51,6 @@ this file describes the current portable code in `replay-tooling`.
 
 - Original-compressor format-19 payloads and decoded outputs are not yet in the
   corpus. Current ARM checks validate our streams against Acorn's decoder.
-- ARM cross-checks still need focused temporal, spatial, and split payloads.
 - CompLib RGB conversion constants are source-derived but not yet compared
   byte-for-byte with an ARM conversion fixture.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;

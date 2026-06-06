@@ -11,7 +11,8 @@ cross-checks against Acorn's compiled ARM decompressor.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for the
 implemented surface, verified claims, and known differences from the original
-compressor.
+compressor. [docs/encoder-policy-comparison.md](docs/encoder-policy-comparison.md)
+explains how decision-policy differences can affect bitrate and quality.
 
 ## Build
 

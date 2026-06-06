@@ -46,15 +46,21 @@
 - [x] Create a Unicorn harness for the generated Decomp19 entry point and
   document its register and pixel-packing contract.
 - [x] Run the compiled Decomp19 binary under Unicorn and capture raw decoded
-  pixels for data and stationary frames.
+  pixels for all currently emitted block-mode families.
 - [x] Compare portable and Acorn output byte-for-byte for those fixtures.
 - [x] Keep the compiled decoder's classic unaligned-`LDMIA` behavior as a named
   and documented harness regression.
+- [x] Cross-check temporal, spatial, split, and lossy payloads, including
+  temporal and spatial 2x2 modes.
+- [ ] Compare portable and original-compressor decisions and quantify bitrate
+  and decoder-visible quality differences; exact decision parity is not a goal.
 
 ## Milestone 5: Data-Only Encoder
 
-- [x] Implement the non-dithered CompLib RGB24 to `6Y5UV` conversion and
-  focused tests; confirm coefficient rounding against an Acorn reference.
+- [x] Implement the source-derived non-dithered CompLib RGB24 to `6Y5UV`
+  conversion and focused tests.
+- [ ] Confirm coefficient rounding against an Acorn-generated RGB conversion
+  fixture.
 - [x] Read one exact-sized raw RGB24 frame from a file or stdin.
 - [x] Encode complete frames using only 4x4 data-coded blocks.
 - [x] Decode every emitted frame and compare it with encoder reconstruction.
