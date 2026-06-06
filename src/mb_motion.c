@@ -80,6 +80,21 @@ ReplayStatus mb_motion_format19_temporal_at(unsigned index,
     return REPLAY_INVALID_ARGUMENT;
 }
 
+ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
+                                           unsigned index,
+                                           MbMotionVector *motion)
+{
+    if (motion == NULL || index >= 8U ||
+        (block_size != MB_MOTION_BLOCK_2X2 &&
+         block_size != MB_MOTION_BLOCK_4X4)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    *motion = block_size == MB_MOTION_BLOCK_4X4
+                  ? spatial_4x4[index]
+                  : spatial_2x2[index];
+    return REPLAY_OK;
+}
+
 static int same_vector(const MbMotionVector *left, const MbMotionVector *right)
 {
     return left->dx == right->dx && left->dy == right->dy &&

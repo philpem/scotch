@@ -178,6 +178,29 @@ static uint8_t average_chroma4x4(const MbFrame *source, unsigned x,
     return (uint8_t)(sum & 31);
 }
 
+static uint8_t average_chroma2x2(const MbFrame *source, unsigned x,
+                                 unsigned y, int use_v)
+{
+    int sum = 0;
+    unsigned row;
+
+    for (row = 0; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0; column < 2U; ++column) {
+            const MbPixel *pixel =
+                &source->pixels[(size_t)(y + row) * source->stride +
+                                x + column];
+            sum += signed_chroma(use_v != 0 ? pixel->v : pixel->u);
+        }
+    }
+    if (sum < 0) {
+        sum = -((-sum + 3) / 4);
+    } else {
+        sum /= 4;
+    }
+    return (uint8_t)(sum & 31);
+}
+
 static ReplayStatus make_data4x4(const MbFrame *source, unsigned x,
                                  unsigned y, MbPredictor *predictor,
                                  uint8_t residuals[16])
@@ -222,6 +245,32 @@ static ReplayStatus make_data4x4(const MbFrame *source, unsigned x,
     return REPLAY_OK;
 }
 
+static ReplayStatus make_data2x2(const MbFrame *source, unsigned x,
+                                 unsigned y, MbPredictor *predictor,
+                                 uint8_t residuals[4])
+{
+    const MbPixel *top_left =
+        &source->pixels[(size_t)y * source->stride + x];
+    const MbPixel *top_right = top_left + 1U;
+    const MbPixel *bottom_left = top_left + source->stride;
+    const MbPixel *bottom_right = bottom_left + 1U;
+    unsigned prediction;
+
+    if (top_left->y > 63U || top_right->y > 63U ||
+        bottom_left->y > 63U || bottom_right->y > 63U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    residuals[0] = (uint8_t)((top_left->y - predictor->luma) & 63U);
+    residuals[1] = (uint8_t)((top_right->y - top_left->y) & 63U);
+    residuals[2] = (uint8_t)((bottom_left->y - top_left->y) & 63U);
+    prediction = ((unsigned)top_right->y + bottom_left->y) >> 1U;
+    residuals[3] = (uint8_t)((bottom_right->y - prediction) & 63U);
+    predictor->luma =
+        (uint8_t)(((unsigned)top_left->y + top_right->y + bottom_left->y +
+                   bottom_right->y) >> 2U);
+    return REPLAY_OK;
+}
+
 static void reconstruct_data4x4(const MbFrame *source, MbFrame *reconstructed,
                                 unsigned x, unsigned y, uint8_t u, uint8_t v)
 {
@@ -242,6 +291,140 @@ static void reconstruct_data4x4(const MbFrame *source, MbFrame *reconstructed,
             destination->v = v;
         }
     }
+}
+
+static void reconstruct_data2x2(const MbFrame *source, MbFrame *reconstructed,
+                                unsigned x, unsigned y, uint8_t u, uint8_t v)
+{
+    unsigned row;
+
+    for (row = 0; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0; column < 2U; ++column) {
+            MbPixel *destination =
+                &reconstructed->pixels[(size_t)(y + row) *
+                                           reconstructed->stride +
+                                       x + column];
+            const MbPixel *input =
+                &source->pixels[(size_t)(y + row) * source->stride +
+                                x + column];
+            destination->y = input->y;
+            destination->u = u;
+            destination->v = v;
+        }
+    }
+}
+
+static ReplayStatus append_candidate(ReplayBitWriter *writer,
+                                     const ReplayBuffer *buffer, size_t bits)
+{
+    ReplayBitReader reader;
+
+    replay_bitreader_init(&reader, buffer->data, buffer->size);
+    while (bits != 0U) {
+        unsigned count = bits > 32U ? 32U : (unsigned)bits;
+        uint32_t value;
+        ReplayStatus status = replay_bitreader_read(&reader, count, &value);
+
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        status = replay_bitwriter_write(writer, value, count);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        bits -= count;
+    }
+    return REPLAY_OK;
+}
+
+static ReplayStatus build_data4x4_candidate(
+    const MbFrame *source, unsigned x, unsigned y,
+    const MbPredictor *initial_predictor, ReplayBuffer *buffer,
+    MbPredictor *final_predictor, size_t *bits)
+{
+    ReplayBitWriter writer;
+    uint8_t residuals[16];
+    uint8_t u = average_chroma4x4(source, x, y, 0);
+    uint8_t v = average_chroma4x4(source, x, y, 1);
+    ReplayStatus status;
+
+    replay_buffer_clear(buffer);
+    replay_bitwriter_init(&writer, buffer);
+    *final_predictor = *initial_predictor;
+    status = make_data4x4(source, x, y, final_predictor, residuals);
+    if (status == REPLAY_OK) {
+        status = codec_supermovingblocks_write_data4x4(
+            &writer, u, v, residuals);
+    }
+    *bits = replay_bitwriter_position(&writer);
+    if (status == REPLAY_OK) {
+        status = replay_bitwriter_flush_zero(&writer);
+    }
+    return status;
+}
+
+static ReplayStatus build_split_data_candidate(
+    const MbFrame *source, unsigned x, unsigned y,
+    const MbFrame *previous, int allow_stationary,
+    const MbPredictor *initial_predictor, ReplayBuffer *buffer,
+    MbPredictor *final_predictor, unsigned *stationary_mask, size_t *bits)
+{
+    static const unsigned offsets[4][2] = {
+        { 0U, 0U }, { 2U, 0U }, { 0U, 2U }, { 2U, 2U }
+    };
+    ReplayBitWriter writer;
+    unsigned block;
+    ReplayStatus status;
+
+    replay_buffer_clear(buffer);
+    replay_bitwriter_init(&writer, buffer);
+    *final_predictor = *initial_predictor;
+    *stationary_mask = 0U;
+    status = replay_bitwriter_write(&writer, UINT32_C(3), 2U);
+    for (block = 0U; status == REPLAY_OK && block < 4U; ++block) {
+        unsigned block_x = x + offsets[block][0];
+        unsigned block_y = y + offsets[block][1];
+        uint8_t residuals[4];
+        uint8_t u = average_chroma2x2(source, block_x, block_y, 0);
+        uint8_t v = average_chroma2x2(source, block_x, block_y, 1);
+        unsigned row;
+        int stationary = allow_stationary;
+
+        for (row = 0U; stationary && row < 2U; ++row) {
+            unsigned column;
+            for (column = 0U; column < 2U; ++column) {
+                const MbPixel *target =
+                    &source->pixels[(size_t)(block_y + row) * source->stride +
+                                    block_x + column];
+                const MbPixel *reference =
+                    &previous->pixels[(size_t)(block_y + row) *
+                                          previous->stride +
+                                      block_x + column];
+                if (target->y != reference->y || u != reference->u ||
+                    v != reference->v) {
+                    stationary = 0;
+                    break;
+                }
+            }
+        }
+        if (stationary) {
+            status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
+            *stationary_mask |= 1U << block;
+        } else {
+            status = make_data2x2(
+                source, block_x, block_y, final_predictor, residuals);
+            if (status == REPLAY_OK) {
+                status = codec_supermovingblocks_write_data2x2(
+                    &writer, u, v, residuals);
+            }
+        }
+    }
+    *bits = replay_bitwriter_position(&writer);
+    if (status == REPLAY_OK) {
+        status = replay_bitwriter_flush_zero(&writer);
+    }
+    return status;
 }
 
 static int block_matches_data_reconstruction(const MbFrame *source,
@@ -339,6 +522,78 @@ static void copy_temporal4x4(const MbFrame *previous, MbFrame *reconstructed,
     }
 }
 
+static int spatial_block_matches(const MbFrame *source,
+                                 const MbFrame *reconstructed, unsigned x,
+                                 unsigned y, const MbMotionVector *motion,
+                                 uint8_t u, uint8_t v)
+{
+    int source_x = (int)x + motion->dx;
+    int source_y = (int)y + motion->dy;
+    unsigned row;
+
+    if (source_x < 0 || source_y < 0 ||
+        source_x + 4 > (int)reconstructed->width ||
+        source_y + 4 > (int)reconstructed->height) {
+        return 0;
+    }
+    for (row = 0; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0; column < 4U; ++column) {
+            const MbPixel *target =
+                &source->pixels[(size_t)(y + row) * source->stride +
+                                x + column];
+            const MbPixel *reference =
+                &reconstructed->pixels[((size_t)source_y + row) *
+                                           reconstructed->stride +
+                                       (size_t)source_x + column];
+
+            if (target->y != reference->y || u != reference->u ||
+                v != reference->v) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int find_spatial4x4(const MbFrame *source,
+                           const MbFrame *reconstructed, unsigned x,
+                           unsigned y, uint8_t u, uint8_t v,
+                           MbMotionVector *motion)
+{
+    unsigned index;
+
+    for (index = 0U; index < 8U; ++index) {
+        if (mb_motion_format19_spatial_at(
+                MB_MOTION_BLOCK_4X4, index, motion) != REPLAY_OK) {
+            return 0;
+        }
+        if (spatial_block_matches(source, reconstructed, x, y, motion, u, v)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void copy_spatial4x4(MbFrame *reconstructed, unsigned x, unsigned y,
+                            const MbMotionVector *motion)
+{
+    unsigned row;
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+
+    for (row = 0; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0; column < 4U; ++column) {
+            reconstructed->pixels[(size_t)(y + row) * reconstructed->stride +
+                                  x + column] =
+                reconstructed->pixels[(size_t)(source_y + row) *
+                                          reconstructed->stride +
+                                      source_x + column];
+        }
+    }
+}
+
 static void copy_block4x4(const MbFrame *source, MbFrame *destination,
                           unsigned x, unsigned y)
 {
@@ -368,19 +623,45 @@ static int valid_frame_pair(const MbFrame *source,
            reconstructed->stride >= reconstructed->width;
 }
 
+static int valid_source_samples(const MbFrame *source)
+{
+    unsigned y;
+
+    for (y = 0U; y < source->height; ++y) {
+        unsigned x;
+        for (x = 0U; x < source->width; ++x) {
+            const MbPixel *pixel =
+                &source->pixels[(size_t)y * source->stride + x];
+            if (pixel->y > 63U || pixel->u > 31U || pixel->v > 31U) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 ReplayStatus codec_supermovingblocks_encode_frame(
     const MbFrame *source, const MbFrame *previous,
     const CodecSuperMovingBlocksEncodeOptions *options, ReplayBuffer *output,
     MbFrame *reconstructed, CodecSuperMovingBlocksEncodeStats *stats)
 {
     ReplayBitWriter writer;
+    ReplayBuffer data_candidate;
+    ReplayBuffer split_candidate;
     MbPredictor predictor = { 0 };
     CodecSuperMovingBlocksEncodeStats local_stats = { 0 };
     int allow_stationary = options != NULL && options->allow_stationary != 0;
     int allow_temporal = options != NULL && options->allow_temporal != 0;
+    int allow_spatial = options != NULL && options->allow_spatial != 0;
+    int allow_split = options != NULL && options->allow_split != 0;
     unsigned y;
 
-    if (!valid_frame_pair(source, reconstructed) || output == NULL ||
+    if (output == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    replay_buffer_clear(output);
+    if (!valid_frame_pair(source, reconstructed) ||
+        !valid_source_samples(source) ||
         ((allow_stationary || allow_temporal) &&
          (previous == NULL || previous->pixels == NULL ||
           previous->width != source->width ||
@@ -389,12 +670,12 @@ ReplayStatus codec_supermovingblocks_encode_frame(
         return REPLAY_INVALID_ARGUMENT;
     }
 
-    replay_buffer_clear(output);
     replay_bitwriter_init(&writer, output);
+    replay_buffer_init(&data_candidate);
+    replay_buffer_init(&split_candidate);
     for (y = 0; y < source->height; y += 4U) {
         unsigned x;
         for (x = 0; x < source->width; x += 4U) {
-            uint8_t residuals[16];
             uint8_t u = average_chroma4x4(source, x, y, 0);
             uint8_t v = average_chroma4x4(source, x, y, 1);
             MbMotionVector motion;
@@ -419,18 +700,92 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                     copy_temporal4x4(previous, reconstructed, x, y, &motion);
                     ++local_stats.temporal4x4_blocks;
                 }
-            } else {
-                status = make_data4x4(source, x, y, &predictor, residuals);
+            } else if (allow_spatial &&
+                       find_spatial4x4(source, reconstructed, x, y, u, v,
+                                      &motion)) {
+                status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
                 if (status == REPLAY_OK) {
-                    status = codec_supermovingblocks_write_data4x4(
-                        &writer, u, v, residuals);
+                    status = mb_motion_write_format19(
+                        &writer, MB_MOTION_BLOCK_4X4, &motion);
                 }
                 if (status == REPLAY_OK) {
-                    reconstruct_data4x4(source, reconstructed, x, y, u, v);
-                    ++local_stats.data4x4_blocks;
+                    copy_spatial4x4(reconstructed, x, y, &motion);
+                    ++local_stats.spatial4x4_blocks;
+                }
+            } else {
+                MbPredictor data_predictor;
+                MbPredictor split_predictor;
+                size_t data_bits;
+                size_t split_bits = SIZE_MAX;
+                unsigned stationary_mask = 0U;
+
+                status = build_data4x4_candidate(
+                    source, x, y, &predictor, &data_candidate,
+                    &data_predictor, &data_bits);
+                if (status == REPLAY_OK && allow_split) {
+                    status = build_split_data_candidate(
+                        source, x, y, previous, allow_stationary,
+                        &predictor, &split_candidate, &split_predictor,
+                        &stationary_mask, &split_bits);
+                }
+                if (status == REPLAY_OK && split_bits < data_bits) {
+                    static const unsigned offsets[4][2] = {
+                        { 0U, 0U }, { 2U, 0U },
+                        { 0U, 2U }, { 2U, 2U }
+                    };
+                    unsigned block;
+
+                    status = append_candidate(
+                        &writer, &split_candidate, split_bits);
+                    predictor = split_predictor;
+                    for (block = 0U; status == REPLAY_OK && block < 4U;
+                         ++block) {
+                        unsigned block_x = x + offsets[block][0];
+                        unsigned block_y = y + offsets[block][1];
+                        if ((stationary_mask & (1U << block)) != 0U) {
+                            unsigned row;
+                            for (row = 0U; row < 2U; ++row) {
+                                unsigned column;
+                                for (column = 0U; column < 2U; ++column) {
+                                    reconstructed->pixels[
+                                        (size_t)(block_y + row) *
+                                            reconstructed->stride +
+                                        block_x + column] =
+                                        previous->pixels[
+                                            (size_t)(block_y + row) *
+                                                previous->stride +
+                                            block_x + column];
+                                }
+                            }
+                            ++local_stats.stationary2x2_blocks;
+                        } else {
+                            uint8_t block_u = average_chroma2x2(
+                                source, block_x, block_y, 0);
+                            uint8_t block_v = average_chroma2x2(
+                                source, block_x, block_y, 1);
+                            reconstruct_data2x2(
+                                source, reconstructed, block_x, block_y,
+                                block_u, block_v);
+                            ++local_stats.data2x2_blocks;
+                        }
+                    }
+                    if (status == REPLAY_OK) {
+                        ++local_stats.split4x4_blocks;
+                    }
+                } else if (status == REPLAY_OK) {
+                    status = append_candidate(
+                        &writer, &data_candidate, data_bits);
+                    predictor = data_predictor;
+                    if (status == REPLAY_OK) {
+                        reconstruct_data4x4(
+                            source, reconstructed, x, y, u, v);
+                        ++local_stats.data4x4_blocks;
+                    }
                 }
             }
             if (status != REPLAY_OK) {
+                replay_buffer_free(&split_candidate);
+                replay_buffer_free(&data_candidate);
                 replay_buffer_clear(output);
                 return status;
             }
@@ -440,10 +795,14 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     {
         ReplayStatus status = replay_bitwriter_flush_zero(&writer);
         if (status != REPLAY_OK) {
+            replay_buffer_free(&split_candidate);
+            replay_buffer_free(&data_candidate);
             replay_buffer_clear(output);
             return status;
         }
     }
+    replay_buffer_free(&split_candidate);
+    replay_buffer_free(&data_candidate);
     if (stats != NULL) {
         *stats = local_stats;
     }
@@ -454,7 +813,7 @@ ReplayStatus codec_supermovingblocks_encode_data_frame(
     const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
     size_t *bits_written)
 {
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0 };
+    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 0, 0 };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayStatus status = codec_supermovingblocks_encode_frame(
         source, NULL, &options, output, reconstructed, &stats);

@@ -93,5 +93,10 @@ int main(void)
     CHECK(round_trip_motion(8, 8, 0, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
     CHECK(round_trip_motion(-4, 0, 1, MB_MOTION_BLOCK_4X4) == EXIT_SUCCESS);
     CHECK(round_trip_motion(-2, -1, 1, MB_MOTION_BLOCK_2X2) == EXIT_SUCCESS);
+    CHECK(mb_motion_format19_spatial_at(
+              MB_MOTION_BLOCK_4X4, 5U, &motion) == REPLAY_OK);
+    CHECK(motion.dx == -4 && motion.dy == 0 && motion.spatial);
+    CHECK(mb_motion_format19_spatial_at(
+              MB_MOTION_BLOCK_4X4, 8U, &motion) == REPLAY_INVALID_ARGUMENT);
     return EXIT_SUCCESS;
 }

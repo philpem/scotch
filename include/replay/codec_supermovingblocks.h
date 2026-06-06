@@ -9,12 +9,18 @@ extern const MbHuffmanTable codec_supermovingblocks_luma_huffman;
 typedef struct {
     int allow_stationary;
     int allow_temporal;
+    int allow_spatial;
+    int allow_split;
 } CodecSuperMovingBlocksEncodeOptions;
 
 typedef struct {
     size_t data4x4_blocks;
     size_t stationary4x4_blocks;
     size_t temporal4x4_blocks;
+    size_t spatial4x4_blocks;
+    size_t split4x4_blocks;
+    size_t data2x2_blocks;
+    size_t stationary2x2_blocks;
     size_t bits_written;
 } CodecSuperMovingBlocksEncodeStats;
 

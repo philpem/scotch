@@ -28,4 +28,8 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
 ReplayStatus mb_motion_format19_temporal_at(unsigned index,
                                             MbMotionVector *motion);
 
+ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
+                                           unsigned index,
+                                           MbMotionVector *motion);
+
 #endif

@@ -70,3 +70,7 @@ add_replay_test(test_supermovingblocks_stationary
     tests/test_supermovingblocks_stationary.c)
 add_replay_test(test_supermovingblocks_temporal
     tests/test_supermovingblocks_temporal.c)
+add_replay_test(test_supermovingblocks_spatial
+    tests/test_supermovingblocks_spatial.c)
+add_replay_test(test_supermovingblocks_split
+    tests/test_supermovingblocks_split.c)
