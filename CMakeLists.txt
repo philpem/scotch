@@ -11,6 +11,7 @@ add_library(replay STATIC
     src/replay_buffer.c
     src/replay_bitstream.c
     src/replay_ae7.c
+    src/replay_type2.c
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
@@ -46,12 +47,17 @@ target_link_libraries(replay-encode PRIVATE replay)
 add_executable(replay-inspect tools/replay_inspect.c)
 target_link_libraries(replay-inspect PRIVATE replay)
 
+add_executable(replay-extract tools/replay_extract.c)
+target_link_libraries(replay-extract PRIVATE replay)
+
 if(NOT MSVC)
     target_compile_options(replay-verify PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
     target_compile_options(replay-encode PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
     target_compile_options(replay-inspect PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+    target_compile_options(replay-extract PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
@@ -70,6 +76,7 @@ endfunction()
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
+add_replay_test(test_replay_type2 tests/test_replay_type2.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
@@ -117,6 +124,12 @@ add_test(NAME test_format19_corpus
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME test_mb19_quality_sweep
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mb19_quality_sweep.sh
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/mb19_quality_sweep.py
+            $<TARGET_FILE:replay-encode>
+            $<TARGET_FILE:replay-verify>)
     add_test(NAME test_decomp19_unicorn
         COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp19_unicorn.sh
             ${Python3_EXECUTABLE}

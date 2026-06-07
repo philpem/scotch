@@ -34,6 +34,10 @@ this file describes the current portable code in `replay-tooling`.
   chunks into exact frame payloads.
 - Direct packed-6Y5UV encoder input and aggregate mode/bit/quality reports for
   encoder-policy comparisons.
+- Reproducible multi-policy, multi-quality sweep tooling that preserves every
+  payload, reconstruction, trace, and verifier report.
+- Strict fixed-frame extraction from type 2 (16 bit colour uncompressed) AE7
+  movies, with explicitly named type 19 field reinterpretation.
 - Compiled type 7 (Moving Blocks) source decoding, including raw output words
   and native 16-bit key-frame initialization.
 
@@ -77,6 +81,11 @@ this file describes the current portable code in `replay-tooling`.
 - On the same chunk, lowest-error emits 179,656 bytes, 1.225% below Acorn,
   with 45.236548 dB luma PSNR versus Acorn's 45.221729 dB. U and V PSNR remain
   0.240 dB and 0.462 dB below Acorn respectively.
+- A five-point fixed-level sweep shows lowest-error is smaller and higher
+  quality through level 14. At levels 21 and 28 it spends more bytes to retain
+  about 0.9 dB additional luma PSNR, motivating matched-target measurement.
+- `LionFishX,ae7` extracts as exactly 375 frames. The first 25 extracted frames
+  match the previously validated comparison corpus byte-for-byte.
 
 ## Known Gaps
 
@@ -87,6 +96,9 @@ this file describes the current portable code in `replay-tooling`.
 - There is no AE7/Replay container writer or player acceptance test. The
   reader currently exposes chunk boundaries; type 19 frame splitting remains
   a decoder-assisted operation because AE7 stores no per-frame size table.
+- Matched target-byte sweeps are supported, but linear rate-control retries
+  repeat the full motion search and are currently too slow for broad real-frame
+  matrices. Candidate-score reuse or a bracketed level search is needed.
 - The confirmed type 7-to-type 2 source path exposes a CompLib limitation:
   `-Convert 6Y5UV` changes the type 2 label but does not convert type 7 YUV555
   words because Decomp7 has no `Dec24`. Comparison tooling must preserve this

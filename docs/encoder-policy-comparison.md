@@ -147,6 +147,34 @@ top-level 4x4 block. Those pixels have not been reconstructed and are not a
 legal reference. The encoder now rejects such candidates, and the verifier
 rejects such streams instead of reading stale destination-buffer contents.
 
+## Fixed-Level Sweep
+
+The first 25 authoritative `LionFishX,ae7` frames were also encoded at five
+points across the 29-row quality table:
+
+| Policy | Loss level | Bytes | Y PSNR | U PSNR | V PSNR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lowest-error | 0 | 225,081 | infinite | 18.033461 dB | 26.094036 dB |
+| Lowest-error | 7 | 179,656 | 45.236548 dB | 19.258155 dB | 27.268218 dB |
+| Lowest-error | 14 | 157,197 | 41.990885 dB | 19.898674 dB | 29.641578 dB |
+| Lowest-error | 21 | 122,808 | 34.220987 dB | 17.987300 dB | 29.264060 dB |
+| Lowest-error | 28 | 99,500 | 29.508717 dB | 16.424236 dB | 26.686726 dB |
+| Ordered | 0 | 226,326 | infinite | 17.999226 dB | 26.084338 dB |
+| Ordered | 7 | 181,220 | 42.765507 dB | 18.689158 dB | 27.071052 dB |
+| Ordered | 14 | 157,944 | 40.077905 dB | 18.914767 dB | 28.802220 dB |
+| Ordered | 21 | 119,139 | 33.310493 dB | 17.535410 dB | 28.547800 dB |
+| Ordered | 28 | 93,382 | 28.626563 dB | 15.798252 dB | 26.181533 dB |
+
+At levels 0, 7, and 14, lowest-error is both smaller and higher quality. At
+levels 21 and 28 it retains 0.911 dB and 0.882 dB more luma PSNR but emits
+3.1% and 6.6% more bytes. Equal loss-level rows therefore do not establish a
+complete rate-distortion ordering. The next comparison should sweep target
+bytes, allowing rate control to choose a loss level for each policy.
+
+Infinite level-0 luma PSNR means every decoded luma sample matches the source.
+Chroma is not lossless because data blocks store one averaged U/V pair per
+block even when copy matching itself requires exact decoder-visible values.
+
 ## Original Chunk-0 Decision Profile
 
 The first chunk of `LionFish19,ae7`, produced by Acorn's type 19 (Super Moving

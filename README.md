@@ -136,6 +136,37 @@ verifier can produce a per-block trace and compare decoded output with a source
 frame using `--reference-6y5uv`. See
 [docs/acorn-comparison-workflow.md](docs/acorn-comparison-workflow.md).
 
+Run a reproducible fixed-level policy sweep over numbered native frames with:
+
+```sh
+python3 tools/mb19_quality_sweep.py \
+    --encode build/replay-encode --verify build/replay-verify \
+    --source-prefix source/frame- --frames 25 --size 160x128 \
+    --levels 0,7,14,21,28 --policies lowest-error ordered \
+    --work-dir sweep --output sweep.md
+```
+
+Each run retains payloads, reconstructed native frames, encoder traces, and
+verifier reports. The Markdown table uses sequence PSNR calculated from summed
+squared error, not an average of per-frame PSNR values.
+
+The same driver accepts `--targets 5000,6000,7000 --initial-level 7` instead
+of `--levels` for matched target-byte experiments. Target runs can currently
+be slow because each rate-control retry repeats the complete motion search.
+
+Extract fixed-size frames from a type 2 (16 bit colour uncompressed) Replay
+intermediate with:
+
+```sh
+mkdir -p source
+build/replay-extract --input movie,ae7 --output-prefix source/frame- \
+    --type2-layout type19-fields
+```
+
+`type19-fields` explicitly reinterprets each stored halfword as the fields the
+historical type 19 (Super Moving Blocks) compressor saw. It does not claim to
+convert the type 2 movie's YUV555 colour space.
+
 ## Acorn Cross-Check
 
 When `../!ARMovie_compiled/Decomp19/Decompress,ffd` and Python Unicorn bindings

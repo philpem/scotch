@@ -149,3 +149,16 @@ chunk. Its YUV555 payload is full-range and its 25 chunk-0 frames reproduce the
 same 45.221729 dB luma PSNR and maximum luma error 2 comparison against
 `LionFish19`. This confirms the source pixels and frame alignment while using a
 colour-space declaration that Replay can display correctly.
+
+Extract all 375 fixed-size source frames with:
+
+```sh
+mkdir -p source
+build/replay-extract --input LionFishX,ae7 \
+    --output-prefix source/frame- --type2-layout type19-fields
+```
+
+The layout name is intentionally explicit. It maps halfword bits directly to
+the fields consumed by type 19 (Super Moving Blocks); it does not perform a
+YUV555-to-6Y5UV colour conversion. Extracted frames 0 through 24 match the
+previously validated source corpus byte-for-byte.

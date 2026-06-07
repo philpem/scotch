@@ -68,6 +68,12 @@
 - [x] Add per-block decoder traces and native 6Y5UV quality metrics.
 - [x] Implement and measure a cross-family lowest-error policy, with emitted
   bits and stable table order as documented tie-breakers.
+- [x] Add a reproducible fixed-level policy sweep with sequence quality and
+  bitrate aggregation.
+- [ ] Cache or otherwise avoid repeated full motion searches during target-byte
+  retries, then compare policies at matched targets across a longer sequence.
+- [x] Extract all 375 native frames from the validated type 2 `LionFishX,ae7`
+  intermediate for full-movie sweeps.
 - [ ] Add an exact `--policy acorn` mode if later decision traces justify and
   define behavior beyond the existing `lowest-error` and `ordered` policies.
 
