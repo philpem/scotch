@@ -83,10 +83,55 @@ PSNR in the codec's 6Y5UV domain, and maximum component error. RGB metrics may
 be added for presentation, but 6Y5UV is the authoritative comparison because
 that is what the codec actually preserves.
 
-The portable tooling now emits these block traces and reports native 6Y5UV
-SSE/MSE, PSNR, and maximum component errors. The exact source is confirmed and
-the type 2 intermediate supplies the authoritative words seen by the Acorn
-compressor. Portable-versus-Acorn policy measurement can now proceed.
+The portable tooling emits these block traces and reports native 6Y5UV
+SSE/MSE, PSNR, and maximum component errors. `LionFishX,ae7` supplies the
+authoritative type 2 source words seen by both compressors.
+
+## Source-Matched Portable Comparison
+
+`LionFishSMB,ae7` is an independently generated type 19 (Super Moving Blocks)
+reference. Its video and audio payloads are byte-identical to `LionFish19,ae7`;
+only container header and sprite-area metadata differ. Its SHA-256 is
+`544e953436deaefeb4499854963495e11e4471f1bdd1eb8709da4aa2b9f18520`.
+
+Encoding the same first 25 source frames from `LionFishX,ae7` at quality 7
+gives:
+
+| Encoder | Payload bytes | Y PSNR | U PSNR | V PSNR | Maximum Y error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Acorn | 181,885 | 45.221729 dB | 19.498089 dB | 27.730550 dB | 2 |
+| Portable | 181,220 | 42.765507 dB | 18.689158 dB | 27.071052 dB | 2 |
+
+The portable result is 665 bytes, or 0.366%, smaller, but its luma PSNR is
+2.456 dB lower. This is the expected consequence of its simple ordered policy,
+not evidence of a better rate-distortion result. It accepts stationary before
+considering other families and does not compare the winning temporal and
+spatial errors against each other.
+
+The mode counts make that policy difference visible:
+
+| Mode | Acorn | Portable |
+| --- | ---: | ---: |
+| Data 4x4 | 3,394 | 3,521 |
+| Stationary 4x4 | 428 | 2,071 |
+| Temporal 4x4 | 7,832 | 6,820 |
+| Spatial 4x4 | 1,507 | 545 |
+| Split 4x4 | 18,839 | 19,043 |
+| Data 2x2 | 13,061 | 13,675 |
+| Stationary 2x2 | 1,460 | 5,737 |
+| Temporal 2x2 | 49,507 | 53,481 |
+| Spatial 2x2 | 11,328 | 3,279 |
+
+The portable encoder therefore over-selects stationary modes and substantially
+under-selects spatial modes. The next policy experiment should select the
+lowest-error accepted candidate across stationary, temporal, and spatial
+families, using emitted bits and stable table order as explicit tie-breakers.
+
+This run also exposed an availability rule that must be enforced independently
+of policy. A split 2x2 spatial vector may point upward and right into a future
+top-level 4x4 block. Those pixels have not been reconstructed and are not a
+legal reference. The encoder now rejects such candidates, and the verifier
+rejects such streams instead of reading stale destination-buffer contents.
 
 ## Original Chunk-0 Decision Profile
 

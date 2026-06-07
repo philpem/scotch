@@ -46,6 +46,13 @@ this file describes the current portable code in `replay-tooling`.
   including both 4x4 and motion-coded 2x2 paths.
 - The same decoders agree byte-for-byte on all 25 original-compressor frames
   in chunk 0 of `LionFish19,ae7`; the first two are permanent corpus fixtures.
+- `LionFishSMB,ae7`, a separately generated type 19 (Super Moving Blocks)
+  encode, has video and audio payloads byte-identical to `LionFish19,ae7`.
+- On the same 25 authoritative type 2 source frames at quality 7, the portable
+  encoder emits 181,220 bytes versus Acorn's 181,885 bytes. Portable luma PSNR
+  is 42.765507 dB versus Acorn's 45.221729 dB; both have maximum luma error 2.
+- Spatial references are checked against reconstruction order. In particular,
+  a split child cannot read pixels from a future top-level 4x4 parent.
 - Normal and ASan/UBSan test suites cover the C implementation; Unicorn tests
   run when its Python bindings and the compiled decoder are available.
 
@@ -61,6 +68,10 @@ this file describes the current portable code in `replay-tooling`.
 - A 4x4 data candidate wins a bit-cost tie with a split candidate.
 - Raw payload sequences are separate files; no undocumented temporary
   container is invented.
+- Source-matched measurement shows the current ordered policy is 0.366%
+  smaller than Acorn on the first comparison chunk but 2.456 dB worse in luma
+  PSNR. It selects many more stationary and far fewer spatial blocks. A
+  cross-family lowest-error policy is the next planned experiment.
 
 ## Known Gaps
 

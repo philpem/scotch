@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "replay/codec_supermovingblocks.h"
+#include "replay/mb_motion.h"
 
 static void copy_2x2(MbPixel *destination, size_t destination_stride,
                      unsigned destination_x, unsigned destination_y,
@@ -103,9 +104,58 @@ static int test_spatial_2x2_key_frame(void)
     return EXIT_SUCCESS;
 }
 
+static int test_spatial_2x2_rejects_future_parent(void)
+{
+    MbPixel decoded_pixels[64] = { { 0U, 0U, 0U } };
+    MbFrame decoded = { 8U, 8U, 8U, decoded_pixels };
+    ReplayBuffer payload;
+    ReplayBitWriter writer;
+    MbMotionVector future = { 2, -2, 1 };
+    MbVerifyError error;
+    uint8_t residuals4x4[16] = { 0U };
+    uint8_t residuals2x2[4] = { 0U };
+
+    replay_buffer_init(&payload);
+    replay_bitwriter_init(&writer, &payload);
+
+    /* Complete the two top-row parents, then enter parent (0,4). */
+    CHECK(codec_supermovingblocks_write_data4x4(
+              &writer, 0U, 0U, residuals4x4) == REPLAY_OK);
+    CHECK(codec_supermovingblocks_write_data4x4(
+              &writer, 0U, 0U, residuals4x4) == REPLAY_OK);
+    CHECK(replay_bitwriter_write(&writer, UINT32_C(3), 2U) == REPLAY_OK);
+    CHECK(codec_supermovingblocks_write_data2x2(
+              &writer, 0U, 0U, residuals2x2) == REPLAY_OK);
+    CHECK(codec_supermovingblocks_write_data2x2(
+              &writer, 0U, 0U, residuals2x2) == REPLAY_OK);
+    CHECK(codec_supermovingblocks_write_data2x2(
+              &writer, 0U, 0U, residuals2x2) == REPLAY_OK);
+
+    /*
+     * Child (2,6) plus (2,-2) reads (4,4), which belongs to the next
+     * top-level parent and has not been reconstructed. Older verification
+     * accidentally read whatever happened to be in that output buffer.
+     */
+    CHECK(replay_bitwriter_write(&writer, UINT32_C(1), 1U) == REPLAY_OK);
+    CHECK(mb_motion_write_format19(
+              &writer, MB_MOTION_BLOCK_2X2, &future) == REPLAY_OK);
+    CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+
+    CHECK(codec_supermovingblocks_verify_frame(
+              payload.data, payload.size, NULL, &decoded,
+              NULL, &error) == REPLAY_MALFORMED_STREAM);
+    CHECK(error.block_x == 2U);
+    CHECK(error.block_y == 6U);
+    CHECK(strcmp(error.detail,
+                 "spatial reference has not been reconstructed") == 0);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_temporal_2x2() == EXIT_SUCCESS);
     CHECK(test_spatial_2x2_key_frame() == EXIT_SUCCESS);
+    CHECK(test_spatial_2x2_rejects_future_parent() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

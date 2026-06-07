@@ -57,7 +57,7 @@
   and documented harness regression.
 - [x] Cross-check temporal, spatial, split, and lossy payloads, including
   temporal and spatial 2x2 modes.
-- [ ] Compare portable and original-compressor decisions and quantify bitrate
+- [x] Compare portable and original-compressor decisions and quantify bitrate
   and decoder-visible quality differences; exact decision parity is not a goal.
 - [x] Add source-independent aggregate mode and bit accounting for original and
   portable type 19, Super Moving Blocks payloads.
@@ -66,6 +66,8 @@
 - [x] Establish `LionFish2,ae7` as the exact source and capture its authoritative
   uncompressed word stream through the type 2 intermediate.
 - [x] Add per-block decoder traces and native 6Y5UV quality metrics.
+- [ ] Implement and measure a cross-family lowest-error policy, with emitted
+  bits and stable table order as documented tie-breakers.
 - [ ] Add selectable `--policy portable|acorn` encoder policy after comparison
   data justifies and defines the Acorn-compatible behavior.
 

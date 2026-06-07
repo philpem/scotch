@@ -489,6 +489,27 @@ static const MbPixel *split_spatial_pixel(
                    ? &tentative[local]
                    : NULL;
     }
+
+    /*
+     * Top-level blocks are reconstructed as complete 4x4 units in raster
+     * order. A 2x2 vector can point upward and right; near the right edge of
+     * the current parent that rectangle may cross into the next 4x4 block,
+     * whose pixels do not exist yet. Reading the live frame there observes
+     * stale buffer contents and can make an invalid match appear acceptable.
+     *
+     * Pixels outside the tentative parent are therefore available only when
+     * their owning top-level block precedes the current parent in codec scan
+     * order. Pixels inside the parent are governed by available_mask above.
+     */
+    {
+        unsigned source_block_x = source_x & ~3U;
+        unsigned source_block_y = source_y & ~3U;
+
+        if (source_block_y > block_y ||
+            (source_block_y == block_y && source_block_x >= block_x)) {
+            return NULL;
+        }
+    }
     return &reconstructed->pixels[(size_t)source_y * reconstructed->stride +
                                   source_x];
 }
@@ -1322,6 +1343,45 @@ static ReplayStatus copy_motion(ReplayBitReader *reader,
         set_verify_error(error, reader, x, y,
                          "motion reference lies outside the frame");
         return REPLAY_MALFORMED_STREAM;
+    }
+
+    if (motion.spatial) {
+        unsigned parent_x = x & ~3U;
+        unsigned parent_y = y & ~3U;
+        unsigned current_quadrant =
+            block_size == MB_MOTION_BLOCK_2X2
+                ? ((y - parent_y) / 2U) * 2U + (x - parent_x) / 2U
+                : 0U;
+
+        for (row = 0U; row < (unsigned)block_size; ++row) {
+            unsigned column;
+
+            for (column = 0U; column < (unsigned)block_size; ++column) {
+                unsigned pixel_x = (unsigned)source_x + column;
+                unsigned pixel_y = (unsigned)source_y + row;
+                unsigned source_block_x = pixel_x & ~3U;
+                unsigned source_block_y = pixel_y & ~3U;
+                int available =
+                    source_block_y < parent_y ||
+                    (source_block_y == parent_y &&
+                     source_block_x < parent_x);
+
+                if (!available && block_size == MB_MOTION_BLOCK_2X2 &&
+                    source_block_x == parent_x &&
+                    source_block_y == parent_y) {
+                    unsigned source_quadrant =
+                        ((pixel_y - parent_y) / 2U) * 2U +
+                        (pixel_x - parent_x) / 2U;
+                    available = source_quadrant < current_quadrant;
+                }
+                if (!available) {
+                    set_verify_error(
+                        error, reader, x, y,
+                        "spatial reference has not been reconstructed");
+                    return REPLAY_MALFORMED_STREAM;
+                }
+            }
+        }
     }
 
     for (row = 0; row < (unsigned)block_size; ++row) {
