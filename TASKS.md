@@ -70,8 +70,10 @@
   bits and stable table order as documented tie-breakers.
 - [x] Add a reproducible fixed-level policy sweep with sequence quality and
   bitrate aggregation.
+- [x] Add bounded adjacent-first bracketed target search and compare both
+  policies at a matched 6,000-byte target over the 25-frame corpus.
 - [ ] Cache or otherwise avoid repeated full motion searches during target-byte
-  retries, then compare policies at matched targets across a longer sequence.
+  retries before running broad full-movie target matrices.
 - [x] Extract all 375 native frames from the validated type 2 `LionFishX,ae7`
   intermediate for full-movie sweeps.
 - [ ] Add an exact `--policy acorn` mode if later decision traces justify and

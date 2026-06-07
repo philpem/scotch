@@ -190,6 +190,7 @@ def main() -> int:
                 command.extend([
                     "--loss-level", str(args.initial_level),
                     "--target-bytes", str(value),
+                    "--rate-search", "bracketed",
                 ])
             run(command, stdout=run_dir / "encode.log")
             verify_sequence(

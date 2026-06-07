@@ -5,6 +5,7 @@
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
 #include "replay/mb_metrics.h"
+#include "replay/mb_quality.h"
 #include "replay/mb_rate_control.h"
 
 /*
@@ -29,6 +30,21 @@ typedef enum {
     INPUT_6Y5UV
 } InputFormat;
 
+typedef enum {
+    RATE_SEARCH_LINEAR,
+    RATE_SEARCH_BRACKETED
+} RateSearch;
+
+typedef struct {
+    int direction;
+    unsigned low;
+    unsigned high;
+    unsigned candidate;
+    unsigned step;
+    int have_candidate;
+    int final_probe;
+} BracketedRateSearch;
+
 static void usage(FILE *stream)
 {
     fprintf(stream,
@@ -37,8 +53,114 @@ static void usage(FILE *stream)
             "[--input-format rgb24|6y5uv] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] "
+            "[--rate-search linear|bracketed] "
             "[--target-bytes N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
+}
+
+static int bracketed_rate_next(BracketedRateSearch *search,
+                               const MbRateControl *control,
+                               size_t encoded_bytes, unsigned current,
+                               unsigned *next)
+{
+    /*
+     * Higher loss levels are treated as producing no more bytes than lower
+     * levels. Start with the adjacent row so a carried level stays cheap,
+     * expand exponentially until the target boundary is crossed, then use a
+     * binary search for the first row on that boundary. The final payload is
+     * still produced by the ordinary encoder and independently decoded.
+     */
+    if (search->final_probe) {
+        return 0;
+    }
+    if (search->direction == 0) {
+        if (encoded_bytes >= control->target_min_bytes &&
+            encoded_bytes <= control->target_max_bytes) {
+            return 0;
+        }
+        if (encoded_bytes > control->target_max_bytes) {
+            if (current + 1U >= MB_QUALITY_LEVEL_COUNT) {
+                return 0;
+            }
+            search->direction = 1;
+            search->low = current + 1U;
+            search->high = MB_QUALITY_LEVEL_COUNT - 1U;
+            search->step = 2U;
+            *next = search->low;
+        } else {
+            if (current == 0U) {
+                return 0;
+            }
+            search->direction = -1;
+            search->low = 0U;
+            search->high = current - 1U;
+            search->step = 2U;
+            *next = search->high;
+        }
+        return 1;
+    }
+
+    if (search->direction > 0) {
+        if (encoded_bytes <= control->target_max_bytes) {
+            search->candidate = current;
+            search->have_candidate = 1;
+            if (current == 0U) {
+                search->high = 0U;
+            } else {
+                search->high = current - 1U;
+            }
+        } else {
+            search->low = current + 1U;
+        }
+    } else {
+        if (encoded_bytes >= control->target_min_bytes) {
+            search->candidate = current;
+            search->have_candidate = 1;
+            search->low = current + 1U;
+        } else if (current == 0U) {
+            return 0;
+        } else {
+            search->high = current - 1U;
+        }
+    }
+
+    if (search->have_candidate) {
+        if (search->low <= search->high) {
+            *next = search->direction > 0
+                        ? search->low + (search->high - search->low) / 2U
+                        : search->low +
+                              (search->high - search->low + 1U) / 2U;
+            return 1;
+        }
+        *next = search->candidate;
+        if (*next == current) {
+            return 0;
+        }
+        search->final_probe = 1;
+        return 1;
+    }
+
+    if (search->direction > 0) {
+        unsigned remaining = MB_QUALITY_LEVEL_COUNT - 1U - current;
+
+        if (remaining == 0U) {
+            return 0;
+        }
+        *next = current + (search->step < remaining
+                               ? search->step : remaining);
+    } else {
+        if (current == 0U) {
+            return 0;
+        }
+        *next = current > search->step ? current - search->step : 0U;
+    }
+    if (search->step <= (MB_QUALITY_LEVEL_COUNT - 1U) / 2U) {
+        search->step *= 2U;
+    }
+    if (*next == current) {
+        return 0;
+    }
+    return 1;
 }
 
 static FrameReadResult read_frame(FILE *file, const char *name, uint8_t *data,
@@ -177,7 +299,8 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        const MbFrame *source, const MbFrame *reconstructed,
                        size_t bytes, unsigned loss_level, unsigned retry,
                        size_t target_min, size_t target_max,
-                       CodecSuperMovingBlocksPolicy policy)
+                       CodecSuperMovingBlocksPolicy policy,
+                       RateSearch rate_search)
 {
     MbFrameMetrics metrics;
 
@@ -192,7 +315,7 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
     if (fprintf(trace,
                 "frame=%zu codec=19 size=%ux%u retry=%u loss_level=%u "
                 "name=\"Super Moving Blocks\" "
-                "policy=%s "
+                "policy=%s rate_search=%s "
                 "target_min=%zu target_max=%zu data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
@@ -206,6 +329,7 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 frame_number, width, height, retry, loss_level,
                 policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
                     ? "lowest-error" : "ordered",
+                rate_search == RATE_SEARCH_BRACKETED ? "bracketed" : "linear",
                 target_min, target_max, stats->data4x4_blocks,
                 stats->stationary4x4_blocks, stats->temporal4x4_blocks,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
@@ -250,6 +374,7 @@ int main(int argc, char **argv)
     InputFormat input_format = INPUT_RGB24;
     CodecSuperMovingBlocksPolicy policy =
         CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
+    RateSearch rate_search = RATE_SEARCH_LINEAR;
     int data_only = 0;
     uint8_t *rgb = NULL;
     MbPixel *source_pixels = NULL;
@@ -323,6 +448,17 @@ int main(int argc, char **argv)
                 policy = CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED;
             } else if (strcmp(name, "lowest-error") == 0) {
                 policy = CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+        } else if (strcmp(argv[i], "--rate-search") == 0 && i + 1 < argc) {
+            const char *name = argv[++i];
+
+            if (strcmp(name, "linear") == 0) {
+                rate_search = RATE_SEARCH_LINEAR;
+            } else if (strcmp(name, "bracketed") == 0) {
+                rate_search = RATE_SEARCH_BRACKETED;
             } else {
                 usage(stderr);
                 return EXIT_FAILURE;
@@ -419,6 +555,7 @@ int main(int argc, char **argv)
         MbRateControl rate_control;
         int rate_control_enabled = target_bytes != 0U && frame_number != 0U;
         unsigned retry = 0U;
+        BracketedRateSearch bracketed = { 0, 0U, 0U, 0U, 0U, 0, 0 };
         ReplayStatus status;
 
         if (read_result == FRAME_READ_EOF) {
@@ -470,13 +607,24 @@ int main(int argc, char **argv)
                     options.loss_level, retry,
                     target_bytes != 0U ? rate_control.target_min_bytes : 0U,
                     target_bytes != 0U ? rate_control.target_max_bytes : 0U,
-                    options.policy) !=
+                    options.policy, rate_search) !=
                 EXIT_SUCCESS) {
                 goto free_payload;
             }
-            if (!rate_control_enabled ||
-                mb_rate_control_observe(&rate_control, payload.size) ==
-                    MB_RATE_ACCEPT) {
+            if (!rate_control_enabled) {
+                break;
+            }
+            if (rate_search == RATE_SEARCH_BRACKETED) {
+                unsigned next_level;
+
+                if (!bracketed_rate_next(
+                        &bracketed, &rate_control, payload.size,
+                        options.loss_level, &next_level)) {
+                    break;
+                }
+                rate_control.loss_level = next_level;
+            } else if (mb_rate_control_observe(
+                           &rate_control, payload.size) == MB_RATE_ACCEPT) {
                 break;
             }
             ++retry;

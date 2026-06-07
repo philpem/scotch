@@ -151,8 +151,12 @@ verifier reports. The Markdown table uses sequence PSNR calculated from summed
 squared error, not an average of per-frame PSNR values.
 
 The same driver accepts `--targets 5000,6000,7000 --initial-level 7` instead
-of `--levels` for matched target-byte experiments. Target runs can currently
-be slow because each rate-control retry repeats the complete motion search.
+of `--levels` for matched target-byte experiments. It uses
+`--rate-search bracketed`: try the adjacent quality row, expand exponentially
+until the target is crossed, then refine the bracket. Direct CLI users may
+select `linear` to preserve Acorn-style adjacent-row retries. Every probe is
+still independently decoded and checked. Use a release build for corpus
+sweeps; exhaustive motion search is intentionally slow in an `-O0` build.
 
 Extract fixed-size frames from a type 2 (16 bit colour uncompressed) Replay
 intermediate with:

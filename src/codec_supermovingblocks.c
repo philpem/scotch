@@ -508,6 +508,10 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
             error < best_error) {
             *motion = candidate;
             best_error = error;
+            /* Zero is unbeatable; this is already the shortest tied vector. */
+            if (error == 0U) {
+                break;
+            }
         }
     }
     if (best_error == UINT32_MAX) {
@@ -613,6 +617,10 @@ static int match_spatial2x2(const MbFrame *source,
             error < best_error) {
             *motion = candidate;
             best_error = error;
+            /* All spatial codes have equal length; table order breaks ties. */
+            if (error == 0U) {
+                break;
+            }
         }
     }
     if (best_error == UINT32_MAX) {
@@ -641,7 +649,8 @@ static CopyCandidate select_copy2x2(
         selected = (CopyCandidate){
             SPLIT_MODE_STATIONARY, { 0, 0, 0 }, error, 2U, 0U, 1
         };
-        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+        /* Exact stationary is minimal in both distortion and encoded bits. */
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED || error == 0U) {
             return selected;
         }
     }
@@ -876,6 +885,10 @@ static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
                                    quality, &error) && error < best_error) {
             *motion = candidate;
             best_error = error;
+            /* Enumeration is non-decreasing in code length, so stop at zero. */
+            if (error == 0U) {
+                break;
+            }
         }
     }
     if (best_error == UINT32_MAX) {
@@ -948,6 +961,9 @@ static int find_spatial4x4(const MbFrame *source,
             error < best_error) {
             *motion = candidate;
             best_error = error;
+            if (error == 0U) {
+                break;
+            }
         }
     }
     if (best_error == UINT32_MAX) {
@@ -994,7 +1010,8 @@ static CopyCandidate select_copy4x4(
         selected = (CopyCandidate){
             SPLIT_MODE_STATIONARY, { 0, 0, 0 }, error, 2U, 0U, 1
         };
-        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+        /* Exact stationary is globally optimal under the documented policy. */
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED || error == 0U) {
             return selected;
         }
     }

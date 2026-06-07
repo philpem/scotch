@@ -175,6 +175,27 @@ Infinite level-0 luma PSNR means every decoded luma sample matches the source.
 Chroma is not lossless because data blocks store one averaged U/V pair per
 block even when copy matching itself requires exact decoder-visible values.
 
+## Matched Target Result
+
+At a 6,000-byte inter-frame target, with the first key frame fixed at level 7,
+the same 25-frame sequence gives:
+
+| Policy | Total bytes | Bytes/frame | Y PSNR | U PSNR | V PSNR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Lowest-error | 149,184 | 5,967.360 | 40.663672 dB | 19.722739 dB | 29.529561 dB |
+| Ordered | 150,004 | 6,000.160 | 38.965991 dB | 18.825338 dB | 28.325212 dB |
+
+The totals include the shared 9,875-byte first/key frame, which is not target
+controlled. Across this point, lowest-error is 820 bytes smaller and improves
+luma PSNR by 1.698 dB, U by 0.897 dB, and V by 1.204 dB. This supports keeping
+lowest-error as the default policy on the current corpus.
+
+Target sweeps use adjacent-first exponential bracketing followed by binary
+refinement. On a five-frame cross-check, bracketed and linear searches selected
+byte-identical final payloads. Bracketing reduces probes when the accepted row
+is distant, though linear search can remain cheaper when the carried level is
+already within one or two rows.
+
 ## Original Chunk-0 Decision Profile
 
 The first chunk of `LionFish19,ae7`, produced by Acorn's type 19 (Super Moving

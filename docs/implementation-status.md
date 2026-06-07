@@ -22,6 +22,8 @@ this file describes the current portable code in `replay-tooling`.
 - Real bit-cost comparison between 4x4 data and a four-quadrant split.
 - Whole-frame target-byte retries using configurable floating-point window
   factors; defaults are `0.90` and `1.025`, explicitly truncated to bytes.
+- Selectable linear and adjacent-first bracketed quality-row searches for
+  target-byte retries.
 - Raw RGB24 input from a file or FFmpeg pipe, numbered payload output, traces,
   and reconstructed PPM output.
 - Packed `Y,U,V` corpus import/export and first-pixel comparison diagnostics.
@@ -84,6 +86,8 @@ this file describes the current portable code in `replay-tooling`.
 - A five-point fixed-level sweep shows lowest-error is smaller and higher
   quality through level 14. At levels 21 and 28 it spends more bytes to retain
   about 0.9 dB additional luma PSNR, motivating matched-target measurement.
+- At a 6,000-byte target over the 25-frame corpus, lowest-error emits 149,184
+  bytes at 40.663672 dB luma versus ordered's 150,004 bytes at 38.965991 dB.
 - `LionFishX,ae7` extracts as exactly 375 frames. The first 25 extracted frames
   match the previously validated comparison corpus byte-for-byte.
 
@@ -96,9 +100,9 @@ this file describes the current portable code in `replay-tooling`.
 - There is no AE7/Replay container writer or player acceptance test. The
   reader currently exposes chunk boundaries; type 19 frame splitting remains
   a decoder-assisted operation because AE7 stores no per-frame size table.
-- Matched target-byte sweeps are supported, but linear rate-control retries
-  repeat the full motion search and are currently too slow for broad real-frame
-  matrices. Candidate-score reuse or a bracketed level search is needed.
+- Every target retry still repeats the full motion search. Bracketed search
+  bounds retry count, but candidate-score reuse remains desirable for larger
+  full-movie matrices.
 - The confirmed type 7-to-type 2 source path exposes a CompLib limitation:
   `-Convert 6Y5UV` changes the type 2 label but does not convert type 7 YUV555
   words because Decomp7 has no `Dec24`. Comparison tooling must preserve this

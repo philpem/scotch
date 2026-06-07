@@ -43,3 +43,13 @@ test -s "$work/results/ordered-q07/encode.trace"
     --work-dir "$work/targets" --output "$work/targets.md"
 grep -F '| lowest-error | target 16 |' "$work/targets.md" >/dev/null
 test -s "$work/targets/lowest-error-target-16/encode.trace"
+test "$(wc -l < "$work/targets/lowest-error-target-16/encode.trace")" -le 6
+
+# A smaller target drives the search toward higher loss levels and covers the
+# opposite table boundary/bracketing direction.
+"$python" "$sweep" --encode "$encode" --verify "$verify" \
+    --source-prefix "$work/source/frame-" --frames 2 --size 4x4 \
+    --targets 5 --initial-level 7 --policies lowest-error \
+    --work-dir "$work/targets-high" --output "$work/targets-high.md"
+grep -F '| lowest-error | target 5 |' "$work/targets-high.md" >/dev/null
+test "$(wc -l < "$work/targets-high/lowest-error-target-5/encode.trace")" -le 8
