@@ -21,6 +21,13 @@ done
 "$verify" --codec 19 --size 4x4 --payload "$work/frame.mb19" \
     --expect-6y5uv "$work/source.6y5uv"
 
+# Policy selection is explicit even though a single key-frame data block has
+# no copy candidates whose choice could differ.
+"$encode" --codec 19 --input "$work/source.6y5uv" \
+    --input-format 6y5uv --size 4x4 --payload "$work/policy.mb19" \
+    --policy lowest-error
+cmp "$work/frame.mb19" "$work/policy.mb19"
+
 # Native samples outside their stored bit widths must be rejected.
 printf '\100\000\000' > "$work/invalid.6y5uv"
 i=1

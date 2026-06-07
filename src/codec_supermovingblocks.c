@@ -25,10 +25,10 @@
  * error implemented in mb_quality.c. Whole-frame target-size retries are kept
  * outside this codec core in mb_rate_control.c, so one call is deterministic.
  *
- * The current top-level decision policy is intentionally simple: stationary,
- * then the lowest-error temporal candidate, then the lowest-error spatial
- * candidate, then literal 4x4-versus-split bit cost. This is stream-compatible
- * but is not yet claimed to reproduce every Acorn compressor decision.
+ * Copy-family selection is explicit. The original portable policy tries
+ * stationary, temporal, then spatial. The experimental lowest-error policy
+ * compares every accepted copy by reconstruction error, emitted bits, then a
+ * stable family/table order. Neither policy changes the bitstream syntax.
  */
 #define HUFF(bits_, count_) { UINT16_C(bits_), UINT8_C(count_) }
 
@@ -432,6 +432,47 @@ typedef struct {
     MbMotionVector motion;
 } SplitDecision;
 
+typedef struct {
+    SplitMode mode;
+    MbMotionVector motion;
+    unsigned error;
+    unsigned bits;
+    unsigned order;
+    int valid;
+} CopyCandidate;
+
+static unsigned motion_bits(const MbMotionVector *motion,
+                            MbMotionBlockSize block_size)
+{
+    unsigned magnitude;
+    unsigned body_bits;
+
+    if (motion->spatial != 0) {
+        body_bits = 7U;
+    } else {
+        magnitude = (unsigned)(motion->dx < 0 ? -motion->dx : motion->dx);
+        if ((unsigned)(motion->dy < 0 ? -motion->dy : motion->dy) > magnitude) {
+            magnitude = (unsigned)(motion->dy < 0 ? -motion->dy : motion->dy);
+        }
+        body_bits = magnitude <= 1U ? 5U
+                  : magnitude == 2U ? 6U
+                  : magnitude == 3U ? 7U
+                                    : 10U;
+    }
+    return body_bits + (block_size == MB_MOTION_BLOCK_4X4 ? 2U : 1U);
+}
+
+static int candidate_better(const CopyCandidate *candidate,
+                            const CopyCandidate *best)
+{
+    return candidate->valid &&
+           (!best->valid || candidate->error < best->error ||
+            (candidate->error == best->error &&
+             (candidate->bits < best->bits ||
+              (candidate->bits == best->bits &&
+               candidate->order < best->order))));
+}
+
 /*
  * Search the same temporal vector sequence used by 4x4 blocks, but compare a
  * 2x2 reconstruction target. Lowest error wins; enumeration order gives the
@@ -440,7 +481,7 @@ typedef struct {
 static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
                              unsigned x, unsigned y, uint8_t u, uint8_t v,
                              const MbQualityThresholds *quality,
-                             MbMotionVector *motion)
+                             MbMotionVector *motion, unsigned *matched_error)
 {
     unsigned best_error = UINT32_MAX;
     unsigned index;
@@ -469,7 +510,11 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
             best_error = error;
         }
     }
-    return best_error != UINT32_MAX;
+    if (best_error == UINT32_MAX) {
+        return 0;
+    }
+    *matched_error = best_error;
+    return 1;
 }
 
 static const MbPixel *split_spatial_pixel(
@@ -521,7 +566,7 @@ static int match_spatial2x2(const MbFrame *source,
                             unsigned parent_y, unsigned x, unsigned y,
                             uint8_t u, uint8_t v,
                             const MbQualityThresholds *quality,
-                            MbMotionVector *motion)
+                            MbMotionVector *motion, unsigned *matched_error)
 {
     unsigned best_error = UINT32_MAX;
     unsigned index;
@@ -570,7 +615,69 @@ static int match_spatial2x2(const MbFrame *source,
             best_error = error;
         }
     }
-    return best_error != UINT32_MAX;
+    if (best_error == UINT32_MAX) {
+        return 0;
+    }
+    *matched_error = best_error;
+    return 1;
+}
+
+static CopyCandidate select_copy2x2(
+    const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, const MbPixel tentative[16],
+    unsigned available_mask, unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, uint8_t u, uint8_t v, int allow_stationary,
+    int allow_temporal, int allow_spatial,
+    const MbQualityThresholds *quality, CodecSuperMovingBlocksPolicy policy)
+{
+    CopyCandidate selected = {
+        SPLIT_MODE_DATA, { 0, 0, 0 }, 0U, 0U, 0U, 0
+    };
+    CopyCandidate candidate;
+    unsigned error;
+
+    if (allow_stationary && mb_quality_match_format19(
+            source, x, y, previous, x, y, 2U, u, v, quality, &error)) {
+        selected = (CopyCandidate){
+            SPLIT_MODE_STATIONARY, { 0, 0, 0 }, error, 2U, 0U, 1
+        };
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+            return selected;
+        }
+    }
+
+    candidate = (CopyCandidate){
+        SPLIT_MODE_TEMPORAL, { 0, 0, 0 }, 0U, 0U, 1U, 0
+    };
+    if (allow_temporal && match_temporal2x2(
+            source, previous, x, y, u, v, quality,
+            &candidate.motion, &error)) {
+        candidate.error = error;
+        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
+        candidate.valid = 1;
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+            return candidate;
+        }
+        if (candidate_better(&candidate, &selected)) {
+            selected = candidate;
+        }
+    }
+
+    candidate = (CopyCandidate){
+        SPLIT_MODE_SPATIAL, { 0, 0, 1 }, 0U, 0U, 2U, 0
+    };
+    if (allow_spatial && match_spatial2x2(
+            source, reconstructed, tentative, available_mask,
+            parent_x, parent_y, x, y, u, v, quality,
+            &candidate.motion, &error)) {
+        candidate.error = error;
+        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
+        candidate.valid = 1;
+        if (candidate_better(&candidate, &selected)) {
+            selected = candidate;
+        }
+    }
+    return selected;
 }
 
 static void fill_tentative_data2x2(const MbFrame *source,
@@ -630,6 +737,7 @@ static ReplayStatus build_split_data_candidate(
     const MbFrame *source, unsigned x, unsigned y,
     const MbFrame *previous, const MbFrame *reconstructed,
     int allow_stationary, int allow_temporal, int allow_spatial,
+    CodecSuperMovingBlocksPolicy policy,
     const MbQualityThresholds *quality,
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
     MbPredictor *final_predictor, SplitDecision decisions[4], size_t *bits)
@@ -659,56 +767,40 @@ static ReplayStatus build_split_data_candidate(
         uint8_t residuals[4];
         uint8_t u = average_chroma2x2(source, block_x, block_y, 0);
         uint8_t v = average_chroma2x2(source, block_x, block_y, 1);
-        unsigned stationary_error;
-        int stationary = allow_stationary && mb_quality_match_format19(
-            source, block_x, block_y, previous, block_x, block_y, 2U,
-            u, v, quality, &stationary_error);
-
-        decisions[block].mode = SPLIT_MODE_DATA;
-        decisions[block].motion = (MbMotionVector){ 0, 0, 0 };
-
         /*
          * Compare against the 2x2 data reconstruction target: source luma plus
          * one averaged U/V pair. Comparing raw source chroma would reject a
          * copy that decodes identically to the corresponding data block.
          */
-        /*
-         * Current mode policy is stationary, lowest-error temporal,
-         * lowest-error spatial, then data. Every copy mode is cheaper than a
-         * data block; data alone advances the luma predictor.
-         */
-        if (stationary) {
+        CopyCandidate selected = select_copy2x2(
+            source, previous, reconstructed, tentative, available_mask,
+            x, y, block_x, block_y, u, v,
+            allow_stationary, allow_temporal, allow_spatial, quality, policy);
+
+        decisions[block].mode = selected.mode;
+        decisions[block].motion = selected.motion;
+        if (selected.mode == SPLIT_MODE_STATIONARY) {
             status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
-            decisions[block].mode = SPLIT_MODE_STATIONARY;
             fill_tentative_copy2x2(
                 previous, reconstructed, tentative, x, y, block_x, block_y,
                 &decisions[block].motion, &available_mask);
-        } else if (allow_temporal && match_temporal2x2(
-                       source, previous, block_x, block_y, u, v,
-                       quality,
-                       &decisions[block].motion)) {
+        } else if (selected.mode == SPLIT_MODE_TEMPORAL) {
             status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
             if (status == REPLAY_OK) {
                 status = mb_motion_write_format19(
                     &writer, MB_MOTION_BLOCK_2X2,
                     &decisions[block].motion);
             }
-            decisions[block].mode = SPLIT_MODE_TEMPORAL;
             fill_tentative_copy2x2(
                 previous, reconstructed, tentative, x, y, block_x, block_y,
                 &decisions[block].motion, &available_mask);
-        } else if (allow_spatial && match_spatial2x2(
-                       source, reconstructed, tentative, available_mask,
-                       x, y, block_x, block_y, u, v,
-                       quality,
-                       &decisions[block].motion)) {
+        } else if (selected.mode == SPLIT_MODE_SPATIAL) {
             status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
             if (status == REPLAY_OK) {
                 status = mb_motion_write_format19(
                     &writer, MB_MOTION_BLOCK_2X2,
                     &decisions[block].motion);
             }
-            decisions[block].mode = SPLIT_MODE_SPATIAL;
             fill_tentative_copy2x2(
                 reconstructed, reconstructed, tentative, x, y,
                 block_x, block_y, &decisions[block].motion,
@@ -736,13 +828,12 @@ static int block_matches_data_reconstruction(const MbFrame *source,
                                              const MbFrame *previous,
                                              unsigned x, unsigned y,
                                              uint8_t u, uint8_t v,
-                                             const MbQualityThresholds *quality)
+                                             const MbQualityThresholds *quality,
+                                             unsigned *error)
 {
-    unsigned error;
-
     /* `u` and `v` are the block averages a data block would actually decode. */
     return mb_quality_match_format19(
-        source, x, y, previous, x, y, 4U, u, v, quality, &error);
+        source, x, y, previous, x, y, 4U, u, v, quality, error);
 }
 
 static int temporal_block_matches(const MbFrame *source,
@@ -767,7 +858,7 @@ static int temporal_block_matches(const MbFrame *source,
 static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
                             unsigned x, unsigned y, uint8_t u, uint8_t v,
                             const MbQualityThresholds *quality,
-                            MbMotionVector *motion)
+                            MbMotionVector *motion, unsigned *matched_error)
 {
     unsigned best_error = UINT32_MAX;
     unsigned index;
@@ -787,7 +878,11 @@ static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
             best_error = error;
         }
     }
-    return best_error != UINT32_MAX;
+    if (best_error == UINT32_MAX) {
+        return 0;
+    }
+    *matched_error = best_error;
+    return 1;
 }
 
 static void copy_temporal4x4(const MbFrame *previous, MbFrame *reconstructed,
@@ -834,7 +929,7 @@ static int find_spatial4x4(const MbFrame *source,
                            const MbFrame *reconstructed, unsigned x,
                            unsigned y, uint8_t u, uint8_t v,
                            const MbQualityThresholds *quality,
-                           MbMotionVector *motion)
+                           MbMotionVector *motion, unsigned *matched_error)
 {
     unsigned best_error = UINT32_MAX;
     unsigned index;
@@ -855,7 +950,11 @@ static int find_spatial4x4(const MbFrame *source,
             best_error = error;
         }
     }
-    return best_error != UINT32_MAX;
+    if (best_error == UINT32_MAX) {
+        return 0;
+    }
+    *matched_error = best_error;
+    return 1;
 }
 
 static void copy_spatial4x4(MbFrame *reconstructed, unsigned x, unsigned y,
@@ -876,6 +975,61 @@ static void copy_spatial4x4(MbFrame *reconstructed, unsigned x, unsigned y,
                                       source_x + column];
         }
     }
+}
+
+static CopyCandidate select_copy4x4(
+    const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, unsigned x, unsigned y, uint8_t u,
+    uint8_t v, int allow_stationary, int allow_temporal, int allow_spatial,
+    const MbQualityThresholds *quality, CodecSuperMovingBlocksPolicy policy)
+{
+    CopyCandidate selected = {
+        SPLIT_MODE_DATA, { 0, 0, 0 }, 0U, 0U, 0U, 0
+    };
+    CopyCandidate candidate;
+    unsigned error;
+
+    if (allow_stationary && block_matches_data_reconstruction(
+            source, previous, x, y, u, v, quality, &error)) {
+        selected = (CopyCandidate){
+            SPLIT_MODE_STATIONARY, { 0, 0, 0 }, error, 2U, 0U, 1
+        };
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+            return selected;
+        }
+    }
+
+    candidate = (CopyCandidate){
+        SPLIT_MODE_TEMPORAL, { 0, 0, 0 }, 0U, 0U, 1U, 0
+    };
+    if (allow_temporal && find_temporal4x4(
+            source, previous, x, y, u, v, quality,
+            &candidate.motion, &error)) {
+        candidate.error = error;
+        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
+        candidate.valid = 1;
+        if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
+            return candidate;
+        }
+        if (candidate_better(&candidate, &selected)) {
+            selected = candidate;
+        }
+    }
+
+    candidate = (CopyCandidate){
+        SPLIT_MODE_SPATIAL, { 0, 0, 1 }, 0U, 0U, 2U, 0
+    };
+    if (allow_spatial && find_spatial4x4(
+            source, reconstructed, x, y, u, v, quality,
+            &candidate.motion, &error)) {
+        candidate.error = error;
+        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
+        candidate.valid = 1;
+        if (candidate_better(&candidate, &selected)) {
+            selected = candidate;
+        }
+    }
+    return selected;
 }
 
 static void copy_block4x4(const MbFrame *source, MbFrame *destination,
@@ -961,6 +1115,9 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     int allow_temporal = options != NULL && options->allow_temporal != 0;
     int allow_spatial = options != NULL && options->allow_spatial != 0;
     int allow_split = options != NULL && options->allow_split != 0;
+    CodecSuperMovingBlocksPolicy policy =
+        options != NULL ? options->policy
+                        : CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED;
     unsigned y;
 
     if (output == NULL) {
@@ -971,7 +1128,9 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                               &quality) != REPLAY_OK) {
         return REPLAY_INVALID_ARGUMENT;
     }
-    if (!valid_frame_pair(source, reconstructed) ||
+    if ((policy != CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED &&
+         policy != CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR) ||
+        !valid_frame_pair(source, reconstructed) ||
         !valid_source_samples(source) ||
         ((allow_stationary || allow_temporal) &&
          (previous == NULL || previous->pixels == NULL ||
@@ -991,7 +1150,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
         for (x = 0; x < source->width; x += 4U) {
             uint8_t u = average_chroma4x4(source, x, y, 0);
             uint8_t v = average_chroma4x4(source, x, y, 1);
-            MbMotionVector motion;
+            CopyCandidate copy;
             ReplayStatus status;
 
             /*
@@ -1000,36 +1159,35 @@ ReplayStatus codec_supermovingblocks_encode_frame(
              * bitstream rule. Searches within temporal and spatial choose the
              * lowest accepted error, retaining table order on equal error.
              */
-            if (allow_stationary && block_matches_data_reconstruction(
-                                        source, previous, x, y, u, v,
-                                        &quality)) {
+            copy = select_copy4x4(
+                source, previous, reconstructed, x, y, u, v,
+                allow_stationary, allow_temporal, allow_spatial,
+                &quality, policy);
+            if (copy.mode == SPLIT_MODE_STATIONARY) {
                 status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
                 if (status == REPLAY_OK) {
                     copy_block4x4(previous, reconstructed, x, y);
                     ++local_stats.stationary4x4_blocks;
                 }
-            } else if (allow_temporal &&
-                       find_temporal4x4(source, previous, x, y, u, v,
-                                       &quality, &motion)) {
+            } else if (copy.mode == SPLIT_MODE_TEMPORAL) {
                 status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
                 if (status == REPLAY_OK) {
                     status = mb_motion_write_format19(
-                        &writer, MB_MOTION_BLOCK_4X4, &motion);
+                        &writer, MB_MOTION_BLOCK_4X4, &copy.motion);
                 }
                 if (status == REPLAY_OK) {
-                    copy_temporal4x4(previous, reconstructed, x, y, &motion);
+                    copy_temporal4x4(
+                        previous, reconstructed, x, y, &copy.motion);
                     ++local_stats.temporal4x4_blocks;
                 }
-            } else if (allow_spatial &&
-                       find_spatial4x4(source, reconstructed, x, y, u, v,
-                                      &quality, &motion)) {
+            } else if (copy.mode == SPLIT_MODE_SPATIAL) {
                 status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
                 if (status == REPLAY_OK) {
                     status = mb_motion_write_format19(
-                        &writer, MB_MOTION_BLOCK_4X4, &motion);
+                        &writer, MB_MOTION_BLOCK_4X4, &copy.motion);
                 }
                 if (status == REPLAY_OK) {
-                    copy_spatial4x4(reconstructed, x, y, &motion);
+                    copy_spatial4x4(reconstructed, x, y, &copy.motion);
                     ++local_stats.spatial4x4_blocks;
                 }
             } else {
@@ -1052,7 +1210,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                     status = build_split_data_candidate(
                         source, x, y, previous, reconstructed,
                         allow_stationary, allow_temporal, allow_spatial,
-                        &quality,
+                        policy, &quality,
                         &predictor, &split_candidate, &split_predictor,
                         split_decisions, &split_bits);
                 }
@@ -1145,7 +1303,9 @@ ReplayStatus codec_supermovingblocks_encode_data_frame(
     const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
     size_t *bits_written)
 {
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 0, 0, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 0, 0, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayStatus status = codec_supermovingblocks_encode_frame(
         source, NULL, &options, output, reconstructed, &stats);

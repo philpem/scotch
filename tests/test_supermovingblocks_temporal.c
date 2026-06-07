@@ -15,7 +15,9 @@ int main(void)
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 1, 0, 0, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        1, 1, 0, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t row;
@@ -48,6 +50,35 @@ int main(void)
     CHECK(payload.size == 2U);
     CHECK(payload.data[0] == UINT8_C(0x42));
     CHECK(payload.data[1] == UINT8_C(0x00));
+    CHECK(codec_supermovingblocks_verify_frame(
+              payload.data, payload.size, &previous, &decoded,
+              NULL, NULL) == REPLAY_OK);
+    CHECK(memcmp(reconstructed_pixels, decoded_pixels,
+                 sizeof(decoded_pixels)) == 0);
+
+    /*
+     * At level 8 the left block's same-position error of one per pixel is
+     * acceptable. Ordered policy therefore takes its two-bit stationary
+     * representation, while lowest-error finds the exact (+1,0) temporal
+     * reconstruction. The unchanged right block remains stationary in both.
+     */
+    options.loss_level = 8U;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.stationary4x4_blocks == 2U);
+    CHECK(stats.temporal4x4_blocks == 0U);
+    CHECK(memcmp(reconstructed_pixels, source_pixels,
+                 sizeof(source_pixels)) != 0);
+
+    options.policy = CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.stationary4x4_blocks == 1U);
+    CHECK(stats.temporal4x4_blocks == 1U);
+    CHECK(memcmp(reconstructed_pixels, source_pixels,
+                 sizeof(source_pixels)) == 0);
     CHECK(codec_supermovingblocks_verify_frame(
               payload.data, payload.size, &previous, &decoded,
               NULL, NULL) == REPLAY_OK);

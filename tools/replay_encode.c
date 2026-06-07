@@ -36,6 +36,7 @@ static void usage(FILE *stream)
             "(--payload FILE | --payload-prefix PREFIX) "
             "[--input-format rgb24|6y5uv] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
+            "[--policy ordered|lowest-error] "
             "[--target-bytes N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
 }
@@ -175,7 +176,8 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        const CodecSuperMovingBlocksEncodeStats *stats,
                        const MbFrame *source, const MbFrame *reconstructed,
                        size_t bytes, unsigned loss_level, unsigned retry,
-                       size_t target_min, size_t target_max)
+                       size_t target_min, size_t target_max,
+                       CodecSuperMovingBlocksPolicy policy)
 {
     MbFrameMetrics metrics;
 
@@ -190,6 +192,7 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
     if (fprintf(trace,
                 "frame=%zu codec=19 size=%ux%u retry=%u loss_level=%u "
                 "name=\"Super Moving Blocks\" "
+                "policy=%s "
                 "target_min=%zu target_max=%zu data4x4=%zu "
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
@@ -201,6 +204,8 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 "max_error_y=%u max_error_u=%u max_error_v=%u "
                 "verify=ok\n",
                 frame_number, width, height, retry, loss_level,
+                policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
+                    ? "lowest-error" : "ordered",
                 target_min, target_max, stats->data4x4_blocks,
                 stats->stationary4x4_blocks, stats->temporal4x4_blocks,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
@@ -243,6 +248,8 @@ int main(int argc, char **argv)
     size_t target_bytes = 0U;
     size_t frame_limit = 0U;
     InputFormat input_format = INPUT_RGB24;
+    CodecSuperMovingBlocksPolicy policy =
+        CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
     int data_only = 0;
     uint8_t *rgb = NULL;
     MbPixel *source_pixels = NULL;
@@ -309,6 +316,17 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
             loss_level = (unsigned)value;
+        } else if (strcmp(argv[i], "--policy") == 0 && i + 1 < argc) {
+            const char *name = argv[++i];
+
+            if (strcmp(name, "ordered") == 0) {
+                policy = CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED;
+            } else if (strcmp(name, "lowest-error") == 0) {
+                policy = CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
         } else if (strcmp(argv[i], "--target-bytes") == 0 && i + 1 < argc) {
             char *end;
             unsigned long long value = strtoull(argv[++i], &end, 10);
@@ -388,7 +406,8 @@ int main(int argc, char **argv)
             !data_only && frame_number != 0U,
             !data_only,
             !data_only,
-            current_loss_level
+            current_loss_level,
+            policy
         };
         CodecSuperMovingBlocksEncodeStats stats;
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
@@ -450,7 +469,8 @@ int main(int argc, char **argv)
                     &reconstructed, payload.size,
                     options.loss_level, retry,
                     target_bytes != 0U ? rate_control.target_min_bytes : 0U,
-                    target_bytes != 0U ? rate_control.target_max_bytes : 0U) !=
+                    target_bytes != 0U ? rate_control.target_max_bytes : 0U,
+                    options.policy) !=
                 EXIT_SUCCESS) {
                 goto free_payload;
             }

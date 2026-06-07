@@ -118,6 +118,11 @@ exact copy matches. `--data-only` disables copy and split decisions, and
 `--frames N` requires exactly N input frames. The output files remain raw
 codec payloads rather than an undocumented temporary container.
 
+The default `--policy lowest-error` compares every accepted stationary,
+temporal, and spatial copy by decoder-visible error, then emitted bits, then a
+stable family/table order. `--policy ordered` preserves the earlier portable
+stationary-then-temporal-then-spatial behavior for regression comparisons.
+
 `--target-bytes N` enables Acorn-style whole-frame retries after the first
 frame. The accepted size window is 90% through 102.5% of the target. The
 encoder moves one loss level per retry, keeps the initial direction to avoid

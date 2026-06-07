@@ -100,13 +100,20 @@ gives:
 | Encoder | Payload bytes | Y PSNR | U PSNR | V PSNR | Maximum Y error |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Acorn | 181,885 | 45.221729 dB | 19.498089 dB | 27.730550 dB | 2 |
-| Portable | 181,220 | 42.765507 dB | 18.689158 dB | 27.071052 dB | 2 |
+| Portable ordered | 181,220 | 42.765507 dB | 18.689158 dB | 27.071052 dB | 2 |
+| Portable lowest-error | 179,656 | 45.236548 dB | 19.258155 dB | 27.268218 dB | 2 |
 
-The portable result is 665 bytes, or 0.366%, smaller, but its luma PSNR is
-2.456 dB lower. This is the expected consequence of its simple ordered policy,
-not evidence of a better rate-distortion result. It accepts stationary before
-considering other families and does not compare the winning temporal and
-spatial errors against each other.
+The portable ordered result is 665 bytes, or 0.366%, smaller, but its luma
+PSNR is 2.456 dB lower. This is the expected consequence of its simple ordered
+policy, not evidence of a better rate-distortion result. It accepts stationary
+before considering other families and does not compare the winning temporal
+and spatial errors against each other.
+
+The cross-family lowest-error policy removes that regression. It is 2,229
+bytes, or 1.225%, smaller than Acorn while its luma PSNR is 0.015 dB higher.
+Relative to ordered it saves 1,564 bytes and gains 2.471 dB luma PSNR. Its
+chroma PSNR remains below Acorn by 0.240 dB U and 0.462 dB V, so this one chunk
+does not establish universal rate-distortion superiority.
 
 The mode counts make that policy difference visible:
 
@@ -122,10 +129,17 @@ The mode counts make that policy difference visible:
 | Temporal 2x2 | 49,507 | 53,481 |
 | Spatial 2x2 | 11,328 | 3,279 |
 
-The portable encoder therefore over-selects stationary modes and substantially
-under-selects spatial modes. The next policy experiment should select the
-lowest-error accepted candidate across stationary, temporal, and spatial
-families, using emitted bits and stable table order as explicit tie-breakers.
+With lowest-error, the corresponding counts are 3,412 data, 686 stationary,
+7,916 temporal, 1,004 spatial, and 18,982 split top-level blocks. Split
+children comprise 13,242 data, 2,638 stationary, 53,428 temporal, and 6,620
+spatial blocks. This moves the family distribution substantially toward
+Acorn's decisions without attempting exact decision parity.
+
+The earlier ordered encoder therefore over-selects stationary modes and
+substantially under-selects spatial modes. `lowest-error` is now implemented
+for both 4x4 blocks and split 2x2 children, using emitted bits and stable
+family/table order as explicit tie-breakers. It is the command-line default;
+`--policy ordered` retains the previous behavior for comparison.
 
 This run also exposed an availability rule that must be enforced independently
 of policy. A split 2x2 spatial vector may point upward and right into a future

@@ -115,7 +115,9 @@ static int make_temporal4x4(const char *directory)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 1, 0, 0, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        1, 1, 0, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     unsigned y;
 
@@ -143,7 +145,9 @@ static int make_spatial4x4(const char *directory)
     MbPixel reconstructed_pixels[32];
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 0, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 0, 1, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     unsigned y;
 
@@ -170,7 +174,9 @@ static int make_temporal2x2(const char *directory)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 1, 0, 1, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 1, 0, 1, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     size_t i;
 
@@ -198,7 +204,9 @@ static int make_spatial2x2(const char *directory)
     MbPixel reconstructed_pixels[32];
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 1, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 0, 1, 1, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     size_t i;
 
@@ -226,7 +234,9 @@ static int make_lossy_split(const char *directory)
     MbFrame source = { 4U, 4U, 4U, source_pixels };
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, reconstructed_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 1, 7U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        1, 0, 0, 1, 7U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     size_t i;
 

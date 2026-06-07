@@ -16,6 +16,8 @@ this file describes the current portable code in `replay-tooling`.
 - RGB24 to CompLib-style non-dithered `6Y5UV` conversion.
 - Deterministic type 19, Super Moving Blocks encoding with reconstructed-frame
   feedback.
+- Selectable `lowest-error` and legacy `ordered` copy-family policies;
+  lowest-error is the command-line default.
 - Stationary, temporal, and spatial matching at loss levels `0..28`.
 - Real bit-cost comparison between 4x4 data and a four-quadrant split.
 - Whole-frame target-byte retries using configurable floating-point window
@@ -70,8 +72,11 @@ this file describes the current portable code in `replay-tooling`.
   container is invented.
 - Source-matched measurement shows the current ordered policy is 0.366%
   smaller than Acorn on the first comparison chunk but 2.456 dB worse in luma
-  PSNR. It selects many more stationary and far fewer spatial blocks. A
-  cross-family lowest-error policy is the next planned experiment.
+  PSNR. It selects many more stationary and far fewer spatial blocks.
+- The cross-family lowest-error policy is the default portable approach.
+- On the same chunk, lowest-error emits 179,656 bytes, 1.225% below Acorn,
+  with 45.236548 dB luma PSNR versus Acorn's 45.221729 dB. U and V PSNR remain
+  0.240 dB and 0.462 dB below Acorn respectively.
 
 ## Known Gaps
 

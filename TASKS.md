@@ -66,10 +66,10 @@
 - [x] Establish `LionFish2,ae7` as the exact source and capture its authoritative
   uncompressed word stream through the type 2 intermediate.
 - [x] Add per-block decoder traces and native 6Y5UV quality metrics.
-- [ ] Implement and measure a cross-family lowest-error policy, with emitted
+- [x] Implement and measure a cross-family lowest-error policy, with emitted
   bits and stable table order as documented tie-breakers.
-- [ ] Add selectable `--policy portable|acorn` encoder policy after comparison
-  data justifies and defines the Acorn-compatible behavior.
+- [ ] Add an exact `--policy acorn` mode if later decision traces justify and
+  define behavior beyond the existing `lowest-error` and `ordered` policies.
 
 ## Milestone 5: Data-Only Encoder
 

@@ -15,7 +15,9 @@ int main(void)
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, reconstructed_pixels };
     MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 1, 0, 0, 1, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        1, 0, 0, 1, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;

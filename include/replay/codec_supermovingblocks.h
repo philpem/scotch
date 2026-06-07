@@ -6,6 +6,13 @@
 
 extern const MbHuffmanTable codec_supermovingblocks_luma_huffman;
 
+typedef enum {
+    /* Historical portable behavior: stationary, temporal, then spatial. */
+    CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED,
+    /* Compare accepted copy families by error, then encoded size. */
+    CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
+} CodecSuperMovingBlocksPolicy;
+
 /*
  * These switches enable alternatives to a 4x4 data block. At loss level 0 a
  * copy is used only when it reconstructs exactly the same quantised pixels as
@@ -24,6 +31,8 @@ typedef struct {
     int allow_split;
     /* 0 is exact; 28 is the loosest source-defined QP% row. */
     unsigned loss_level;
+    /* Selects how accepted copy families compete; syntax is unchanged. */
+    CodecSuperMovingBlocksPolicy policy;
 } CodecSuperMovingBlocksEncodeOptions;
 
 /* Counts describe the selected stream, not the candidates considered. */

@@ -33,7 +33,9 @@ static int test_temporal_2x2(void)
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 1, 0, 1, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 1, 0, 1, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;
@@ -62,6 +64,45 @@ static int test_temporal_2x2(void)
               NULL, NULL) == REPLAY_OK);
     CHECK(memcmp(reconstructed_pixels, decoded_pixels,
                  sizeof(decoded_pixels)) == 0);
+
+    /*
+     * Make the top-left child's stationary reconstruction acceptable but one
+     * luma step worse than its exact temporal match. Other children retain
+     * different motion so the parent cannot collapse to one 4x4 copy.
+     */
+    previous_pixels[0].y = 10U;
+    previous_pixels[1].y = 11U;
+    previous_pixels[2].y = 12U;
+    previous_pixels[8].y = 20U;
+    previous_pixels[9].y = 21U;
+    previous_pixels[10].y = 22U;
+    copy_2x2(source_pixels, 8U, 0U, 0U, previous_pixels, 8U, 1U, 0U);
+    copy_2x2(source_pixels, 8U, 2U, 0U, previous_pixels, 8U, 0U, 0U);
+    copy_2x2(source_pixels, 8U, 0U, 2U, previous_pixels, 8U, 1U, 1U);
+    copy_2x2(source_pixels, 8U, 2U, 2U, previous_pixels, 8U, 0U, 1U);
+    options.allow_stationary = 1;
+    options.loss_level = 8U;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.split4x4_blocks >= 1U);
+    CHECK(stats.stationary2x2_blocks >= 1U);
+    CHECK(reconstructed_pixels[0].y != source_pixels[0].y);
+
+    options.policy = CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
+    CHECK(codec_supermovingblocks_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed,
+              &stats) == REPLAY_OK);
+    CHECK(stats.split4x4_blocks >= 1U);
+    CHECK(memcmp(reconstructed_pixels, source_pixels,
+                 2U * sizeof(*source_pixels)) == 0);
+    CHECK(memcmp(reconstructed_pixels + 8U, source_pixels + 8U,
+                 2U * sizeof(*source_pixels)) == 0);
+    CHECK(codec_supermovingblocks_verify_frame(
+              payload.data, payload.size, &previous, &decoded,
+              NULL, NULL) == REPLAY_OK);
+    CHECK(memcmp(reconstructed_pixels, decoded_pixels,
+                 sizeof(decoded_pixels)) == 0);
     replay_buffer_free(&payload);
     return EXIT_SUCCESS;
 }
@@ -74,7 +115,9 @@ static int test_spatial_2x2_key_frame(void)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
-    CodecSuperMovingBlocksEncodeOptions options = { 0, 0, 1, 1, 0U };
+    CodecSuperMovingBlocksEncodeOptions options = {
+        0, 0, 1, 1, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+    };
     CodecSuperMovingBlocksEncodeStats stats;
     ReplayBuffer payload;
     size_t i;

@@ -95,20 +95,21 @@ Five-bit U/V values are converted from their modulo representation to signed
 This makes the reported metrics properties of the codec reconstruction rather
 than of a later RGB conversion.
 
-## Future Policy Selection
+## Policy Selection
 
 The intended command-line shape is:
 
 ```text
---policy portable
---policy acorn
+--policy lowest-error
+--policy ordered
 ```
 
-`portable` will remain the default policy unless measurements show a material
-regression. `acorn` may later reproduce Acorn's cross-family best-error search
-and tie behavior for comparison or archival output. Both policies must emit
-the same type 19, Super Moving Blocks bitstream syntax and use the same quality
-acceptance table.
+`lowest-error` is the default and compares accepted copy candidates by
+decoder-visible error, emitted bits, then stable family/table order. `ordered`
+retains the earlier portable stationary, temporal, spatial family priority.
+An exact Acorn-compatible policy may still be added later for archival output.
+All policies emit the same type 19 (Super Moving Blocks) syntax and use the
+same source-derived quality table.
 
 ## Confirmed Source And Type 2 Intermediate
 
