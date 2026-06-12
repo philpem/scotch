@@ -92,6 +92,10 @@ before writing the payload. A first/key frame cannot use temporal modes, but it
 may use spatial and split modes unless `--data-only` is supplied. Single-frame
 mode requires EOF after that frame.
 
+See [docs/ffmpeg-input.md](docs/ffmpeg-input.md) for a production-oriented
+pipeline covering frame rate, aspect-ratio-preserving scale/pad, exact frame
+sizing, partial input, and pipeline error propagation.
+
 For comparison inputs already expressed in the codec's native packed byte
 triplets, use `--input-format 6y5uv`. The default remains `rgb24`; native input
 is range-checked and avoids an unnecessary RGB conversion.
@@ -177,8 +181,18 @@ build/replay-extract --input movie,ae7 --output-prefix source/frame- \
 historical type 19 (Super Moving Blocks) compressor saw. It does not claim to
 convert the type 2 movie's RGB555, YUV555, or 6Y5UV colour space. The option is
 mandatory so this potentially surprising interpretation cannot happen
-silently. Other uncompressed Replay formats are not yet unpacked; type 23
-(`6Y6Y5U5V`) is the next planned native format.
+silently.
+
+Type 23 (`6Y6Y5U5V`) packed 4:2:2 can be extracted with:
+
+```sh
+build/replay-extract --input movie,ae7 --output-prefix source/frame- \
+    --type23-layout 6y6y5u5v
+```
+
+Each horizontal pair has two six-bit luma samples and one shared five-bit U/V
+pair, with no vertical chroma subsampling. Extracted output expands the shared
+chroma to both pixels as packed `Y,U,V` triplets.
 
 ## Acorn Cross-Check
 

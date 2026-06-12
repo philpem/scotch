@@ -43,6 +43,13 @@ this file describes the current portable code in `replay-tooling`.
   movies, with explicitly named type 19 field reinterpretation.
 - Compiled type 7 (Moving Blocks) source decoding, including raw output words
   and native 16-bit key-frame initialization.
+- Source-derived type 23, 6Y6Y5U5V packed 4:2:2 packing and unpacking, plus
+  fixed-frame AE7 extraction through explicit `--type23-layout 6y6y5u5v`.
+- Type 23 unpacking cross-checked against Acorn's compiled Decomp23 under
+  Unicorn, including the classic ARM unaligned-LDM behavior between 44-bit
+  four-pixel groups.
+- A tested FFmpeg RGB24 raw-pipe workflow with documented frame-rate, scaling,
+  aspect-ratio, exact-size, EOF, and shell error-propagation requirements.
 
 ## Verified Claims
 
@@ -112,8 +119,9 @@ this file describes the current portable code in `replay-tooling`.
 - Type 2 extraction requires `--type2-layout type19-fields`. It interprets a
   stored halfword as `Y[5:0], U[10:6], V[15:11]` to reproduce the historical
   type 19 compressor input; it is not a general RGB555/YUV555/6Y5UV converter.
-- No other uncompressed Replay format is decoded yet. Type 23, 6Y6Y5U5V, is
-  the first planned addition; types 8 and 21 may map usefully to FFmpeg RGB24,
+- Type 23, 6Y6Y5U5V, is packed 4:2:2 rather than full per-pixel YUV: two
+  horizontal six-bit luma samples share one five-bit U/V pair, with no vertical
+  chroma subsampling. Types 8 and 21 may also map usefully to FFmpeg RGB24,
   YUV24, or YUYV pipelines after their exact packing is verified.
 - Selecting the historical compressor colour-space label `6YVUV` has been
   observed to produce an unplayable movie. The cause is unconfirmed, so new

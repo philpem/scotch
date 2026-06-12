@@ -5,12 +5,14 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_buffer.h"
 #include "replay/replay_type2.h"
+#include "replay/replay_type23.h"
 
 static void usage(FILE *stream)
 {
     fprintf(stream,
             "usage: replay-extract --input MOVIE --output-prefix PREFIX "
-            "--type2-layout type19-fields\n");
+            "(--type2-layout type19-fields | "
+            "--type23-layout 6y6y5u5v)\n");
 }
 
 static int read_file(const char *path, ReplayBuffer *buffer)
@@ -97,6 +99,7 @@ int main(int argc, char **argv)
     ReplayStatus status;
     int result = EXIT_FAILURE;
     int type19_fields = 0;
+    int type23_422 = 0;
     int i;
 
     for (i = 1; i < argc; ++i) {
@@ -108,12 +111,18 @@ int main(int argc, char **argv)
                    strcmp(argv[i + 1], "type19-fields") == 0) {
             ++i;
             type19_fields = 1;
+        } else if (strcmp(argv[i], "--type23-layout") == 0 &&
+                   i + 1 < argc &&
+                   strcmp(argv[i + 1], "6y6y5u5v") == 0) {
+            ++i;
+            type23_422 = 1;
         } else {
             usage(stderr);
             return EXIT_FAILURE;
         }
     }
-    if (input_path == NULL || output_prefix == NULL || !type19_fields) {
+    if (input_path == NULL || output_prefix == NULL ||
+        type19_fields == type23_422) {
         usage(stderr);
         return EXIT_FAILURE;
     }
@@ -128,9 +137,10 @@ int main(int argc, char **argv)
                 replay_status_string(status), error);
         goto done;
     }
-    status = replay_type2_frame_count(&movie, &count);
+    status = type19_fields ? replay_type2_frame_count(&movie, &count)
+                           : replay_type23_frame_count(&movie, &count);
     if (status != REPLAY_OK) {
-        fprintf(stderr, "%s: unsupported type 2 layout: %s\n", input_path,
+        fprintf(stderr, "%s: unsupported selected layout: %s\n", input_path,
                 replay_status_string(status));
         replay_ae7_movie_destroy(&movie);
         goto done;
@@ -152,8 +162,11 @@ int main(int argc, char **argv)
             movie.width, movie.height, movie.width, pixels
         };
 
-        status = replay_type2_unpack_type19_fields(
-            input.data, input.size, &movie, index, &frame);
+        status = type19_fields
+                     ? replay_type2_unpack_type19_fields(
+                           input.data, input.size, &movie, index, &frame)
+                     : replay_type23_unpack_frame(
+                           input.data, input.size, &movie, index, &frame);
         if (status != REPLAY_OK ||
             write_frame(output_prefix, index, &frame) != EXIT_SUCCESS) {
             if (status != REPLAY_OK) {
@@ -165,9 +178,15 @@ int main(int argc, char **argv)
             goto done;
         }
     }
-    printf("codec=2 name=\"16 bit colour uncompressed\" frames=%zu "
-           "size=%ux%u layout=type19-fields\n",
-           count, movie.width, movie.height);
+    if (type19_fields) {
+        printf("codec=2 name=\"16 bit colour uncompressed\" frames=%zu "
+               "size=%ux%u layout=type19-fields\n",
+               count, movie.width, movie.height);
+    } else {
+        printf("codec=23 name=\"6Y6Y5U5V packed 4:2:2\" frames=%zu "
+               "size=%ux%u layout=6y6y5u5v\n",
+               count, movie.width, movie.height);
+    }
     free(pixels);
     replay_ae7_movie_destroy(&movie);
     result = EXIT_SUCCESS;

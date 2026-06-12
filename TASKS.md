@@ -114,11 +114,13 @@
 ## Milestone 8: Modern Input And Uncompressed Formats
 
 - [x] Accept raw RGB24 from an FFmpeg pipe.
-- [ ] Document tested FFmpeg commands, frame sizing, and pipe error handling.
+- [x] Document and test FFmpeg commands, frame sizing, aspect handling, EOF,
+  and pipe error propagation.
 - [ ] Decide whether direct libavformat/libavcodec integration adds enough
   value over the raw pipe to justify an optional dependency.
-- [ ] Implement type 23, 6Y6Y5U5V, input and output first.
-- [ ] Verify the exact type 23 packing against the Acorn decompressor.
+- [x] Implement type 23, 6Y6Y5U5V packed 4:2:2 frame packing, unpacking, and
+  AE7 extraction.
+- [x] Verify the exact type 23 packing against the compiled Acorn decompressor.
 - [ ] Evaluate types 8 and 21 for direct FFmpeg RGB24/YUV24/YUYV interchange.
 - [ ] Keep type 2 `type19-fields` as an explicit reinterpretation; do not
   silently present it as RGB555, YUV555, or general 6Y5UV conversion.

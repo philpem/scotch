@@ -12,6 +12,7 @@ add_library(replay STATIC
     src/replay_bitstream.c
     src/replay_ae7.c
     src/replay_type2.c
+    src/replay_type23.c
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
@@ -77,6 +78,7 @@ add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)
+add_replay_test(test_replay_type23 tests/test_replay_type23.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
 add_replay_test(test_mb_codecs tests/test_mb_codecs.c)
 add_replay_test(test_mb_motion tests/test_mb_motion.c)
@@ -123,6 +125,14 @@ add_test(NAME test_format19_corpus
         $<TARGET_FILE:replay-verify>)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
+find_program(FFMPEG_EXECUTABLE ffmpeg)
+if(FFMPEG_EXECUTABLE)
+    add_test(NAME test_ffmpeg_pipe
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ffmpeg_pipe.sh
+            ${FFMPEG_EXECUTABLE}
+            $<TARGET_FILE:replay-encode>
+            $<TARGET_FILE:replay-verify>)
+endif()
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_mb19_quality_sweep
         COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_mb19_quality_sweep.sh
@@ -148,5 +158,16 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP19_COMPILED})
+    endif()
+    set(DECOMP23_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-23 Decompress file")
+    if(EXISTS "${DECOMP23_COMPILED}")
+        add_test(NAME test_decomp23_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp23_compiled.sh
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP23_COMPILED})
     endif()
 endif()

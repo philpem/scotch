@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Acorn's generated Moving Blocks decompressors under Unicorn.
+"""Run selected Acorn generated video decompressors under Unicorn.
 
 A compiled binary is bundled under !ARMovie_compiled/Decomp19. Another binary
 with the same CodecIf contract may be supplied explicitly. The harness leaves
@@ -105,6 +105,36 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
     address. Acorn ARM cores ignored the low address bits; the surrounding ARM
     shifts then selected the requested bit position within aligned words.
     """
+    if codec == 23:
+        instruction = bytes.fromhex("e00095e8")  # LDMIA r5,{r5,r6,r7}
+        offsets = [
+            offset for offset in range(len(decompressor))
+            if decompressor.startswith(instruction, offset)
+        ]
+        if len(offsets) != 1:
+            raise ValueError(
+                "unexpected type-23 LDM signature count: "
+                f"found {len(offsets)}, expected 1"
+            )
+
+        def emulate_type23(machine: Uc, current: int, size: int,
+                           unused: object) -> None:
+            source = machine.reg_read(UC_ARM_REG_R5)
+            if source & 3:
+                first, second, third = struct.unpack(
+                    "<III", bytes(machine.mem_read(source & ~3, 12))
+                )
+                machine.reg_write(UC_ARM_REG_R5, first)
+                machine.reg_write(UC_ARM_REG_R6, second)
+                machine.reg_write(UC_ARM_REG_R7, third)
+                machine.reg_write(UC_ARM_REG_R15, current + size)
+
+        address = CODE_BASE + offsets[0]
+        machine.hook_add(
+            UC_HOOK_CODE, emulate_type23, None, address, address
+        )
+        return
+
     lookaheads = {
         # Format 19 has four header sites; format 7 has five decoder paths.
         bytes.fromhex("600097e8"): (4 if codec == 19 else 5, UC_ARM_REG_R7,
@@ -275,7 +305,7 @@ def run(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--decompressor", required=True, type=Path)
-    parser.add_argument("--codec", type=int, choices=(7, 19), default=19)
+    parser.add_argument("--codec", type=int, choices=(7, 19, 23), default=19)
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--size", required=True)
     previous_group = parser.add_mutually_exclusive_group()
