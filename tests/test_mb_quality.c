@@ -7,11 +7,14 @@
 int main(void)
 {
     MbQualityThresholds thresholds;
+    MbQualityProfile profile;
     MbPixel target_pixels[16] = { { 10U, 0U, 0U } };
     MbPixel reference_pixels[16] = { { 10U, 0U, 0U } };
     MbFrame target = { 4U, 4U, 4U, target_pixels };
     MbFrame reference = { 4U, 4U, 4U, reference_pixels };
     unsigned error;
+    unsigned profiled_error;
+    unsigned level;
     size_t i;
 
     for (i = 0U; i < 16U; ++i) {
@@ -30,6 +33,24 @@ int main(void)
     CHECK(!mb_quality_match_format19(
               &target, 0U, 0U, &reference, 0U, 0U, 4U, 0U, 0U,
               &thresholds, &error));
+
+    /* A cached profile must reproduce the direct matcher at every row. */
+    CHECK(mb_quality_profile_format19(
+              &target, 0U, 0U, &reference, 0U, 0U, 4U, 0U, 0U,
+              &profile));
+    for (level = 0U; level < MB_QUALITY_LEVEL_COUNT; ++level) {
+        int direct;
+        int cached;
+
+        CHECK(mb_quality_thresholds(level, &thresholds) == REPLAY_OK);
+        direct = mb_quality_match_format19(
+            &target, 0U, 0U, &reference, 0U, 0U, 4U, 0U, 0U,
+            &thresholds, &error);
+        cached = mb_quality_profile_accept(
+            &profile, 4U, &thresholds, &profiled_error);
+        CHECK(direct == cached);
+        CHECK(!direct || error == profiled_error);
+    }
 
     CHECK(mb_quality_thresholds(7U, &thresholds) == REPLAY_OK);
     CHECK(thresholds.max_individual_error == 1U);

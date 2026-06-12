@@ -13,6 +13,11 @@ typedef enum {
     CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
 } CodecSuperMovingBlocksPolicy;
 
+/* Opaque reusable state for searches that are invariant across retries. */
+typedef struct {
+    void *internal;
+} CodecSuperMovingBlocksWorkspace;
+
 /*
  * These switches enable alternatives to a 4x4 data block. At loss level 0 a
  * copy is used only when it reconstructs exactly the same quantised pixels as
@@ -33,9 +38,16 @@ typedef struct {
     unsigned loss_level;
     /* Selects how accepted copy families compete; syntax is unchanged. */
     CodecSuperMovingBlocksPolicy policy;
+    /* Optional; reset once for each new source/previous frame pair. */
+    CodecSuperMovingBlocksWorkspace *workspace;
 } CodecSuperMovingBlocksEncodeOptions;
 
-/* Counts describe the selected stream, not the candidates considered. */
+/*
+ * Block counts describe the selected stream. Evaluation counts are encoder
+ * diagnostics: each records an actual source/reference quality comparison,
+ * excluding motion vectors rejected at a frame boundary before comparison.
+ * They are useful when measuring rate-control retries and search caching.
+ */
 typedef struct {
     size_t data4x4_blocks;
     size_t stationary4x4_blocks;
@@ -46,6 +58,12 @@ typedef struct {
     size_t stationary2x2_blocks;
     size_t temporal2x2_blocks;
     size_t spatial2x2_blocks;
+    size_t stationary4x4_evaluations;
+    size_t temporal4x4_evaluations;
+    size_t spatial4x4_evaluations;
+    size_t stationary2x2_evaluations;
+    size_t temporal2x2_evaluations;
+    size_t spatial2x2_evaluations;
     size_t bits_written;
 } CodecSuperMovingBlocksEncodeStats;
 
@@ -111,6 +129,16 @@ ReplayStatus codec_supermovingblocks_encode_frame(
     const MbFrame *source, const MbFrame *previous,
     const CodecSuperMovingBlocksEncodeOptions *options, ReplayBuffer *output,
     MbFrame *reconstructed, CodecSuperMovingBlocksEncodeStats *stats);
+
+ReplayStatus codec_supermovingblocks_workspace_init(
+    CodecSuperMovingBlocksWorkspace *workspace, unsigned width,
+    unsigned height);
+
+void codec_supermovingblocks_workspace_reset(
+    CodecSuperMovingBlocksWorkspace *workspace);
+
+void codec_supermovingblocks_workspace_destroy(
+    CodecSuperMovingBlocksWorkspace *workspace);
 
 ReplayStatus codec_supermovingblocks_verify_frame(
     const uint8_t *payload, size_t payload_size,

@@ -320,6 +320,9 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu "
                 "split4x4=%zu data2x2=%zu stationary2x2=%zu "
                 "temporal2x2=%zu spatial2x2=%zu "
+                "eval_stationary4x4=%zu eval_temporal4x4=%zu "
+                "eval_spatial4x4=%zu eval_stationary2x2=%zu "
+                "eval_temporal2x2=%zu eval_spatial2x2=%zu "
                 "bits=%zu bytes=%zu "
                 "sse_y=%llu sse_u=%llu sse_v=%llu "
                 "mse_y=%.6f mse_u=%.6f mse_v=%.6f "
@@ -335,6 +338,12 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                 stats->spatial4x4_blocks, stats->split4x4_blocks,
                 stats->data2x2_blocks, stats->stationary2x2_blocks,
                 stats->temporal2x2_blocks, stats->spatial2x2_blocks,
+                stats->stationary4x4_evaluations,
+                stats->temporal4x4_evaluations,
+                stats->spatial4x4_evaluations,
+                stats->stationary2x2_evaluations,
+                stats->temporal2x2_evaluations,
+                stats->spatial2x2_evaluations,
                 stats->bits_written, bytes,
                 (unsigned long long)metrics.squared_error_y,
                 (unsigned long long)metrics.squared_error_u,
@@ -382,6 +391,7 @@ int main(int argc, char **argv)
     MbPixel *previous_pixels = NULL;
     MbPixel *decoded_pixels = NULL;
     ReplayBuffer payload;
+    CodecSuperMovingBlocksWorkspace workspace = { NULL };
     FILE *input = NULL;
     FILE *trace = NULL;
     size_t pixel_count;
@@ -523,6 +533,11 @@ int main(int argc, char **argv)
         }
     }
     replay_buffer_init(&payload);
+    if (codec_supermovingblocks_workspace_init(
+            &workspace, width, height) != REPLAY_OK) {
+        fprintf(stderr, "unable to allocate encoder search workspace\n");
+        goto free_payload;
+    }
     current_loss_level = loss_level;
 
     /*
@@ -543,7 +558,8 @@ int main(int argc, char **argv)
             !data_only,
             !data_only,
             current_loss_level,
-            policy
+            policy,
+            &workspace
         };
         CodecSuperMovingBlocksEncodeStats stats;
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
@@ -564,6 +580,7 @@ int main(int argc, char **argv)
         if (read_result == FRAME_READ_ERROR) {
             goto free_payload;
         }
+        codec_supermovingblocks_workspace_reset(&workspace);
         status = input_format == INPUT_RGB24
                      ? mb_color_rgb24_to_6y5uv(
                            rgb, (size_t)width * 3U, &source)
@@ -579,6 +596,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "invalid rate-control target\n");
             goto free_payload;
         }
+        /* Fixed-level encoding gains nothing from retaining all quality rows. */
+        options.workspace = rate_control_enabled ? &workspace : NULL;
         for (;;) {
             options.loss_level = rate_control_enabled
                                      ? rate_control.loss_level
@@ -687,6 +706,7 @@ int main(int argc, char **argv)
 free_payload:
     replay_buffer_free(&payload);
 done:
+    codec_supermovingblocks_workspace_destroy(&workspace);
     if (trace != NULL && fclose(trace) != 0 && result == EXIT_SUCCESS) {
         perror(trace_path);
         result = EXIT_FAILURE;

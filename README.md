@@ -157,6 +157,12 @@ until the target is crossed, then refine the bracket. Direct CLI users may
 select `linear` to preserve Acorn-style adjacent-row retries. Every probe is
 still independently decoded and checked. Use a release build for corpus
 sweeps; exhaustive motion search is intentionally slow in an `-O0` build.
+The CLI keeps an explicit per-frame temporal-search workspace across retries:
+the first search measures each candidate once and records its result for all
+29 quality rows. Spatial searches are deliberately not cached because their
+reference pixels depend on the reconstruction produced by that retry.
+The five-frame 6,000-byte regression remains byte-identical and performs 53.8%
+fewer temporal pixel comparisons with the cache enabled.
 
 Extract fixed-size frames from a type 2 (16 bit colour uncompressed) Replay
 intermediate with:
@@ -169,7 +175,10 @@ build/replay-extract --input movie,ae7 --output-prefix source/frame- \
 
 `type19-fields` explicitly reinterprets each stored halfword as the fields the
 historical type 19 (Super Moving Blocks) compressor saw. It does not claim to
-convert the type 2 movie's YUV555 colour space.
+convert the type 2 movie's RGB555, YUV555, or 6Y5UV colour space. The option is
+mandatory so this potentially surprising interpretation cannot happen
+silently. Other uncompressed Replay formats are not yet unpacked; type 23
+(`6Y6Y5U5V`) is the next planned native format.
 
 ## Acorn Cross-Check
 

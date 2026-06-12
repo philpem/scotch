@@ -72,8 +72,8 @@
   bitrate aggregation.
 - [x] Add bounded adjacent-first bracketed target search and compare both
   policies at a matched 6,000-byte target over the 25-frame corpus.
-- [ ] Cache or otherwise avoid repeated full motion searches during target-byte
-  retries before running broad full-movie target matrices.
+- [x] Cache temporal motion profiles across target-byte retries, while keeping
+  reconstruction-dependent spatial searches live.
 - [x] Extract all 375 native frames from the validated type 2 `LionFishX,ae7`
   intermediate for full-movie sweeps.
 - [ ] Add an exact `--policy acorn` mode if later decision traces justify and
@@ -111,9 +111,23 @@
 - [ ] Confirm playback using an existing RISC OS Replay player.
 - [ ] Record the smallest accepted container and key-frame requirements.
 
-## Later Codecs
+## Milestone 8: Modern Input And Uncompressed Formats
+
+- [x] Accept raw RGB24 from an FFmpeg pipe.
+- [ ] Document tested FFmpeg commands, frame sizing, and pipe error handling.
+- [ ] Decide whether direct libavformat/libavcodec integration adds enough
+  value over the raw pipe to justify an optional dependency.
+- [ ] Implement type 23, 6Y6Y5U5V, input and output first.
+- [ ] Verify the exact type 23 packing against the Acorn decompressor.
+- [ ] Evaluate types 8 and 21 for direct FFmpeg RGB24/YUV24/YUYV interchange.
+- [ ] Keep type 2 `type19-fields` as an explicit reinterpretation; do not
+  silently present it as RGB555, YUV555, or general 6Y5UV conversion.
+- [ ] Investigate the unplayable output produced by the Acorn compressor's
+  `6YVUV` colour-space selection before copying that conversion path.
+
+## Next Codec Backends
 
 - [ ] Add type 17, Moving Blocks HQ, through `codec_movingblockshq`.
-- [ ] Add type 20, Moving Blocks Beta, through `codec_movingblocksbeta`.
 - [ ] Add type 7, Moving Blocks, through `codec_movingblocks`.
+- [ ] Add type 20, Moving Blocks Beta, through `codec_movingblocksbeta`.
 - [ ] Add Moving Lines as a separate codec core sharing only general tooling.

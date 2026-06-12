@@ -16,9 +16,10 @@ int main(void)
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
     MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
     CodecSuperMovingBlocksEncodeOptions options = {
-        1, 1, 0, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED
+        1, 1, 0, 0, 0U, CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED, NULL
     };
     CodecSuperMovingBlocksEncodeStats stats;
+    CodecSuperMovingBlocksWorkspace workspace = { NULL };
     ReplayBuffer payload;
     size_t row;
 
@@ -40,10 +41,14 @@ int main(void)
     }
 
     replay_buffer_init(&payload);
+    CHECK(codec_supermovingblocks_workspace_init(
+              &workspace, source.width, source.height) == REPLAY_OK);
+    options.workspace = &workspace;
     CHECK(codec_supermovingblocks_encode_frame(
               &source, &previous, &options, &payload, &reconstructed,
               &stats) == REPLAY_OK);
     CHECK(stats.temporal4x4_blocks == 1U);
+    CHECK(stats.temporal4x4_evaluations != 0U);
     CHECK(stats.stationary4x4_blocks == 1U);
     CHECK(stats.data4x4_blocks == 0U);
     CHECK(stats.bits_written == 9U);
@@ -77,6 +82,8 @@ int main(void)
               &stats) == REPLAY_OK);
     CHECK(stats.stationary4x4_blocks == 1U);
     CHECK(stats.temporal4x4_blocks == 1U);
+    /* The level-0 scan populated the same position for every quality row. */
+    CHECK(stats.temporal4x4_evaluations == 0U);
     CHECK(memcmp(reconstructed_pixels, source_pixels,
                  sizeof(source_pixels)) == 0);
     CHECK(codec_supermovingblocks_verify_frame(
@@ -84,6 +91,7 @@ int main(void)
               NULL, NULL) == REPLAY_OK);
     CHECK(memcmp(reconstructed_pixels, decoded_pixels,
                  sizeof(decoded_pixels)) == 0);
+    codec_supermovingblocks_workspace_destroy(&workspace);
     replay_buffer_free(&payload);
     return EXIT_SUCCESS;
 }

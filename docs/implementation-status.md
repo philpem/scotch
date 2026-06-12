@@ -25,7 +25,8 @@ this file describes the current portable code in `replay-tooling`.
 - Selectable linear and adjacent-first bracketed quality-row searches for
   target-byte retries.
 - Raw RGB24 input from a file or FFmpeg pipe, numbered payload output, traces,
-  and reconstructed PPM output.
+  and reconstructed PPM output. Direct libavformat/libavcodec integration is
+  not implemented; the supported FFmpeg path is currently a raw-video pipe.
 - Packed `Y,U,V` corpus import/export and first-pixel comparison diagnostics.
 - Per-block decode traces with exact bit ranges and motion vectors.
 - Native 6Y5UV SSE/MSE, PSNR, and maximum-error metrics in encoder traces and
@@ -100,9 +101,23 @@ this file describes the current portable code in `replay-tooling`.
 - There is no AE7/Replay container writer or player acceptance test. The
   reader currently exposes chunk boundaries; type 19 frame splitting remains
   a decoder-assisted operation because AE7 stores no per-frame size table.
-- Every target retry still repeats the full motion search. Bracketed search
-  bounds retry count, but candidate-score reuse remains desirable for larger
-  full-movie matrices.
+- Temporal candidate measurements are cached in an explicit per-frame
+  workspace across target-byte retries. One motion scan records the best
+  vector for all 29 quality rows. Spatial candidates remain live because they
+  depend on the quality-specific partial reconstruction of the current frame.
+- On the five-frame, 6,000-byte target regression, caching leaves all payloads
+  byte-identical and reduces measured temporal pixel comparisons from
+  7,067,778 to 3,267,426 (53.8%). Fixed-level CLI runs do not enable the cache,
+  avoiding its all-quality-row setup cost where no retry can reuse it.
+- Type 2 extraction requires `--type2-layout type19-fields`. It interprets a
+  stored halfword as `Y[5:0], U[10:6], V[15:11]` to reproduce the historical
+  type 19 compressor input; it is not a general RGB555/YUV555/6Y5UV converter.
+- No other uncompressed Replay format is decoded yet. Type 23, 6Y6Y5U5V, is
+  the first planned addition; types 8 and 21 may map usefully to FFmpeg RGB24,
+  YUV24, or YUYV pipelines after their exact packing is verified.
+- Selecting the historical compressor colour-space label `6YVUV` has been
+  observed to produce an unplayable movie. The cause is unconfirmed, so new
+  layout conversions must use explicit names and player-validation fixtures.
 - The confirmed type 7-to-type 2 source path exposes a CompLib limitation:
   `-Convert 6Y5UV` changes the type 2 label but does not convert type 7 YUV555
   words because Decomp7 has no `Dec24`. Comparison tooling must preserve this

@@ -55,24 +55,21 @@ ReplayStatus mb_quality_thresholds(unsigned loss_level,
     return REPLAY_OK;
 }
 
-int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
-                              unsigned target_y, const MbFrame *reference,
-                              unsigned reference_x, unsigned reference_y,
-                              unsigned block_size, uint8_t target_u,
-                              uint8_t target_v,
-                              const MbQualityThresholds *thresholds,
-                              unsigned *total_error)
+int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
+                                unsigned target_y,
+                                const MbFrame *reference,
+                                unsigned reference_x,
+                                unsigned reference_y, unsigned block_size,
+                                uint8_t target_u, uint8_t target_v,
+                                MbQualityProfile *profile)
 {
-    unsigned exceptional_limit = block_size == 4U ? 4U : 1U;
-    unsigned total_limit;
-    unsigned exceptional_count = 0U;
     unsigned total = 0U;
     int reference_u = 0;
     int reference_v = 0;
     unsigned row;
 
-    if (target == NULL || reference == NULL || thresholds == NULL ||
-        total_error == NULL || target->pixels == NULL ||
+    if (target == NULL || reference == NULL || profile == NULL ||
+        target->pixels == NULL ||
         reference->pixels == NULL ||
         (block_size != 2U && block_size != 4U) ||
         target_x + block_size > target->width ||
@@ -81,8 +78,7 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
         reference_y + block_size > reference->height) {
         return 0;
     }
-    total_limit = block_size == 4U ? thresholds->total_error_4x4
-                                   : thresholds->total_error_2x2;
+    *profile = (MbQualityProfile){ 0 };
 
     for (row = 0U; row < block_size; ++row) {
         unsigned column;
@@ -97,13 +93,13 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
             unsigned difference = absolute_difference(
                 target_pixel->y, reference_pixel->y);
 
-            /* No luma sample may exceed maxe. Only a few may exceed maxi. */
-            if (difference > thresholds->max_exceptional_error) {
-                return 0;
+            unsigned limit;
+
+            if (difference > profile->max_luma_error) {
+                profile->max_luma_error = (uint8_t)difference;
             }
-            if (difference > thresholds->max_individual_error &&
-                ++exceptional_count > exceptional_limit) {
-                return 0;
+            for (limit = 0U; limit < 7U && difference > limit; ++limit) {
+                ++profile->luma_over_limit[limit];
             }
             total += difference;
             reference_u += signed_chroma(reference_pixel->u);
@@ -113,22 +109,56 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
 
     {
         unsigned area = block_size * block_size;
-        unsigned u_difference = absolute_difference(
+        profile->chroma_u_error = (uint8_t)absolute_difference(
             signed_chroma(target_u), floor_average(reference_u, area));
-        unsigned v_difference = absolute_difference(
+        profile->chroma_v_error = (uint8_t)absolute_difference(
             signed_chroma(target_v), floor_average(reference_v, area));
-
-        /* Chroma has no exceptional allowance in the original matcher. */
-        if (u_difference > thresholds->max_individual_error ||
-            v_difference > thresholds->max_individual_error) {
-            return 0;
-        }
         /* One block-average chroma error applies to every reconstructed pixel. */
-        total += area * (u_difference + v_difference);
+        total += area * (profile->chroma_u_error + profile->chroma_v_error);
     }
-    if (total > total_limit) {
+    profile->total_error = (uint16_t)total;
+    return 1;
+}
+
+int mb_quality_profile_accept(const MbQualityProfile *profile,
+                              unsigned block_size,
+                              const MbQualityThresholds *thresholds,
+                              unsigned *total_error)
+{
+    unsigned exceptional_limit = block_size == 4U ? 4U : 1U;
+    unsigned total_limit;
+
+    if (profile == NULL || thresholds == NULL || total_error == NULL ||
+        (block_size != 2U && block_size != 4U)) {
         return 0;
     }
-    *total_error = total;
+    total_limit = block_size == 4U ? thresholds->total_error_4x4
+                                   : thresholds->total_error_2x2;
+    if (profile->max_luma_error > thresholds->max_exceptional_error ||
+        profile->luma_over_limit[thresholds->max_individual_error] >
+            exceptional_limit ||
+        profile->chroma_u_error > thresholds->max_individual_error ||
+        profile->chroma_v_error > thresholds->max_individual_error ||
+        profile->total_error > total_limit) {
+        return 0;
+    }
+    *total_error = profile->total_error;
     return 1;
+}
+
+int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
+                              unsigned target_y, const MbFrame *reference,
+                              unsigned reference_x, unsigned reference_y,
+                              unsigned block_size, uint8_t target_u,
+                              uint8_t target_v,
+                              const MbQualityThresholds *thresholds,
+                              unsigned *total_error)
+{
+    MbQualityProfile profile;
+
+    return mb_quality_profile_format19(
+               target, target_x, target_y, reference, reference_x,
+               reference_y, block_size, target_u, target_v, &profile) &&
+           mb_quality_profile_accept(
+               &profile, block_size, thresholds, total_error);
 }
