@@ -70,6 +70,19 @@ def yuv_bytes_to_words(data: bytes) -> bytes:
     return bytes(words)
 
 
+def yuv555_bytes_to_words(data: bytes) -> bytes:
+    """Pack native type-7/type-17 five-bit Y, U and V previous pixels."""
+    words = bytearray()
+    for offset in range(0, len(data), 3):
+        y, u, v = data[offset : offset + 3]
+        if y > 31 or u > 31 or v > 31:
+            raise ValueError(
+                f"invalid YUV555 sample at pixel {offset // 3}: {y},{u},{v}"
+            )
+        words += struct.pack("<I", y | (u << 5) | (v << 10))
+    return bytes(words)
+
+
 def words_to_yuv_bytes(data: bytes) -> bytes:
     pixels = bytearray()
     for (word,) in struct.iter_unpack("<I", data):
@@ -86,6 +99,15 @@ def yuv555_words_to_6y5uv_bytes(data: bytes) -> bytes:
         # CompLib's full-range component conversion rounds to nearest.
         y6 = (y5 * 63 + 15) // 31
         pixels += bytes((y6, (word >> 5) & 0x1F, (word >> 10) & 0x1F))
+    return bytes(pixels)
+
+
+def words_to_yuv555_bytes(data: bytes) -> bytes:
+    """Preserve native type-7/type-17 five-bit Y, U and V components."""
+    pixels = bytearray()
+    for (word,) in struct.iter_unpack("<I", data):
+        pixels += bytes((word & 0x1F, (word >> 5) & 0x1F,
+                         (word >> 10) & 0x1F))
     return bytes(pixels)
 
 
@@ -135,14 +157,23 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
         )
         return
 
+    expected_by_codec = {
+        7: (5, 0, 0, 0),
+        17: (4, 1, 0, 3),
+        19: (4, 0, 1, 1),
+    }
+    expected = expected_by_codec[codec]
     lookaheads = {
         # Format 19 has four header sites; format 7 has five decoder paths.
-        bytes.fromhex("600097e8"): (4 if codec == 19 else 5, UC_ARM_REG_R7,
+        bytes.fromhex("600097e8"): (expected[0], UC_ARM_REG_R7,
+                                    UC_ARM_REG_R5, UC_ARM_REG_R6),
+        # Format 17's first Huffman path uses r6 as base, loading r5/r6.
+        bytes.fromhex("600096e8"): (expected[1], UC_ARM_REG_R6,
                                     UC_ARM_REG_R5, UC_ARM_REG_R6),
         # The two Huffman paths use r6 as both base and first destination.
-        bytes.fromhex("400196e8"): (1, UC_ARM_REG_R6,
+        bytes.fromhex("400196e8"): (expected[2], UC_ARM_REG_R6,
                                     UC_ARM_REG_R6, UC_ARM_REG_R8),
-        bytes.fromhex("c00096e8"): (1, UC_ARM_REG_R6,
+        bytes.fromhex("c00096e8"): (expected[3], UC_ARM_REG_R6,
                                     UC_ARM_REG_R6, UC_ARM_REG_R7),
     }
 
@@ -162,8 +193,6 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
         expected_count, base_register, first_register, second_register = (
             description
         )
-        if codec == 7 and expected_count == 1:
-            expected_count = 0
         offsets = []
         offset = decompressor.find(instruction)
         while offset >= 0:
@@ -218,8 +247,12 @@ def run(args: argparse.Namespace) -> int:
     elif args.previous is None:
         previous_words = bytes(arm_frame_bytes)
     else:
-        previous_words = yuv_bytes_to_words(
-            read_exact(args.previous, frame_bytes, "previous frame")
+        previous_bytes = read_exact(
+            args.previous, frame_bytes, "previous frame")
+        previous_words = (
+            yuv555_bytes_to_words(previous_bytes)
+            if args.previous_layout == "yuv555"
+            else yuv_bytes_to_words(previous_bytes)
         )
 
     machine = Uc(UC_ARCH_ARM, UC_MODE_ARM)
@@ -267,11 +300,12 @@ def run(args: argparse.Namespace) -> int:
                 f"frame {frame}: {consumed} after {source_offset}"
             )
         output_words = bytes(machine.mem_read(output_address, arm_frame_bytes))
-        output_yuv = (
-            yuv555_words_to_6y5uv_bytes(output_words)
-            if args.output_layout == "yuv555-to-6y5uv"
-            else words_to_yuv_bytes(output_words)
-        )
+        if args.output_layout == "yuv555-to-6y5uv":
+            output_yuv = yuv555_words_to_6y5uv_bytes(output_words)
+        elif args.output_layout == "yuv555":
+            output_yuv = words_to_yuv555_bytes(output_words)
+        else:
+            output_yuv = words_to_yuv_bytes(output_words)
         if args.output is not None:
             output_path = args.output
         else:
@@ -305,7 +339,9 @@ def run(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--decompressor", required=True, type=Path)
-    parser.add_argument("--codec", type=int, choices=(7, 19, 23), default=19)
+    parser.add_argument(
+        "--codec", type=int, choices=(7, 17, 19, 23), default=19
+    )
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--size", required=True)
     previous_group = parser.add_mutually_exclusive_group()
@@ -314,13 +350,17 @@ def parse_args() -> argparse.Namespace:
         "--previous-words16", type=Path,
         help="native little-endian 16-bit key image expanded to ARM words",
     )
+    parser.add_argument(
+        "--previous-layout", choices=("6y5uv", "yuv555"), default="6y5uv",
+        help="component layout used by --previous (default: 6y5uv)",
+    )
     output_group = parser.add_mutually_exclusive_group(required=True)
     output_group.add_argument("--output", type=Path)
     output_group.add_argument("--output-prefix", type=Path)
     parser.add_argument("--payload-prefix", type=Path)
     parser.add_argument("--output-words-prefix", type=Path)
     parser.add_argument(
-        "--output-layout", choices=("6y5uv", "yuv555-to-6y5uv"),
+        "--output-layout", choices=("6y5uv", "yuv555", "yuv555-to-6y5uv"),
         default="6y5uv",
         help="interpret output words directly or convert type-7 YUV555",
     )

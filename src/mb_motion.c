@@ -173,9 +173,9 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
     return REPLAY_INVALID_ARGUMENT;
 }
 
-ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
-                                     MbMotionBlockSize block_size,
-                                     MbMotionVector *motion)
+ReplayStatus mb_motion_read_hq(ReplayBitReader *reader,
+                               MbMotionBlockSize block_size,
+                               MbMotionVector *motion)
 {
     uint32_t family;
     uint32_t index;
@@ -227,4 +227,11 @@ ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
     default:
         return REPLAY_INTERNAL_ERROR;
     }
+}
+
+ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
+                                     MbMotionBlockSize block_size,
+                                     MbMotionVector *motion)
+{
+    return mb_motion_read_hq(reader, block_size, motion);
 }

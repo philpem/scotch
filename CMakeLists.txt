@@ -16,6 +16,7 @@ add_library(replay STATIC
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
+    src/mb_frame_verify.c
     src/mb_motion.c
     src/mb_metrics.c
     src/mb_quality.c
@@ -88,6 +89,8 @@ add_replay_test(test_mb_rate_control tests/test_mb_rate_control.c)
 add_replay_test(test_mb_color tests/test_mb_color.c)
 add_replay_test(test_codec_supermovingblocks
     tests/test_codec_supermovingblocks.c)
+add_replay_test(test_codec_movingblockshq
+    tests/test_codec_movingblockshq.c)
 add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
 add_replay_test(test_supermovingblocks_encoder
@@ -169,5 +172,16 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP23_COMPILED})
+    endif()
+    set(DECOMP17_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp17/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-17 Decompress file")
+    if(EXISTS "${DECOMP17_COMPILED}")
+        add_test(NAME test_decomp17_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp17_compiled.sh
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP17_COMPILED})
     endif()
 endif()

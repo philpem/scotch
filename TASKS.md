@@ -129,7 +129,11 @@
 
 ## Next Codec Backends
 
-- [ ] Add type 17, Moving Blocks HQ, through `codec_movingblockshq`.
+- [x] Add and compiled-decoder cross-check type 17, Moving Blocks HQ, Huffman
+  and data-coded 4x4/2x2 primitives through `codec_movingblockshq`.
+- [x] Complete type 17 stationary, temporal, spatial, split, and strict frame
+  verification through the shared `mb_frame_verify` grammar.
+- [ ] Implement the type 17 encoder and measure its quality/bitrate behavior.
 - [ ] Add type 7, Moving Blocks, through `codec_movingblocks`.
 - [ ] Add type 20, Moving Blocks Beta, through `codec_movingblocksbeta`.
 - [ ] Add Moving Lines as a separate codec core sharing only general tooling.

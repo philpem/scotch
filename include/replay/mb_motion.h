@@ -16,7 +16,15 @@ typedef struct {
     int spatial;
 } MbMotionVector;
 
-/* The caller has already consumed the 4x4 `01` or 2x2 `1` move prefix. */
+/*
+ * Read the motion grammar shared by types 17 and 19 (and inherited by type
+ * 20). The caller has consumed the 4x4 `01` or 2x2 `1` move prefix.
+ */
+ReplayStatus mb_motion_read_hq(ReplayBitReader *reader,
+                               MbMotionBlockSize block_size,
+                               MbMotionVector *motion);
+
+/* Historical type-19 name retained for source compatibility. */
 ReplayStatus mb_motion_read_format19(ReplayBitReader *reader,
                                      MbMotionBlockSize block_size,
                                      MbMotionVector *motion);

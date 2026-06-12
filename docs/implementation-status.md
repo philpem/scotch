@@ -1,4 +1,4 @@
-# Type 19, Super Moving Blocks Implementation Status
+# Replay Tooling Implementation Status
 
 This document separates implemented behavior, verified compatibility, and
 known gaps. Source descriptions live in the project-level `notes` directory;
@@ -50,6 +50,15 @@ this file describes the current portable code in `replay-tooling`.
   four-pixel groups.
 - A tested FFmpeg RGB24 raw-pipe workflow with documented frame-rate, scaling,
   aspect-ratio, exact-size, EOF, and shell error-propagation requirements.
+- Type 17, Moving Blocks HQ, source-derived 32-symbol luma Huffman table and
+  independently callable data-coded 4x4 and 2x2 decoder primitives. The
+  primitives consume the complete case header, reconstruct five-bit luma with
+  the codec's two-dimensional predictor, and update the shared predictor to
+  the truncated block mean.
+- A shared `mb_frame_verify` dispatcher for the HQ-derived block grammar used
+  by types 17 and 19: stationary, temporal, spatial, split-child ordering,
+  current-frame reference legality, scan completion, and strict zero padding.
+  Codec callbacks retain each format's distinct data-block reconstruction.
 
 ## Verified Claims
 
@@ -71,6 +80,14 @@ this file describes the current portable code in `replay-tooling`.
   a split child cannot read pixels from a future top-level 4x4 parent.
 - Normal and ASan/UBSan test suites cover the C implementation; Unicorn tests
   run when its Python bindings and the compiled decoder are available.
+- Type 17 data-coded 4x4 and split data-coded 2x2 reconstruction agree
+  byte-for-byte with compiled Decomp17 in native YUV555. The split fixture
+  gives each quadrant distinct chroma, so it also verifies 2x2 child order and
+  raster placement rather than only decoded sample values.
+- Compiled Decomp17 also agrees on stationary and temporal/spatial 4x4 copies,
+  plus a mixed split containing stationary, temporal, and same-parent spatial
+  2x2 children. The harness's explicit `--previous-layout yuv555` keeps these
+  native words distinct from type 19's default `6y5uv` previous-frame layout.
 
 ## Deliberate Policy Choices
 
@@ -132,6 +149,6 @@ this file describes the current portable code in `replay-tooling`.
   historical word interpretation when reproducing the Acorn encode.
 - `LionFishX,ae7` is the validated type 2 YUV intermediate: 16,118,852 bytes,
   SHA-256 `f6a71e4e73dda589d131146ae0de79f4e350fbdcd2fe7bed891e3a39b1b41020`.
-- Formats 7, 17, and 20 have descriptors and notes but no complete portable
-  encoder/decoder cores: type 7, Moving Blocks; type 17, Moving Blocks HQ; and
-  type 20, Moving Blocks Beta. Moving Lines remains separate future work.
+- Type 17 now has a complete portable verifier but no encoder. Types 7 and 20
+  still have only descriptors and notes. Moving Lines remains separate future
+  work.
