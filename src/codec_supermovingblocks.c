@@ -479,6 +479,60 @@ static unsigned first_accepted_level(const MbQualityProfile *profile,
     return low;
 }
 
+/*
+ * Type-19 instance of the shared search hook table. The wrappers adapt the
+ * 6Y5UV motion tables and quality model to the codec-neutral signatures in
+ * mb_encode.h; the search itself never names a format-19 symbol.
+ */
+static int codec19_temporal_vector(unsigned index, MbMotionVector *out)
+{
+    return mb_motion_format19_temporal_at(index, out) == REPLAY_OK;
+}
+
+static int codec19_spatial_vector(MbMotionBlockSize block_size, unsigned index,
+                                  MbMotionVector *out)
+{
+    return mb_motion_format19_spatial_at(block_size, index, out) == REPLAY_OK;
+}
+
+static int codec19_block_match(const MbFrame *source, unsigned x, unsigned y,
+                               const MbFrame *reference, unsigned ref_x,
+                               unsigned ref_y, unsigned size, uint8_t u,
+                               uint8_t v, const void *quality, unsigned *error)
+{
+    return mb_quality_match_format19(source, x, y, reference, ref_x, ref_y,
+                                     size, u, v,
+                                     (const MbQualityThresholds *)quality,
+                                     error);
+}
+
+static int codec19_profile_match(const MbFrame *source, unsigned x, unsigned y,
+                                 const MbFrame *reference, unsigned ref_x,
+                                 unsigned ref_y, unsigned size, uint8_t u,
+                                 uint8_t v, unsigned *total_error,
+                                 unsigned *first_level)
+{
+    MbQualityProfile profile;
+
+    if (!mb_quality_profile_format19(source, x, y, reference, ref_x, ref_y,
+                                     size, u, v, &profile)) {
+        return 0;
+    }
+    *total_error = profile.total_error;
+    *first_level = first_accepted_level(&profile, size);
+    return 1;
+}
+
+static const MbEncodeCodec codec19_encode = {
+    MB_QUALITY_LEVEL_COUNT,
+    288U,
+    8U,
+    codec19_temporal_vector,
+    codec19_spatial_vector,
+    codec19_block_match,
+    codec19_profile_match
+};
+
 static SuperMovingBlocksWorkspaceInternal *workspace_internal(
     CodecSuperMovingBlocksWorkspace *workspace)
 {
@@ -554,7 +608,8 @@ void codec_supermovingblocks_workspace_destroy(
  * 2x2 reconstruction target. Lowest error wins; enumeration order gives the
  * shortest/source-first code when candidates have equal error.
  */
-static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
+static int match_temporal2x2(const MbEncodeCodec *enc,
+                             const MbFrame *source, const MbFrame *previous,
                              unsigned x, unsigned y, uint8_t u, uint8_t v,
                              unsigned loss_level,
                              MbMotionVector *motion, unsigned *matched_error,
@@ -580,14 +635,14 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
         return 1;
     }
 
-    for (index = 0U; index < 288U; ++index) {
+    for (index = 0U; index < enc->temporal_count; ++index) {
         MbMotionVector candidate;
-        MbQualityProfile profile;
+        unsigned total_error;
         int source_x;
         int source_y;
         unsigned level;
 
-        if (mb_motion_format19_temporal_at(index, &candidate) != REPLAY_OK) {
+        if (!enc->temporal_vector(index, &candidate)) {
             return 0;
         }
         source_x = (int)x + candidate.dx;
@@ -598,24 +653,23 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
             continue;
         }
         ++*evaluations;
-        if (!mb_quality_profile_format19(
+        if (!enc->profile_match(
                 source, x, y, previous, (unsigned)source_x,
-                (unsigned)source_y, 2U, u, v, &profile)) {
+                (unsigned)source_y, 2U, u, v, &total_error, &level)) {
             continue;
         }
-        level = first_accepted_level(&profile, 2U);
-        for (; level < MB_QUALITY_LEVEL_COUNT; ++level) {
+        for (; level < enc->level_count; ++level) {
             TemporalResult *result = &entry->levels[level];
 
-            if (!result->valid || profile.total_error < result->error) {
+            if (!result->valid || total_error < result->error) {
                 result->dx = (int8_t)candidate.dx;
                 result->dy = (int8_t)candidate.dy;
-                result->error = profile.total_error;
+                result->error = (uint16_t)total_error;
                 result->valid = 1U;
             }
         }
         /* Zero error is optimal at every quality row and table-order tie. */
-        if (profile.total_error == 0U) {
+        if (total_error == 0U) {
             break;
         }
     }
@@ -629,20 +683,20 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
     return 1;
 }
 
-static int match_spatial2x2(const MbFrame *source,
+static int match_spatial2x2(const MbEncodeCodec *enc, const MbFrame *source,
                             const MbFrame *reconstructed,
                             const MbPixel tentative[16],
                             unsigned available_mask, unsigned parent_x,
                             unsigned parent_y, unsigned x, unsigned y,
                             uint8_t u, uint8_t v,
-                            const MbQualityThresholds *quality,
+                            const void *quality,
                             MbMotionVector *motion, unsigned *matched_error,
                             size_t *evaluations)
 {
     unsigned best_error = UINT32_MAX;
     unsigned index;
 
-    for (index = 0U; index < 8U; ++index) {
+    for (index = 0U; index < enc->spatial_count; ++index) {
         MbMotionVector candidate;
         MbPixel candidate_pixels[4];
         MbFrame candidate_frame = { 2U, 2U, 2U, candidate_pixels };
@@ -651,8 +705,7 @@ static int match_spatial2x2(const MbFrame *source,
         unsigned row;
         unsigned error;
 
-        if (mb_motion_format19_spatial_at(
-                MB_MOTION_BLOCK_2X2, index, &candidate) != REPLAY_OK) {
+        if (!enc->spatial_vector(MB_MOTION_BLOCK_2X2, index, &candidate)) {
             return 0;
         }
         source_x = (int)x + candidate.dx;
@@ -681,7 +734,7 @@ static int match_spatial2x2(const MbFrame *source,
         if (row == 2U) {
             ++*evaluations;
         }
-        if (row == 2U && mb_quality_match_format19(
+        if (row == 2U && enc->block_match(
                              source, x, y, &candidate_frame, 0U, 0U, 2U,
                              u, v, quality, &error) &&
             error < best_error) {
@@ -735,7 +788,7 @@ static CopyCandidate select_copy2x2(
         SPLIT_MODE_TEMPORAL, { 0, 0, 0 }, 0U, 0U, 1U, 0
     };
     if (allow_temporal && match_temporal2x2(
-            source, previous, x, y, u, v, loss_level,
+            &codec19_encode, source, previous, x, y, u, v, loss_level,
             &candidate.motion, &error,
             &stats->temporal2x2_evaluations, workspace)) {
         candidate.error = error;
@@ -753,7 +806,7 @@ static CopyCandidate select_copy2x2(
         SPLIT_MODE_SPATIAL, { 0, 0, 1 }, 0U, 0U, 2U, 0
     };
     if (allow_spatial && match_spatial2x2(
-            source, reconstructed, tentative, available_mask,
+            &codec19_encode, source, reconstructed, tentative, available_mask,
             parent_x, parent_y, x, y, u, v, quality,
             &candidate.motion, &error,
             &stats->spatial2x2_evaluations)) {
@@ -926,7 +979,8 @@ static int block_matches_data_reconstruction(const MbFrame *source,
         source, x, y, previous, x, y, 4U, u, v, quality, error);
 }
 
-static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
+static int find_temporal4x4(const MbEncodeCodec *enc,
+                            const MbFrame *source, const MbFrame *previous,
                             unsigned x, unsigned y, uint8_t u, uint8_t v,
                             unsigned loss_level,
                             MbMotionVector *motion, unsigned *matched_error,
@@ -953,14 +1007,14 @@ static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
     }
 
     /* Enumeration order gives the shortest/source-first equal-error code. */
-    for (index = 0U; index < 288U; ++index) {
+    for (index = 0U; index < enc->temporal_count; ++index) {
         MbMotionVector candidate;
-        MbQualityProfile profile;
+        unsigned total_error;
         int source_x;
         int source_y;
         unsigned level;
 
-        if (mb_motion_format19_temporal_at(index, &candidate) != REPLAY_OK) {
+        if (!enc->temporal_vector(index, &candidate)) {
             return 0;
         }
         source_x = (int)x + candidate.dx;
@@ -971,24 +1025,23 @@ static int find_temporal4x4(const MbFrame *source, const MbFrame *previous,
             continue;
         }
         ++*evaluations;
-        if (!mb_quality_profile_format19(
+        if (!enc->profile_match(
                 source, x, y, previous, (unsigned)source_x,
-                (unsigned)source_y, 4U, u, v, &profile)) {
+                (unsigned)source_y, 4U, u, v, &total_error, &level)) {
             continue;
         }
-        level = first_accepted_level(&profile, 4U);
-        for (; level < MB_QUALITY_LEVEL_COUNT; ++level) {
+        for (; level < enc->level_count; ++level) {
             TemporalResult *result = &entry->levels[level];
 
-            if (!result->valid || profile.total_error < result->error) {
+            if (!result->valid || total_error < result->error) {
                 result->dx = (int8_t)candidate.dx;
                 result->dy = (int8_t)candidate.dy;
-                result->error = profile.total_error;
+                result->error = (uint16_t)total_error;
                 result->valid = 1U;
             }
         }
         /* Zero error is optimal at every quality row and table-order tie. */
-        if (profile.total_error == 0U) {
+        if (total_error == 0U) {
             break;
         }
     }
@@ -1021,11 +1074,12 @@ static void copy_temporal4x4(const MbFrame *previous, MbFrame *reconstructed,
     }
 }
 
-static int spatial_block_matches(const MbFrame *source,
+static int spatial_block_matches(const MbEncodeCodec *enc,
+                                 const MbFrame *source,
                                  const MbFrame *reconstructed, unsigned x,
                                  unsigned y, const MbMotionVector *motion,
                                  uint8_t u, uint8_t v,
-                                 const MbQualityThresholds *quality,
+                                 const void *quality,
                                  unsigned *error)
 {
     int source_x = (int)x + motion->dx;
@@ -1037,15 +1091,15 @@ static int spatial_block_matches(const MbFrame *source,
         source_y + 4 > (int)reconstructed->height) {
         return 0;
     }
-    return mb_quality_match_format19(
+    return enc->block_match(
         source, x, y, reconstructed, (unsigned)source_x,
         (unsigned)source_y, 4U, u, v, quality, error);
 }
 
-static int find_spatial4x4(const MbFrame *source,
+static int find_spatial4x4(const MbEncodeCodec *enc, const MbFrame *source,
                            const MbFrame *reconstructed, unsigned x,
                            unsigned y, uint8_t u, uint8_t v,
-                           const MbQualityThresholds *quality,
+                           const void *quality,
                            MbMotionVector *motion, unsigned *matched_error,
                            size_t *evaluations)
 {
@@ -1053,12 +1107,11 @@ static int find_spatial4x4(const MbFrame *source,
     unsigned index;
 
     /* Minimise distortion; source table order breaks equal-error ties. */
-    for (index = 0U; index < 8U; ++index) {
+    for (index = 0U; index < enc->spatial_count; ++index) {
         MbMotionVector candidate;
         unsigned error;
 
-        if (mb_motion_format19_spatial_at(
-                MB_MOTION_BLOCK_4X4, index, &candidate) != REPLAY_OK) {
+        if (!enc->spatial_vector(MB_MOTION_BLOCK_4X4, index, &candidate)) {
             return 0;
         }
         {
@@ -1070,7 +1123,7 @@ static int find_spatial4x4(const MbFrame *source,
                 ++*evaluations;
             }
         }
-        if (spatial_block_matches(source, reconstructed, x, y, &candidate,
+        if (spatial_block_matches(enc, source, reconstructed, x, y, &candidate,
                                   u, v, quality, &error) &&
             error < best_error) {
             *motion = candidate;
@@ -1140,7 +1193,7 @@ static CopyCandidate select_copy4x4(
         SPLIT_MODE_TEMPORAL, { 0, 0, 0 }, 0U, 0U, 1U, 0
     };
     if (allow_temporal && find_temporal4x4(
-            source, previous, x, y, u, v, loss_level,
+            &codec19_encode, source, previous, x, y, u, v, loss_level,
             &candidate.motion, &error,
             &stats->temporal4x4_evaluations, workspace)) {
         candidate.error = error;
@@ -1158,7 +1211,7 @@ static CopyCandidate select_copy4x4(
         SPLIT_MODE_SPATIAL, { 0, 0, 1 }, 0U, 0U, 2U, 0
     };
     if (allow_spatial && find_spatial4x4(
-            source, reconstructed, x, y, u, v, quality,
+            &codec19_encode, source, reconstructed, x, y, u, v, quality,
             &candidate.motion, &error,
             &stats->spatial4x4_evaluations)) {
         candidate.error = error;
