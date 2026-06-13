@@ -315,7 +315,9 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
     movie->sprite_offset = fields[13];
     movie->sprite_bytes = fields[14];
 
-    if (movie->width == 0U || movie->height == 0U ||
+    /* A sound-only movie (video format 0) legitimately has zero dimensions. */
+    if ((movie->video_codec != 0U &&
+         (movie->width == 0U || movie->height == 0U)) ||
         movie->frames_per_chunk == 0U ||
         !isfinite(movie->frames_per_second) ||
         movie->frames_per_second <= 0.0) {

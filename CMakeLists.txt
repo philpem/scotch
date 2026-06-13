@@ -13,6 +13,7 @@ add_library(replay STATIC
     src/replay_ae7.c
     src/replay_type2.c
     src/replay_type23.c
+    src/replay_ae7_write.c
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c
@@ -78,6 +79,7 @@ endfunction()
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
+add_replay_test(test_replay_ae7_write tests/test_replay_ae7_write.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)
 add_replay_test(test_replay_type23 tests/test_replay_type23.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
