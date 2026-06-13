@@ -54,6 +54,9 @@ target_link_libraries(replay-inspect PRIVATE replay)
 add_executable(replay-extract tools/replay_extract.c)
 target_link_libraries(replay-extract PRIVATE replay)
 
+add_executable(replay-join tools/replay_join.c)
+target_link_libraries(replay-join PRIVATE replay)
+
 if(NOT MSVC)
     target_compile_options(replay-verify PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
@@ -62,6 +65,8 @@ if(NOT MSVC)
     target_compile_options(replay-inspect PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
     target_compile_options(replay-extract PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+    target_compile_options(replay-join PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
