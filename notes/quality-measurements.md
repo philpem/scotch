@@ -81,14 +81,26 @@ luma limit) and its PSNR falls off much faster as loss rises. To make a type 17
 cut that looks like the type 19 loss-10 cut, use a much lower type 17 loss
 level (~0-4), not the same number.
 
-Future work (parked): type 17's degradation is most visible in smooth gradients
-and slow light fade-offs. Those regions stay near-constant between frames, so
-the encoder keeps choosing stationary/temporal copies that *freeze* the 5-bit
-luma quantisation banding instead of refreshing it with a data block -- the
-error stops moving and the eye locks onto it. Candidate mitigations to try:
-periodically force a data-block refresh of long-lived copy regions, tighten copy
-acceptance in low-detail/low-motion blocks, or add luma dither. A synthetic
-`gradients`/`testsrc2` source (via `--lavfi`) is a good way to stress this.
+Applied mitigations (now default for type 17 via replay-make):
+- Ordered 8x8 Bayer *luma* dither in RGB->YUV (mb_color, --dither 8x8). Confirmed
+  visually to clear most of the smooth-gradient/light-fade luma banding. Costs
+  ~0.35 dB PSNR and ~4% size; 8x8 reads cleaner than 4x4 at the same cost.
+- Lowest-error copy policy (default for type 17, --policy). +0.12 dB at equal
+  size without dither; with dither it shifts a few blocks to data (~+4-5% size).
+  Helps the high-frequency edge shimmer.
+
+Future work (parked):
+- CHROMA block banding (confirmed 2026-06-13): vertical/horizontal bands on red
+  and brown objects with a saturation gradient. This is the codecs' one
+  block-averaged 5-bit U/V per 4x4 (or 2x2) stepping along the block grid -- the
+  same in type 19. Luma dither only helps it marginally. The fix would be an
+  ordered dither on the *per-block* chroma rounding in mb_encode_average_chroma
+  (perturb adjacent blocks' U/V differently). Parked: judged a rabbit hole for
+  the gain. A synthetic `gradients`/`testsrc2` source (via `--lavfi`) stresses
+  the luma case; a saturation ramp stresses the chroma case.
+- Frozen luma banding in near-static gradients: stationary/temporal copies hold
+  the quantisation in place so the eye locks on. Dither largely masks it now; a
+  periodic data-block refresh of long-lived copy regions would also help.
 
 ## Measurement tools
 
