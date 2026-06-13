@@ -430,34 +430,6 @@ typedef struct {
     MbMotionVector motion;
 } SplitDecision;
 
-static unsigned first_accepted_level(const MbQualityProfile *profile,
-                                     unsigned block_size)
-{
-    unsigned low = 0U;
-    unsigned high = MB_QUALITY_LEVEL_COUNT - 1U;
-    MbQualityThresholds thresholds;
-    unsigned error;
-
-    /* The source quality table loosens monotonically from level 0 through 28. */
-    (void)mb_quality_thresholds(high, &thresholds);
-    if (!mb_quality_profile_accept(
-            profile, block_size, &thresholds, &error)) {
-        return MB_QUALITY_LEVEL_COUNT;
-    }
-    while (low < high) {
-        unsigned middle = low + (high - low) / 2U;
-
-        (void)mb_quality_thresholds(middle, &thresholds);
-        if (mb_quality_profile_accept(
-                profile, block_size, &thresholds, &error)) {
-            high = middle;
-        } else {
-            low = middle + 1U;
-        }
-    }
-    return low;
-}
-
 /*
  * Type-19 instance of the shared search hook table. The wrappers adapt the
  * 6Y5UV motion tables and quality model to the codec-neutral signatures in
@@ -498,7 +470,7 @@ static int codec19_profile_match(const MbFrame *source, unsigned x, unsigned y,
         return 0;
     }
     *total_error = profile.total_error;
-    *first_level = first_accepted_level(&profile, size);
+    *first_level = mb_quality_first_accepted_level(&profile, size);
     return 1;
 }
 

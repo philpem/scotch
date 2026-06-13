@@ -34,6 +34,15 @@ typedef struct {
 ReplayStatus mb_quality_thresholds(unsigned loss_level,
                                    MbQualityThresholds *thresholds);
 
+/*
+ * Lowest quality level (0 = exact, 28 = loosest) at which `profile` is
+ * accepted, or MB_QUALITY_LEVEL_COUNT when no level accepts it. The QP% table
+ * loosens monotonically, so this is a binary search and is format-neutral: it
+ * works on any MbQualityProfile regardless of how it was measured.
+ */
+unsigned mb_quality_first_accepted_level(const MbQualityProfile *profile,
+                                         unsigned block_size);
+
 int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
                                 unsigned target_y,
                                 const MbFrame *reference,
@@ -54,6 +63,29 @@ int mb_quality_profile_accept(const MbQualityProfile *profile,
  * A zero return means rejection; a non-zero return stores the total error.
  */
 int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
+                              unsigned target_y, const MbFrame *reference,
+                              unsigned reference_x, unsigned reference_y,
+                              unsigned block_size, uint8_t target_u,
+                              uint8_t target_v,
+                              const MbQualityThresholds *thresholds,
+                              unsigned *total_error);
+
+/*
+ * The YUV555 (type 17) measurement. Identical metric to format 19 -- per-pixel
+ * luma absolute error plus one block-average chroma error applied to every
+ * pixel -- but chroma components are plain unsigned five-bit values, matching
+ * the type 17 working-pixel layout rather than signed 6Y5UV chroma. The shared
+ * MbQualityThresholds rows and mb_quality_profile_accept apply unchanged.
+ */
+int mb_quality_profile_format17(const MbFrame *target, unsigned target_x,
+                                unsigned target_y,
+                                const MbFrame *reference,
+                                unsigned reference_x,
+                                unsigned reference_y, unsigned block_size,
+                                uint8_t target_u, uint8_t target_v,
+                                MbQualityProfile *profile);
+
+int mb_quality_match_format17(const MbFrame *target, unsigned target_x,
                               unsigned target_y, const MbFrame *reference,
                               unsigned reference_x, unsigned reference_y,
                               unsigned block_size, uint8_t target_u,
