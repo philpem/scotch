@@ -369,6 +369,12 @@ static void reconstruct_data2x2(const MbFrame *source, MbFrame *reconstructed,
     }
 }
 
+/*
+ * Encode a data-coded 4x4 into a scratch buffer and report its meaningful bit
+ * count, so the caller can compare it against a 2x2 split before committing
+ * either to the live stream. Works on a predictor copy and leaves the live
+ * reconstruction untouched.
+ */
 static ReplayStatus build_data4x4_candidate(
     const MbFrame *source, unsigned x, unsigned y,
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
@@ -504,6 +510,14 @@ void codec_supermovingblocks_workspace_destroy(
     }
 }
 
+/*
+ * Choose a 2x2 split child's copy mode against the data-block average chroma
+ * (u, v). Under the ordered policy the first accepted family wins in the
+ * historical order stationary, temporal, spatial; under the lowest-error policy
+ * every accepted family is compared by reconstruction error, then bits, then a
+ * stable order. Returns a data candidate when no copy is accepted. The shared
+ * 2x2 motion search (mb_encode_match_*) does the temporal/spatial legwork.
+ */
 static CopyCandidate select_copy2x2(
     const MbFrame *source, const MbFrame *previous,
     const MbFrame *reconstructed, const MbPixel tentative[16],
@@ -593,6 +607,14 @@ static void fill_tentative_data2x2(const MbFrame *source,
     }
 }
 
+/*
+ * Encode the four 2x2 children of a split block into a scratch buffer and
+ * report the total bits, the counterpart to build_data4x4_candidate. Each child
+ * picks its own copy/data mode via select_copy2x2; the running `tentative` 4x4
+ * records each child's reconstruction so a later spatial child can reference an
+ * earlier quadrant. The chosen modes are returned in `decisions` for the caller
+ * to replay when committing.
+ */
 static ReplayStatus build_split_data_candidate(
     const MbFrame *source, unsigned x, unsigned y,
     const MbFrame *previous, const MbFrame *reconstructed,
@@ -699,6 +721,12 @@ static int block_matches_data_reconstruction(const MbFrame *source,
         source, x, y, previous, x, y, 4U, u, v, quality, error);
 }
 
+/*
+ * Choose a top-level 4x4 block's copy mode, the 4x4 analogue of select_copy2x2
+ * (same ordered/lowest-error policies and family order). Returns a data
+ * candidate when no copy is accepted, which the frame loop then weighs against a
+ * 2x2 split.
+ */
 static CopyCandidate select_copy4x4(
     const MbFrame *source, const MbFrame *previous,
     const MbFrame *reconstructed, unsigned x, unsigned y, uint8_t u,

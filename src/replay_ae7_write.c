@@ -79,6 +79,13 @@ static uint64_t track_frame_bytes(const ReplayAe7WriteTrack *track)
  * Render the 21-line header for the given offsets. Returns the byte length in
  * *header_len. The buffer is cleared first.
  */
+/*
+ * Render the 21-line ARMovie text header. Every line is a fixed label the
+ * player parses positionally, so the order and wording matter; the offsets and
+ * chunk sizes are filled in once the layout below them is known. Sound fields
+ * collapse to zeros when there is no track, and a few lines carry
+ * player-compatibility quirks called out at their call sites.
+ */
 static ReplayStatus render_header(const ReplayAe7WriteOptions *options,
                                   uint64_t even_size, uint64_t odd_size,
                                   double frames_per_chunk_nominal,
