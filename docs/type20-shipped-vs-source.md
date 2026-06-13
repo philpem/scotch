@@ -1,38 +1,49 @@
-# Type 20 (Moving Blocks Beta): shipped module vs ARMovie_2003 source
+# Type 20 (Moving Blocks Beta): two shipped revisions (old/new)
 
-The released Decomp20 decompressor and the Decomp20 source in `ARMovie_2003`
-are **two different revisions of a beta codec, and they use different chroma
-formats.** This codec is implemented to match the *shipped* module, because
-that is what RISC OS Replay players (and emulators) actually load.
+There are **two released revisions of the type 20 decompressor, with different
+chroma formats.** Both are real -- the choice is which Decomp20 module the
+target RISC OS system has installed:
 
-## Which is which
+| Variant | Module | Version | Chroma |
+|---|---|---|---|
+| **type 20 "old"** | `Decompress,ffd` **12456 bytes, 20 Sep 1996** (md5 `00d48529`); in `!Boot/Resources/!ARMovie` and the `!ARMovie_compiled` snapshot | v0.04, 6 Sep 1996 | **direct 6-bit** |
+| **type 20 "new"** | `Decompress,ffd` **12528 bytes, 19 Nov 1996** (md5 `ccd887b4`); in `Replay/Replay3` and `Replay/OldARM` | v0.05, 19 Nov 1996 | **delta-coded** |
 
-| | Shipped module | ARMovie_2003 source |
+A third file -- `12532 bytes, 2026` (md5 `fb761251`, in `Public/ReplayComp` and
+`RiscOs_2003/.../SystemRes/.../Decomp20`) -- is a *fresh build of the v0.05
+source*. It is the same delta format as the 19 Nov shipped module; it is exactly
+**4 bytes** larger only because the build appends 4 `0xff` tail-padding bytes
+(the rest of the bytes differ because it is a separately assembled build, but
+the on-wire format is identical). The disassembly confirms both new modules have
+the `deltaexpand` table (at 0xd90) and the 10-bit delta data header.
+
+The codec implements **both**: "old" (direct) is the default and matches the
+20 Sep module that ships in `!Boot/Resources`; "new" (delta) matches the 19 Nov
+module. A given `.ae7` movie just declares compression type 20, so its bytes
+must match whichever Decomp20 the player has -- pick the variant accordingly.
+
+## How the two differ on the wire
+
+| | type 20 old (v0.04) | type 20 new (v0.05) |
 |---|---|---|
-| Decoder | `Decompress,ffd` 12456 bytes, 20 Sep 1996 | (not compiled; built by `MakeDecomp`) |
+| Decoder | `Decompress,ffd` 12456 bytes, 20 Sep 1996 | `Decompress,ffd` 12528 bytes, 19 Nov 1996 |
 | Encoder | `BatchComp,ffb` 47469 bytes | `bas/BatchComp` + `GenD4Table` |
-| Version (both encoder + decoder) | **0.04, 6 Sep 1996** | **0.05, 19 Nov 1996** |
+| Version (encoder + decoder) | **0.04, 6 Sep 1996** | **0.05, 19 Nov 1996** |
 | Chroma | **direct 6-bit** | **delta-coded** |
-| Status | The released module on player/emulator installs | A *later*, unreleased revision |
 
-The version strings are decisive: the shipped `BatchComp` declares
-`"Version 0.04 6th September 1996"` and the ARMovie_2003 `BatchComp` declares
-`"Version 0.05 19th November 1996"`. So the released binary was built from an
-**earlier (0.04) revision** than the source tree carries (0.05); between the two
-the author switched chroma from direct to delta-coded, and that 0.05 revision was
-never compiled into a shipped module (there is no compiled `Decompress` in the
-source tree, only the compressor in `crunch`).
+The version strings are decisive: the 0.04 `BatchComp` declares
+`"Version 0.04 6th September 1996"` and packs chroma directly (no `unpackuv`/
+`deltatable`/`D4tab`/`prevu`, just `AND #63`); the 0.05 `BatchComp`/`MakeDecomp`
+declare `"Version 0.05 19th November 1996"` and are delta-coded. The `!ARMovie_
+compiled` snapshot happened to contain only the 0.04 decoder, which led to an
+early (wrong) conclusion that the 0.05 source was never shipped -- in fact the
+19 Nov 0.05 decoder ships in `Replay/Replay3` and `Replay/OldARM`.
 
-This rules out two tempting explanations:
-
-* **Not an `#ifdef`/conditional.** The 0.05 `MakeDecomp` is *unconditionally*
-  delta-coded -- `ADD r0,#8+2 : BL unpackuv` with no `IF` around it and no
-  alternative direct path -- so that source cannot generate the direct-chroma
-  `Decompress`.
-* **Not an encoder/decoder mismatch.** Each version is internally consistent:
-  the shipped **0.04 encoder** (`BatchComp`) has no `unpackuv`/`deltatable`/
-  `D4tab`/`prevu` and packs chroma directly (`AND #63`), matching the shipped
-  0.04 decoder; the 0.05 source encoder and decoder are *both* delta-coded.
+Each version is internally consistent (no encoder/decoder mismatch): the 0.04
+encoder and decoder are both direct; the 0.05 encoder and decoder are both
+delta. The format is not selected by an `#ifdef` -- each `MakeDecomp` revision is
+unconditionally one or the other (the 0.05 `MakeDecomp` is `ADD r0,#8+2 : BL
+unpackuv` with no alternative path).
 
 ## The difference: chroma coding
 
@@ -41,9 +52,8 @@ Everything else is identical between the two — the block grammar (same as type
 predictor, and the 6Y6UV output word (`Y | U<<6 | V<<12`, six bits each). Only
 the **data-block chroma** differs:
 
-**Shipped module — direct 6-bit chroma (implemented here).**
-Data header is `opcode(2) + U(6) + V(6) = 14 bits`. From the disassembly of the
-data-block path:
+**type 20 "old" (v0.04) — direct 6-bit chroma.**
+Data header is `opcode(2) + U(6) + V(6) = 14 bits`. From the 12456-byte module:
 
 ```
 0x08cc: add  r0, r0, #0xe        ; advance 14 bits (opcode + U + V)
@@ -54,28 +64,37 @@ data-block path:
 So `U` is the 6-bit field at stream bits 2..7 and `V` at bits 8..13, stored
 directly (signed mod 64). No predictor, no delta table.
 
-**ARMovie_2003 source — delta-coded chroma (NOT shipped).**
-Data header is `opcode(2) + uv-byte(8) = 10 bits` (`ADD r0,#8+2; BL unpackuv`).
-The uv byte holds a 4-bit delta code per component (u low nibble, v high
-nibble) indexing
+**type 20 "new" (v0.05) — delta-coded chroma.**
+Data header is `opcode(2) + uv-byte(8) = 10 bits`. From the 12528-byte module:
+
+```
+0x08d0: add  r0, r0, #0xa        ; advance 10 bits (opcode + uv byte)
+0x08d4: bl   unpackuv
+```
+
+The uv byte holds a 4-bit delta code per component (u low nibble, v high nibble)
+indexing
 
 ```
 deltaexpand = { -32,-26,-20,-14,-8,-4,-2,-1, 0,1,2,4,8,14,20,26 }
 ```
 
-which is added to a chroma predictor carried across data blocks (like the luma
-predictor) and reset to zero each frame: `u = (prevu + deltaexpand[u_code])&63`.
-The matching `BatchComp` builds a `D4tab` (via `GenD4Table`) to pick the closest
-delta code, and adds a `hiq%` high-quality cost mode. None of this is in the
-released decompressor.
+added to a chroma predictor carried across data blocks (like the luma predictor)
+and reset to zero each frame: `u = (prevu + deltaexpand[u_code])&63`. The
+matching v0.05 `BatchComp` builds a `D4tab` (via `GenD4Table`) to pick the
+closest delta code.
 
 ## Consequence
 
-`codec_movingblocksbeta` implements the **shipped** (direct 6-bit) format and is
-cross-checked byte-for-byte against the 20 Sep 1996 `Decompress,ffd`
-(`test_decomp20_compiled`, `test_fullmovie_decomp20`). A stream encoded for the
-delta-coded source revision would NOT decode on the shipped module (the 14-bit
-vs 10-bit header alone desynchronises the luma), which is exactly why the
+`codec_movingblocksbeta` currently implements the **"old" (direct)** variant,
+cross-checked byte-for-byte against the 20 Sep 1996 12456-byte `Decompress,ffd`
+(`test_decomp20_compiled`, `test_fullmovie_decomp20`). The **"new" (delta)**
+variant is fully reverse-engineered above and is the next piece to add (a second
+data-block chroma path selected by a variant flag, cross-checked against the
+19 Nov 1996 12528-byte module).
+
+A stream encoded for one variant will NOT decode on the other (the 14-bit vs
+10-bit header alone desynchronises the luma), which is why the
 cross-check infrastructure flagged the delta-coded first attempt: it was
 self-consistent but produced streams the real (shipped) Decomp20 could not
 decode. The mismatch was found by tracing the bitstream pointer under the

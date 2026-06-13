@@ -15,10 +15,10 @@
 
 /*
  * Type 20 is the 6Y6UV beta branch. It reuses type 19's grammar, motion tables
- * and luma Huffman table; only the chroma differs -- it is stored directly as
- * six bits per component (vs type 19's five), confirmed from the shipped
- * compiled Decomp20 (the ARMovie_2003 source carries an unused delta-coded
- * variant that does not match the released decompressor).
+ * and luma Huffman table; only the chroma differs. Two type 20 decoders shipped:
+ * the v0.04 "old" module (20 Sep 1996) stores chroma directly as six bits per
+ * component, and the v0.05 "new" module (19 Nov 1996) delta-codes it. This
+ * implements the "old" (direct) format; see docs/type20-shipped-vs-source.md.
  */
 const MbCodec codec_movingblocksbeta = {
     REPLAY_CODEC_MOVINGBLOCKSBETA,
