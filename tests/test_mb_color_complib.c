@@ -15,11 +15,11 @@
  * mb_color uses ordered/no dither by design, so only the undithered path is
  * compared.
  *
- * The seven coefficients are CompLib's `DCD 65536*<coeff>` words. NOTE: Y_G is
- * the rounded form of 38469.63; the other six match truncation of their exact
- * value. Confirming Y_G needs BBC BASIC's exact DCD float coercion. Using the
- * same constants here, this test pins the *algorithm*, not the last LSB of the
- * coefficients.
+ * The seven coefficients are CompLib's `DCD 65536*<coeff>` words. All seven are
+ * the round-to-nearest of those expressions, confirmed against BBC BASIC's exact
+ * float values (e.g. 65536*0.587 = 38469.632 -> 38470, 65536*0.299/0.886 =
+ * 22116.551 -> 22117, 65536*0.114/0.701 = 10657.780 -> 10658). This test pins
+ * the algorithm; the constants are pinned by that derivation.
  */
 #define C_Y_R 19595
 #define C_Y_G 38470

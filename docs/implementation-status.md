@@ -199,18 +199,16 @@ this file describes the current portable code in `replay-tooling`.
 
 ## Known Gaps
 
-- The RGB->YUV conversion *algorithm* is now verified bit-exact against
-  CompLib's ARM source (Tools/CompLib RGB->YUV routine): an independent
-  reimplementation from that assembly matches mb_color over an RGB sweep for
-  both 6Y5UV and YUV555, undithered (`test_mb_color_complib`). CompLib dithers
-  with Floyd-Steinberg error diffusion; mb_color uses ordered/no dither by
-  design, so dithered outputs differ deliberately and are not compared.
-  One residual question: the seven coefficients are CompLib's `DCD 65536*<c>`
-  words, and our values match truncation for six of seven but Y_G=38470 is the
-  rounded form of 38469.63. Settling whether DCD truncates or rounds (which also
-  decides U_R=22117-vs-22118 and V_B=10658-vs-10659) needs BBC BASIC's exact
-  float coercion; no interpreter is available here. Worst case is +/-1 LSB on
-  one coefficient, a sub-visible luma/chroma difference on a few inputs.
+- The RGB->YUV conversion is verified against CompLib's ARM source (Tools/
+  CompLib RGB->YUV routine). The *algorithm* matches bit-exact: an independent
+  reimplementation from that assembly equals mb_color over an RGB sweep for both
+  6Y5UV and YUV555, undithered (`test_mb_color_complib`). CompLib dithers with
+  Floyd-Steinberg error diffusion; mb_color uses ordered/no dither by design, so
+  dithered outputs differ deliberately and are not compared. The seven
+  coefficients are CompLib's `DCD 65536*<c>` words; all seven equal the round-to-
+  nearest of those expressions, confirmed against BBC BASIC's exact float values
+  (38469.632->38470, 22116.551->22117, 10657.780->10658, etc.). This closes the
+  former "RGB conversion constants unvalidated" gap.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
   they require real Replay container/chunk accounting.
 - The AE7/Replay container writer round-trips through the reader and the
