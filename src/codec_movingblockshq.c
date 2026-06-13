@@ -1,6 +1,9 @@
 #include "replay/codec_movingblockshq.h"
 
+#include "replay/mb_encode.h"
 #include "replay/mb_frame_verify.h"
+#include "replay/mb_motion.h"
+#include "replay/mb_quality.h"
 #include "replay/replay_bitstream.h"
 #include "replay/replay_buffer.h"
 
@@ -37,6 +40,60 @@ const MbCodec codec_movingblockshq = {
     8, 8,
     &codec_movingblockshq_luma_huffman,
     0, 0
+};
+
+/*
+ * Type-17 instance of the shared mb_encode search hook table. The motion tables
+ * are common to the Moving Blocks family, so the vector accessors reuse the
+ * format-19 enumerators; only the block-match metric is YUV555-specific.
+ */
+static int codec17_temporal_vector(unsigned index, MbMotionVector *out)
+{
+    return mb_motion_format19_temporal_at(index, out) == REPLAY_OK;
+}
+
+static int codec17_spatial_vector(MbMotionBlockSize block_size, unsigned index,
+                                  MbMotionVector *out)
+{
+    return mb_motion_format19_spatial_at(block_size, index, out) == REPLAY_OK;
+}
+
+static int codec17_block_match(const MbFrame *source, unsigned x, unsigned y,
+                               const MbFrame *reference, unsigned ref_x,
+                               unsigned ref_y, unsigned size, uint8_t u,
+                               uint8_t v, const void *quality, unsigned *error)
+{
+    return mb_quality_match_format17(source, x, y, reference, ref_x, ref_y,
+                                     size, u, v,
+                                     (const MbQualityThresholds *)quality,
+                                     error);
+}
+
+static int codec17_profile_match(const MbFrame *source, unsigned x, unsigned y,
+                                 const MbFrame *reference, unsigned ref_x,
+                                 unsigned ref_y, unsigned size, uint8_t u,
+                                 uint8_t v, unsigned *total_error,
+                                 unsigned *first_level)
+{
+    MbQualityProfile profile;
+
+    if (!mb_quality_profile_format17(source, x, y, reference, ref_x, ref_y,
+                                     size, u, v, &profile)) {
+        return 0;
+    }
+    *total_error = profile.total_error;
+    *first_level = mb_quality_first_accepted_level(&profile, size);
+    return 1;
+}
+
+static const MbEncodeCodec codec17_encode = {
+    MB_QUALITY_LEVEL_COUNT,
+    288U,
+    8U,
+    codec17_temporal_vector,
+    codec17_spatial_vector,
+    codec17_block_match,
+    codec17_profile_match
 };
 
 static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
@@ -285,6 +342,141 @@ ReplayStatus codec_movingblockshq_encode_data_frame(
     if (status == REPLAY_OK) {
         /* Decomp17 reads whole bytes; pad the final partial byte with zeroes. */
         status = replay_bitwriter_flush_zero(&writer);
+    }
+    return status;
+}
+
+/* Copy a 4x4 block from `reference` at the motion offset to `destination`. The
+ * reference is the previous frame for temporal copies or the reconstruction in
+ * progress for spatial copies, whose vectors always point at finished pixels. */
+static void copy_motion4x4(const MbFrame *reference, MbFrame *destination,
+                           unsigned x, unsigned y, const MbMotionVector *motion)
+{
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+    unsigned row;
+
+    for (row = 0U; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 4U; ++column) {
+            destination->pixels[(size_t)(y + row) * destination->stride +
+                                x + column] =
+                reference->pixels[(size_t)(source_y + row) * reference->stride +
+                                  source_x + column];
+        }
+    }
+}
+
+/* Copy a 4x4 block straight across (the stationary previous-frame copy). */
+static void copy_stationary4x4(const MbFrame *previous, MbFrame *destination,
+                               unsigned x, unsigned y)
+{
+    unsigned row;
+
+    for (row = 0U; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 4U; ++column) {
+            destination->pixels[(size_t)(y + row) * destination->stride +
+                                x + column] =
+                previous->pixels[(size_t)(y + row) * previous->stride +
+                                 x + column];
+        }
+    }
+}
+
+ReplayStatus codec_movingblockshq_encode_frame(
+    const MbFrame *source, const MbFrame *previous,
+    const CodecMovingBlocksHqEncodeOptions *options, ReplayBuffer *output,
+    MbFrame *reconstructed, CodecMovingBlocksHqEncodeStats *stats)
+{
+    ReplayBitWriter writer;
+    /* The luma predictor lives for one frame and starts at zero; only data
+       blocks advance it, so copy decisions leave it untouched. */
+    MbPredictor predictor = { 0 };
+    MbQualityThresholds thresholds;
+    CodecMovingBlocksHqEncodeStats local_stats = { 0 };
+    int allow_stationary = options != NULL && options->allow_stationary != 0;
+    int allow_temporal = options != NULL && options->allow_temporal != 0;
+    int allow_spatial = options != NULL && options->allow_spatial != 0;
+    unsigned loss_level = options != NULL ? options->loss_level : 0U;
+    int need_previous = allow_stationary || allow_temporal;
+    unsigned y;
+    ReplayStatus status = REPLAY_OK;
+
+    if (output != NULL) {
+        replay_buffer_clear(output);
+    }
+    if (output == NULL || !frame_dims_ok(source) ||
+        !frame_dims_ok(reconstructed) ||
+        reconstructed->width != source->width ||
+        reconstructed->height != source->height ||
+        reconstructed->stride != source->stride ||
+        mb_quality_thresholds(loss_level, &thresholds) != REPLAY_OK ||
+        (need_previous &&
+         (previous == NULL || previous->pixels == NULL ||
+          previous->width != source->width ||
+          previous->height != source->height ||
+          previous->stride < previous->width))) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+
+    replay_bitwriter_init(&writer, output);
+    for (y = 0U; status == REPLAY_OK && y < source->height; y += 4U) {
+        unsigned x;
+
+        for (x = 0U; status == REPLAY_OK && x < source->width; x += 4U) {
+            size_t offset = (size_t)y * source->stride + x;
+            uint8_t u = avg5(&source->pixels[offset], source->stride, 4U, 0);
+            uint8_t v = avg5(&source->pixels[offset], source->stride, 4U, 1);
+            MbMotionVector motion;
+            unsigned error;
+            size_t evaluations = 0U;
+
+            /* Ordered copy policy: stationary, then temporal, then spatial. */
+            if (allow_stationary &&
+                mb_quality_match_format17(source, x, y, previous, x, y, 4U,
+                                          u, v, &thresholds, &error)) {
+                status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
+                copy_stationary4x4(previous, reconstructed, x, y);
+                ++local_stats.stationary4x4_blocks;
+            } else if (allow_temporal &&
+                       mb_encode_find_temporal4x4(
+                           &codec17_encode, source, previous, x, y, u, v,
+                           loss_level, &motion, &error, &evaluations, NULL)) {
+                status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
+                if (status == REPLAY_OK) {
+                    status = mb_motion_write_format19(
+                        &writer, MB_MOTION_BLOCK_4X4, &motion);
+                }
+                copy_motion4x4(previous, reconstructed, x, y, &motion);
+                ++local_stats.temporal4x4_blocks;
+            } else if (allow_spatial &&
+                       mb_encode_find_spatial4x4(
+                           &codec17_encode, source, reconstructed, x, y, u, v,
+                           &thresholds, &motion, &error, &evaluations)) {
+                status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
+                if (status == REPLAY_OK) {
+                    status = mb_motion_write_format19(
+                        &writer, MB_MOTION_BLOCK_4X4, &motion);
+                }
+                copy_motion4x4(reconstructed, reconstructed, x, y, &motion);
+                ++local_stats.spatial4x4_blocks;
+            } else {
+                status = codec_movingblockshq_encode_data4x4(
+                    &writer, &source->pixels[offset],
+                    &reconstructed->pixels[offset], source->stride,
+                    &predictor);
+                ++local_stats.data4x4_blocks;
+            }
+        }
+    }
+
+    if (status == REPLAY_OK) {
+        local_stats.bits_written = replay_bitwriter_position(&writer);
+        status = replay_bitwriter_flush_zero(&writer);
+    }
+    if (status == REPLAY_OK && stats != NULL) {
+        *stats = local_stats;
     }
     return status;
 }

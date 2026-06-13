@@ -325,11 +325,97 @@ static int test_data_frame_encode_roundtrip(void)
     return EXIT_SUCCESS;
 }
 
+static int frames_equal(const MbFrame *a, const MbFrame *b)
+{
+    unsigned y;
+
+    for (y = 0U; y < a->height; ++y) {
+        unsigned x;
+        for (x = 0U; x < a->width; ++x) {
+            if (!same_pixel(&a->pixels[(size_t)y * a->stride + x],
+                            &b->pixels[(size_t)y * b->stride + x])) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int test_encode_frame_copy_modes(void)
+{
+    MbPixel source_pixels[32];
+    MbPixel previous_pixels[32];
+    MbPixel recon_pixels[32];
+    MbPixel decoded_pixels[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame previous = { 8U, 4U, 8U, previous_pixels };
+    MbFrame reconstructed = { 8U, 4U, 8U, recon_pixels };
+    MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
+    CodecMovingBlocksHqEncodeStats stats;
+    ReplayBuffer payload;
+    unsigned y;
+
+    /* Spatial key frame: the right 4x4 duplicates the left, so the left is a
+       data block and the right a spatial copy of it. */
+    for (y = 0U; y < 4U; ++y) {
+        unsigned x;
+        for (x = 0U; x < 4U; ++x) {
+            MbPixel pixel = { (uint8_t)((y * 4U + x) & 31U), 9U, 21U };
+            source_pixels[y * 8U + x] = pixel;
+            source_pixels[y * 8U + x + 4U] = pixel;
+        }
+    }
+    replay_buffer_init(&payload);
+    {
+        CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U };
+        CHECK(codec_movingblockshq_encode_frame(
+                  &source, NULL, &options, &payload, &reconstructed, &stats) ==
+              REPLAY_OK);
+    }
+    CHECK(stats.data4x4_blocks == 1U);
+    CHECK(stats.spatial4x4_blocks == 1U);
+    CHECK(codec_movingblockshq_verify_frame(
+              payload.data, payload.size, NULL, &decoded, NULL, NULL) ==
+          REPLAY_OK);
+    CHECK(frames_equal(&decoded, &reconstructed));
+
+    /* Stationary inter frame: the left 4x4 equals the previous frame (a
+       stationary copy); the right differs and falls back to a data block. */
+    fill_previous(previous_pixels, 32U);
+    for (y = 0U; y < 32U; ++y) {
+        source_pixels[y] = previous_pixels[y];
+    }
+    for (y = 0U; y < 4U; ++y) {
+        unsigned x;
+        for (x = 4U; x < 8U; ++x) {
+            source_pixels[y * 8U + x].y =
+                (uint8_t)((source_pixels[y * 8U + x].y + 9U) & 31U);
+        }
+    }
+    replay_buffer_clear(&payload);
+    {
+        CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U };
+        CHECK(codec_movingblockshq_encode_frame(
+                  &source, &previous, &options, &payload, &reconstructed,
+                  &stats) == REPLAY_OK);
+    }
+    CHECK(stats.stationary4x4_blocks == 1U);
+    CHECK(stats.data4x4_blocks == 1U);
+    CHECK(codec_movingblockshq_verify_frame(
+              payload.data, payload.size, &previous, &decoded, NULL, NULL) ==
+          REPLAY_OK);
+    CHECK(frames_equal(&decoded, &reconstructed));
+
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4_zero_residual() == EXIT_SUCCESS);
     CHECK(test_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_data_frame_encode_roundtrip() == EXIT_SUCCESS);
+    CHECK(test_encode_frame_copy_modes() == EXIT_SUCCESS);
     CHECK(test_data2x2_wrap() == EXIT_SUCCESS);
     CHECK(test_table_and_truncation() == EXIT_SUCCESS);
     CHECK(test_complete_data_frame() == EXIT_SUCCESS);

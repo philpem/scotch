@@ -51,6 +51,49 @@ ReplayStatus codec_movingblockshq_encode_data_frame(
     const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
     size_t *bits_written);
 
+/*
+ * Enabled block decisions for codec_movingblockshq_encode_frame. Stationary and
+ * temporal copies reference the previous decoded frame and so require it;
+ * spatial copies reference already-reconstructed current-frame pixels and are
+ * legal in a key frame. `loss_level` selects the shared QP% acceptance row
+ * (0 = exact). Copy families are tried stationary, then temporal, then spatial,
+ * matching the original compressor's ordered policy.
+ */
+typedef struct {
+    int allow_stationary;
+    int allow_temporal;
+    int allow_spatial;
+    int allow_split;
+    unsigned loss_level;
+} CodecMovingBlocksHqEncodeOptions;
+
+/* Block tally for the selected stream; bits_written excludes byte padding. */
+typedef struct {
+    size_t data4x4_blocks;
+    size_t stationary4x4_blocks;
+    size_t temporal4x4_blocks;
+    size_t spatial4x4_blocks;
+    size_t split4x4_blocks;
+    size_t data2x2_blocks;
+    size_t stationary2x2_blocks;
+    size_t temporal2x2_blocks;
+    size_t spatial2x2_blocks;
+    size_t bits_written;
+} CodecMovingBlocksHqEncodeStats;
+
+/*
+ * Encode one type 17 frame using the enabled block decisions, driven by the
+ * shared mb_encode motion search and the YUV555 quality model. `source` holds
+ * quantised YUV555 samples; `reconstructed` is filled with exactly what
+ * Decomp17 retains and must be supplied as `previous` for the next inter frame.
+ * `source` and `reconstructed` must share their stride. `output` is cleared on
+ * entry even when validation fails. `stats` is optional.
+ */
+ReplayStatus codec_movingblockshq_encode_frame(
+    const MbFrame *source, const MbFrame *previous,
+    const CodecMovingBlocksHqEncodeOptions *options, ReplayBuffer *output,
+    MbFrame *reconstructed, CodecMovingBlocksHqEncodeStats *stats);
+
 /* Decode and strictly validate one complete type 17 frame payload. */
 ReplayStatus codec_movingblockshq_verify_frame(
     const uint8_t *payload, size_t payload_size,

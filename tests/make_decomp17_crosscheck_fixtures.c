@@ -90,6 +90,127 @@ static int encode_fixture(const char *directory, const char *stem,
     return EXIT_SUCCESS;
 }
 
+static int encode_frame_fixture(const char *directory, const char *stem,
+                                const MbFrame *source, const MbFrame *previous,
+                                const CodecMovingBlocksHqEncodeOptions *options,
+                                CodecMovingBlocksHqEncodeStats *stats,
+                                MbFrame *reconstructed)
+{
+    char name[128];
+    ReplayBuffer payload;
+    ReplayStatus status;
+
+    replay_buffer_init(&payload);
+    status = codec_movingblockshq_encode_frame(
+        source, previous, options, &payload, reconstructed, stats);
+    CHECK(status == REPLAY_OK);
+    CHECK(payload.size > 0U);
+
+    CHECK(snprintf(name, sizeof(name), "%s.mb17", stem) > 0);
+    CHECK(write_bytes(directory, name, payload.data, payload.size) ==
+          EXIT_SUCCESS);
+    CHECK(snprintf(name, sizeof(name), "%s.expected.yuv555", stem) > 0);
+    CHECK(write_frame(directory, name, reconstructed) == EXIT_SUCCESS);
+    if (previous != NULL) {
+        CHECK(snprintf(name, sizeof(name), "%s.previous.yuv555", stem) > 0);
+        CHECK(write_frame(directory, name, previous) == EXIT_SUCCESS);
+    }
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
+/* Key frame: the right 4x4 duplicates the left, giving a data + spatial copy. */
+static int make_spatial4x4(const char *directory)
+{
+    MbPixel source_pixels[32];
+    MbPixel reconstructed_pixels[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
+    CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U };
+    CodecMovingBlocksHqEncodeStats stats;
+    unsigned y;
+
+    for (y = 0U; y < 4U; ++y) {
+        unsigned x;
+        for (x = 0U; x < 4U; ++x) {
+            MbPixel pixel = { (uint8_t)((y * 4U + x) & 31U), 9U, 21U };
+            source_pixels[y * 8U + x] = pixel;
+            source_pixels[y * 8U + x + 4U] = pixel;
+        }
+    }
+    CHECK(encode_frame_fixture(directory, "spatial4x4", &source, NULL, &options,
+                               &stats, &reconstructed) == EXIT_SUCCESS);
+    CHECK(stats.data4x4_blocks == 1U);
+    CHECK(stats.spatial4x4_blocks == 1U);
+    return EXIT_SUCCESS;
+}
+
+/* Inter frame: the left 4x4 equals the previous frame (stationary copy); the
+ * right differs and is coded as data. */
+static int make_stationary4x4(const char *directory)
+{
+    MbPixel source_pixels[32];
+    MbPixel previous_pixels[32];
+    MbPixel reconstructed_pixels[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame previous = { 8U, 4U, 8U, previous_pixels };
+    MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U };
+    CodecMovingBlocksHqEncodeStats stats;
+    unsigned i;
+
+    for (i = 0U; i < 32U; ++i) {
+        previous_pixels[i] = (MbPixel){ (uint8_t)((i * 5U) & 31U), 4U, 6U };
+        source_pixels[i] = previous_pixels[i];
+    }
+    for (i = 0U; i < 4U; ++i) {
+        unsigned x;
+        for (x = 4U; x < 8U; ++x) {
+            source_pixels[i * 8U + x].y =
+                (uint8_t)((source_pixels[i * 8U + x].y + 9U) & 31U);
+        }
+    }
+    CHECK(encode_frame_fixture(directory, "stationary4x4", &source, &previous,
+                               &options, &stats, &reconstructed) ==
+          EXIT_SUCCESS);
+    CHECK(stats.stationary4x4_blocks == 1U);
+    CHECK(stats.data4x4_blocks == 1U);
+    return EXIT_SUCCESS;
+}
+
+/* Inter frame: the left 4x4 copies the previous frame shifted one pixel right
+ * (a temporal motion copy); the right 4x4 is an unchanged stationary copy. */
+static int make_temporal4x4(const char *directory)
+{
+    MbPixel source_pixels[32];
+    MbPixel previous_pixels[32];
+    MbPixel reconstructed_pixels[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame previous = { 8U, 4U, 8U, previous_pixels };
+    MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 0, 0, 0U };
+    CodecMovingBlocksHqEncodeStats stats;
+    unsigned y;
+
+    for (y = 0U; y < 4U; ++y) {
+        unsigned x;
+        for (x = 0U; x < 8U; ++x) {
+            previous_pixels[y * 8U + x] =
+                (MbPixel){ (uint8_t)((y * 8U + x) & 31U), 4U, 6U };
+            source_pixels[y * 8U + x] = previous_pixels[y * 8U + x];
+        }
+        for (x = 0U; x < 4U; ++x) {
+            source_pixels[y * 8U + x] = previous_pixels[y * 8U + x + 1U];
+        }
+    }
+    CHECK(encode_frame_fixture(directory, "temporal4x4", &source, &previous,
+                               &options, &stats, &reconstructed) ==
+          EXIT_SUCCESS);
+    CHECK(stats.temporal4x4_blocks == 1U);
+    CHECK(stats.stationary4x4_blocks == 1U);
+    return EXIT_SUCCESS;
+}
+
 /* One 4x4 block with a luma ramp and distinct chroma. */
 static int make_data4x4(const char *directory)
 {
@@ -145,5 +266,8 @@ int main(int argc, char **argv)
     CHECK(make_data4x4(argv[1]) == EXIT_SUCCESS);
     CHECK(make_data8x8(argv[1]) == EXIT_SUCCESS);
     CHECK(make_data_wrap(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_spatial4x4(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_stationary4x4(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_temporal4x4(argv[1]) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

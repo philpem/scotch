@@ -175,10 +175,15 @@ int mb_quality_profile_format17(const MbFrame *target, unsigned target_x,
 
     {
         unsigned area = block_size * block_size;
+        /* Round to match the data block's avg5 chroma, so a copy of an
+           identical block reports zero chroma error rather than a half-LSB. */
+        unsigned reference_avg_u = (reference_u + area / 2U) / area;
+        unsigned reference_avg_v = (reference_v + area / 2U) / area;
+
         profile->chroma_u_error = (uint8_t)absolute_difference(
-            (int)target_u, (int)(reference_u / area));
+            (int)target_u, (int)reference_avg_u);
         profile->chroma_v_error = (uint8_t)absolute_difference(
-            (int)target_v, (int)(reference_v / area));
+            (int)target_v, (int)reference_avg_v);
         /* One block-average chroma error applies to every reconstructed pixel. */
         total += area * (profile->chroma_u_error + profile->chroma_v_error);
     }
