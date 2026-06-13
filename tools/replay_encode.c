@@ -1634,6 +1634,65 @@ done:
     return result;
 }
 
+/*
+ * Pad the collected frames so the writer produces only uniform, fully-populated
+ * chunks. The player decodes a fixed "frames per chunk" from every chunk, so any
+ * chunk holding fewer frames than that nominal is decoded past its data into
+ * garbage. *eff_fpc returns the frames-per-chunk to hand the writer.
+ *
+ * Two cases:
+ *  - A movie that spans more than one chunk is padded up to a whole multiple of
+ *    frames-per-chunk (the final chunk becomes full).
+ *  - A movie that fits in a single chunk but carries audio is split by the
+ *    writer into two chunks (it forces >=2 chunks so the sound prefetch has a
+ *    real next chunk). Halving an odd count yields two uneven chunks, so pad to
+ *    two EQUAL chunks of ceil(real/2) -- at most one extra frame.
+ */
+static int pad_sink_for_chunks(FrameSink *sink, unsigned codec, unsigned width,
+                               unsigned height, unsigned fpc, int have_audio,
+                               unsigned *eff_fpc)
+{
+    size_t real = sink->count;
+    size_t target;
+    unsigned chunk;
+    ReplayBuffer payload;
+    int result = EXIT_FAILURE;
+
+    if (fpc == 0U) {
+        fpc = real != 0U ? (unsigned)real : 1U;
+    }
+    if (real == 0U) {
+        *eff_fpc = fpc;
+        return EXIT_SUCCESS;
+    }
+    if (have_audio && real <= (size_t)fpc) {
+        chunk = (unsigned)((real + 1U) / 2U); /* ceil(real / 2), >= 1 */
+        target = (size_t)chunk * 2U;
+    } else {
+        chunk = fpc;
+        target = ((real + (size_t)fpc - 1U) / (size_t)fpc) * (size_t)fpc;
+    }
+    *eff_fpc = chunk;
+    if (target <= real) {
+        return EXIT_SUCCESS;
+    }
+
+    replay_buffer_init(&payload);
+    if (mb_repeat_payload(codec, width, height, &payload) != REPLAY_OK) {
+        fprintf(stderr, "cannot build repeat frame for codec %u\n", codec);
+        goto done;
+    }
+    while (sink->count < target) {
+        if (frame_sink_add(sink, &payload, NULL) != EXIT_SUCCESS) {
+            goto done;
+        }
+    }
+    result = EXIT_SUCCESS;
+done:
+    replay_buffer_free(&payload);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL;
@@ -1654,6 +1713,8 @@ int main(int argc, char **argv)
     MbColorDither dither = MB_COLOR_DITHER_NONE;
     CodecMovingBlocksBetaVariant beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
     unsigned pad_to_multiple = 0U;
+    unsigned encode_pad = 0U;
+    int pad_chunks = 0;
     /* Direct-to-container (--output) options, mirroring replay-join. */
     ContainerOptions container;
     FrameSink sink;
@@ -1876,6 +1937,13 @@ int main(int argc, char **argv)
         container.want_keys = want_keys;
         frame_sink_init(&sink, codec, want_keys);
         sinkp = &sink;
+        /* The direct path pads after encoding, once the real frame count and
+         * audio presence are known, so the writer gets only uniform full chunks
+         * (the per-frame padding done during encode cannot see either). */
+        pad_chunks = pad_to_multiple != 0;
+        encode_pad = 0U;
+    } else {
+        encode_pad = pad_to_multiple;
     }
     if (codec == 7U || codec == 17U || codec == 20U) {
         MbEncodePolicy mb_policy =
@@ -1901,19 +1969,19 @@ int main(int argc, char **argv)
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, pad_to_multiple, sinkp);
+                dither, mb_policy, encode_pad, sinkp);
         } else if (codec == 20U) {
             result = run_encode20_variant(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, beta_variant, pad_to_multiple, sinkp);
+                dither, mb_policy, beta_variant, encode_pad, sinkp);
         } else {
             result = run_encode17(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, pad_to_multiple, sinkp);
+                dither, mb_policy, encode_pad, sinkp);
         }
         goto assemble;
     }
@@ -2145,7 +2213,7 @@ int main(int argc, char **argv)
         goto free_payload;
     }
     if (write_pad_frames(19U, width, height, payload_prefix, ".mb19",
-                         keys_prefix, pad_to_multiple, &frame_number,
+                         keys_prefix, encode_pad, &frame_number,
                          sinkp) != EXIT_SUCCESS) {
         goto free_payload;
     }
@@ -2173,7 +2241,21 @@ done:
     free(rgb);
 assemble:
     if (result == EXIT_SUCCESS && container.output_path != NULL) {
-        result = assemble_container(&sink, &container);
+        if (pad_chunks) {
+            unsigned eff_fpc = container.frames_per_chunk;
+
+            if (pad_sink_for_chunks(&sink, codec, width, height,
+                                    container.frames_per_chunk,
+                                    container.audio_input_path != NULL,
+                                    &eff_fpc) != EXIT_SUCCESS) {
+                result = EXIT_FAILURE;
+            } else {
+                container.frames_per_chunk = eff_fpc;
+            }
+        }
+        if (result == EXIT_SUCCESS) {
+            result = assemble_container(&sink, &container);
+        }
     }
     if (sinkp != NULL) {
         frame_sink_free(&sink);

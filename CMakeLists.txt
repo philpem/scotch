@@ -183,7 +183,8 @@ if(Python3_FOUND)
     add_test(NAME test_direct_container
         COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_direct_container.sh
             $<TARGET_FILE:replay-encode>
-            $<TARGET_FILE:replay-join>)
+            $<TARGET_FILE:replay-join>
+            $<TARGET_FILE:replay-inspect>)
 endif()
 find_program(FFMPEG_EXECUTABLE ffmpeg)
 if(FFMPEG_EXECUTABLE)
