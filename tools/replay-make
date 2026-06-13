@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# replay-make: build an Acorn Replay (type 19, Super Moving Blocks) movie from
+# any video file in one command, wrapping ffmpeg, replay-encode and replay-join.
+# Intermediate frame/audio/poster files are written to a temporary directory and
+# removed on exit.
+#
+#   replay-make INPUT OUTPUT,ae7 [options]
+#
+# Options (defaults in brackets):
+#   --width N          output width in pixels [320]; height keeps aspect, /4
+#   --fps F            output frame rate [12.5]
+#   --loss-level N     quality 0 (exact) .. 28 (roughest) [10]
+#   --frames-per-chunk N   frames per chunk [25]
+#   --start SECONDS    start offset into the source [0]
+#   --duration SECONDS encode only this many seconds [whole file]
+#   --audio-rate HZ    sound sample rate [11025]
+#   --no-audio         omit the sound track
+#   --poster IMAGE     poster image (any ffmpeg-readable file) [first frame];
+#                      pass --no-poster to embed nothing (command-line player only)
+#   --no-poster        do not embed a poster sprite
+#
+set -euo pipefail
+
+self=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+root=$(dirname "$self")
+bin="${REPLAY_BIN:-$root/build-release}"
+[ -x "$bin/replay-encode" ] || bin="$root/build"
+if [ ! -x "$bin/replay-encode" ] || [ ! -x "$bin/replay-join" ]; then
+    echo "replay-make: cannot find replay-encode/replay-join (set REPLAY_BIN)" >&2
+    exit 1
+fi
+
+[ $# -ge 2 ] || { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+input=$1; output=$2; shift 2
+
+width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
+arate=11025; no_audio=0; poster=; no_poster=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --width)            width=$2; shift 2;;
+        --fps)              fps=$2; shift 2;;
+        --loss-level)       loss=$2; shift 2;;
+        --frames-per-chunk) fpc=$2; shift 2;;
+        --start)            start=$2; shift 2;;
+        --duration)         duration=$2; shift 2;;
+        --audio-rate)       arate=$2; shift 2;;
+        --no-audio)         no_audio=1; shift;;
+        --poster)           poster=$2; shift 2;;
+        --no-poster)        no_poster=1; shift;;
+        *) echo "replay-make: unknown option $1" >&2; exit 1;;
+    esac
+done
+
+[ -f "$input" ] || { echo "replay-make: no such file: $input" >&2; exit 1; }
+
+# Source dimensions -> output height that keeps aspect and is a multiple of 4.
+iw=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
+    -of csv=p=0 "$input")
+ih=$(ffprobe -v error -select_streams v:0 -show_entries stream=height \
+    -of csv=p=0 "$input")
+height=$(python3 -c "print(max(4, round($width*$ih/$iw/4)*4))")
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+ss=(); [ "$start" != 0 ] && ss=(-ss "$start")
+tt=(); [ -n "$duration" ] && tt=(-t "$duration")
+
+echo "replay-make: ${width}x${height} @ ${fps}fps, loss $loss -> $output" >&2
+
+# Video: scale and frame-rate convert, encode each frame as a type 19 payload.
+ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
+    -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
+    "$bin/replay-encode" --codec 19 --input - --size "${width}x${height}" \
+        --payload-prefix "$work/f-" --loss-level "$loss" >/dev/null
+frames=$(find "$work" -name 'f-*.mb19' | wc -l)
+[ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
+
+args=(--codec 19 --size "${width}x${height}" --fps "$fps"
+      --frames-prefix "$work/f-" --frames "$frames"
+      --frames-per-chunk "$fpc" --pixel-label 6Y5UV)
+
+if [ "$no_audio" = 0 ]; then
+    ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
+        -vn -ac 1 -ar "$arate" -f s16le "$work/a.pcm"
+    args+=(--sound-pcm "$work/a.pcm" --sound-encode vidc-e8
+           --sound-rate "$arate" --sound-channels 1)
+fi
+
+if [ "$no_poster" = 1 ]; then
+    args+=(--no-poster)
+elif [ -n "$poster" ]; then
+    ffmpeg -hide_banner -loglevel error -i "$poster" \
+        -vf "scale=$width:$height" -pix_fmt bgr555le -f rawvideo "$work/p.bin"
+    args+=(--poster "$work/p.bin")
+else
+    # No image given: use the first encoded frame as the poster.
+    ffmpeg -hide_banner -loglevel error "${ss[@]}" -i "$input" \
+        -vf "scale=$width:$height" -frames:v 1 -pix_fmt bgr555le -f rawvideo "$work/p.bin"
+    args+=(--poster "$work/p.bin")
+fi
+
+"$bin/replay-join" "${args[@]}" --output "$output"
