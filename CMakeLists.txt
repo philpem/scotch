@@ -126,6 +126,14 @@ if(NOT MSVC)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+add_executable(make_decomp17_crosscheck_fixtures
+    tests/make_decomp17_crosscheck_fixtures.c)
+target_link_libraries(make_decomp17_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_decomp17_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
@@ -190,6 +198,13 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME test_decomp17_compiled
             COMMAND sh
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp17_compiled.sh
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP17_COMPILED})
+        add_test(NAME test_decomp17_encoded
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp17_encoded.sh
+                $<TARGET_FILE:make_decomp17_crosscheck_fixtures>
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP17_COMPILED})
