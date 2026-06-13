@@ -4,6 +4,7 @@
 
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_movie.h"
 #include "replay/replay_sound.h"
 
 #include "default_poster.h"
@@ -67,68 +68,6 @@ static int read_file(const char *path, ReplayBuffer *buffer)
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
-}
-
-static void put_u32(ReplayBuffer *b, uint32_t v)
-{
-    uint8_t bytes[4] = {
-        (uint8_t)(v & 0xFFU), (uint8_t)((v >> 8) & 0xFFU),
-        (uint8_t)((v >> 16) & 0xFFU), (uint8_t)((v >> 24) & 0xFFU)
-    };
-
-    (void)replay_buffer_append(b, bytes, sizeof(bytes));
-}
-
-/*
- * Wrap raw 16bpp (bgr555, R in the low bits) pixels into a complete RISC OS
- * spritefile (12-byte area header + 44-byte sprite control block + image), the
- * "helpful sprite" poster !ARPlayer displays. Rows are padded to a word.
- *
- * The mode field is a new-format sprite mode word selecting 16bpp (type 5,
- * 1:5:5:5) at 90x90 dpi, i.e. square pixels: (5<<27)|(90<<14)|(90<<1)|1. Old
- * numbered modes such as 28 are 8bpp and would render the 16bpp data as garbage
- * 256-colour pixels, and square pixels mean the poster is stored at the movie's
- * true dimensions (no 2:1 height doubling).
- */
-#define POSTER_SPRITE_MODE ((5u << 27) | (90u << 14) | (90u << 1) | 1u)
-
-static ReplayStatus build_poster(const uint8_t *px, unsigned w, unsigned h,
-                                 ReplayBuffer *out)
-{
-    unsigned row_bytes = w * 2U;
-    unsigned words_per_row = (row_bytes + 3U) / 4U;
-    unsigned padded = words_per_row * 4U;
-    unsigned image_size = padded * h;
-    unsigned sprite_payload = 44U + image_size;
-    unsigned last_bytes = ((row_bytes + 3U) % 4U) + 1U; /* bytes used, last word */
-    static const char name[12] = "poster";
-    unsigned y;
-
-    replay_buffer_clear(out);
-    put_u32(out, 1U);                          /* number of sprites */
-    put_u32(out, 16U);                         /* offset to first sprite */
-    put_u32(out, 12U + sprite_payload + 4U);   /* offset to first free word */
-    put_u32(out, sprite_payload);              /* offset to next sprite */
-    if (replay_buffer_append(out, name, sizeof(name)) != REPLAY_OK) {
-        return REPLAY_OUT_OF_MEMORY;
-    }
-    put_u32(out, words_per_row - 1U);          /* width in words - 1 */
-    put_u32(out, h - 1U);                      /* height in scan lines - 1 */
-    put_u32(out, 0U);                          /* first bit used */
-    put_u32(out, last_bytes * 8U - 1U);        /* last bit used */
-    put_u32(out, 44U);                         /* offset to image */
-    put_u32(out, 44U);                         /* offset to mask (= image) */
-    put_u32(out, POSTER_SPRITE_MODE);          /* 16bpp, square pixels */
-    for (y = 0U; y < h; ++y) {
-        static const uint8_t zero[4] = { 0, 0, 0, 0 };
-
-        if (replay_buffer_append(out, px + (size_t)y * row_bytes, row_bytes) !=
-                REPLAY_OK ||
-            replay_buffer_append(out, zero, padded - row_bytes) != REPLAY_OK) {
-            return REPLAY_OUT_OF_MEMORY;
-        }
-    }
-    return REPLAY_OK;
 }
 
 int main(int argc, char **argv)
@@ -364,85 +303,25 @@ int main(int argc, char **argv)
     }
 
     if (sound_pcm_path != NULL) {
-        int is_sounda4 = strcmp(sound_encode, "adpcm-sounda4") == 0;
-        int is_adpcm = is_sounda4 || strcmp(sound_encode, "adpcm") == 0 ||
-                       strcmp(sound_encode, "adpcm2") == 0;
+        ReplayBuffer pcm;
+        char sound_error[128];
 
-        if (is_adpcm) {
-            /* IMA ADPCM: hand the raw PCM to the writer, which encodes it per
-             * chunk. "adpcm" is the named-decompressor form (format 2 "adpcm",
-             * the common SoundDir module); "adpcm-sounda4" is the built-in
-             * format-1 SoundA4 (4 bits), only on systems that ship it. */
-            if (read_file(sound_pcm_path, &sound_buffer) != EXIT_SUCCESS) {
-                goto done;
-            }
-            track.encode_adpcm = 1;
-            track.rate_hz = sound_rate;
-            track.channels = sound_channels;
-            track.data = sound_buffer.data;
-            track.size = sound_buffer.size;
-            if (is_sounda4) {
-                track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
-                track.codec_name = NULL;
-                track.precision_bits = 4U;
-                track.label = "bit ADPCM";
-            } else {
-                track.codec = REPLAY_AE7_SOUND_NAMED;
-                track.codec_name = "adpcm";
-                track.precision_bits = 16U;
-                track.label = NULL;
-            }
-            options.tracks = &track;
-            options.track_count = 1U;
-        } else {
-            /* Encode canonical signed-16 little-endian PCM (from ffmpeg) into a
-             * Replay format-1 sub-format. The bits-per-sample label selects the
-             * player's decoder. */
-            ReplayBuffer pcm;
-            ReplaySoundFormat fmt;
-            size_t count;
-
-            if (strcmp(sound_encode, "signed-8") == 0) {
-                fmt = REPLAY_SOUND_SIGNED_8;
-            } else if (strcmp(sound_encode, "signed-16") == 0) {
-                fmt = REPLAY_SOUND_SIGNED_16;
-            } else if (strcmp(sound_encode, "vidc-e8") == 0 ||
-                       strcmp(sound_encode, "vidc-log") == 0) {
-                fmt = REPLAY_SOUND_VIDC_E8;
-            } else {
-                fprintf(stderr, "unknown --sound-encode: %s\n", sound_encode);
-                goto done;
-            }
-            replay_buffer_init(&pcm);
-            if (read_file(sound_pcm_path, &pcm) != EXIT_SUCCESS) {
-                replay_buffer_free(&pcm);
-                goto done;
-            }
-            count = pcm.size / 2U; /* signed 16-bit little-endian samples */
-            for (i = 0U; i < count; ++i) {
-                int16_t sample =
-                    (int16_t)((uint16_t)pcm.data[i * 2U] |
-                              ((uint16_t)pcm.data[i * 2U + 1U] << 8));
-
-                if (replay_sound_encode(fmt, &sample, 1U, &sound_buffer) !=
-                    REPLAY_OK) {
-                    fprintf(stderr, "audio encode failed\n");
-                    replay_buffer_free(&pcm);
-                    goto done;
-                }
-            }
+        replay_buffer_init(&pcm);
+        if (read_file(sound_pcm_path, &pcm) != EXIT_SUCCESS) {
             replay_buffer_free(&pcm);
-            track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
-            track.codec_name = NULL;
-            track.rate_hz = sound_rate;
-            track.channels = sound_channels;
-            track.precision_bits = replay_sound_format_bits(fmt);
-            track.label = replay_sound_format_label(fmt);
-            track.data = sound_buffer.data;
-            track.size = sound_buffer.size;
-            options.tracks = &track;
-            options.track_count = 1U;
+            goto done;
         }
+        if (replay_build_pcm_track(pcm.data, pcm.size, sound_encode, sound_rate,
+                                   sound_channels, &sound_buffer, &track,
+                                   sound_error, sizeof(sound_error)) !=
+            REPLAY_OK) {
+            fprintf(stderr, "%s\n", sound_error);
+            replay_buffer_free(&pcm);
+            goto done;
+        }
+        replay_buffer_free(&pcm);
+        options.tracks = &track;
+        options.track_count = 1U;
     } else if (sound_path != NULL) {
         if (read_file(sound_path, &sound_buffer) != EXIT_SUCCESS) {
             goto done;
@@ -499,8 +378,8 @@ int main(int argc, char **argv)
                     poster_path, poster_w, poster_h, want, poster_buffer.size);
             goto done;
         }
-        if (build_poster(poster_buffer.data, poster_w, poster_h,
-                         &sprite_buffer) != REPLAY_OK) {
+        if (replay_build_poster(poster_buffer.data, poster_w, poster_h,
+                                &sprite_buffer) != REPLAY_OK) {
             fprintf(stderr, "unable to build poster sprite\n");
             goto done;
         }
