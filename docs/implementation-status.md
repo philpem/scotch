@@ -199,6 +199,15 @@ this file describes the current portable code in `replay-tooling`.
 
 ## Known Gaps
 
+- Final-chunk padding. When the last chunk is partial (e.g. 63 frames at 25
+  frames/chunk gives chunks of 25, 25, 13), the RISC OS player shows a black
+  screen with an increasing number of random error blocks past the real frames.
+  Acorn's compressor appears to pad the final chunk by repeating the last frame
+  ("repeating last frame") so every chunk holds frames-per-chunk valid frames;
+  replay-make/replay-join emit a short final chunk, so the player decodes beyond
+  the encoded frames and accumulates inter-frame errors. Likely fix: pad the
+  last chunk with stationary/repeat-last frames. Observed on a type 20 clip; not
+  yet confirmed whether full-length 7/17/19 movies are affected.
 - The RGB->YUV conversion is verified against CompLib's ARM source (Tools/
   CompLib RGB->YUV routine). The *algorithm* matches bit-exact: an independent
   reimplementation from that assembly equals mb_color over an RGB sweep for both
