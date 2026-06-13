@@ -295,6 +295,76 @@ static int make_spatial(const char *directory)
 }
 
 /*
+ * Exercise the 2x2 spatial vectors directly: a 16x16 gradient whose third block
+ * row is splits, each split's TL child a 2x2 spatial copy at a different index
+ * (2,3,4,5 -- the entries Docs/Stream scrambled). The per-pixel gradient makes a
+ * wrong table entry copy different pixels, so the Decomp7 cross-check catches it.
+ */
+static int make_spatial2x2(const char *directory)
+{
+    enum { W = 16U, H = 16U };
+    MbPixel source_pixels[W * H];
+    MbPixel decoded_pixels[W * H];
+    MbFrame source = { W, H, W, source_pixels };
+    MbFrame decoded = { W, H, W, decoded_pixels };
+    /* Block x-origin -> 2x2 spatial index for that split's TL child. */
+    static const unsigned splits[4][2] = {
+        { 0U, 2U }, { 4U, 3U }, { 8U, 4U }, { 12U, 5U }
+    };
+    ReplayBuffer payload;
+    unsigned i;
+
+    for (i = 0U; i < W * H; ++i) {
+        unsigned x = i % W;
+        unsigned y = i / W;
+        source_pixels[i] = (MbPixel){ (uint8_t)((x * 5U + y * 3U) & 31U),
+                                      (uint8_t)((x + 2U) & 31U),
+                                      (uint8_t)((y + 9U) & 31U) };
+    }
+    replay_buffer_init(&payload);
+    {
+        ReplayBitWriter writer;
+        unsigned bx;
+        unsigned by;
+
+        replay_bitwriter_init(&writer, &payload);
+        for (by = 0U; by < H; by += 4U) {
+            for (bx = 0U; bx < W; bx += 4U) {
+                unsigned split = 4U;
+                unsigned s;
+
+                if (by == 8U) {
+                    for (s = 0U; s < 4U; ++s) {
+                        if (splits[s][0] == bx) {
+                            split = s;
+                        }
+                    }
+                }
+                if (split == 4U) {
+                    put_data4x4(&writer, &source, bx, by);
+                    continue;
+                }
+                /* `01` split; TL is a 2x2 spatial move, the rest data. */
+                replay_bitwriter_write(&writer, 0U, 1U);
+                replay_bitwriter_write(&writer, 1U, 1U);
+                replay_bitwriter_write(&writer, 0U, 1U); /* TL `0` move */
+                put_move_code(&writer, 3U, 56U + splits[split][1]);
+                put_data2x2(&writer, &source, bx + 2U, by);
+                put_data2x2(&writer, &source, bx, by + 2U);
+                put_data2x2(&writer, &source, bx + 2U, by + 2U);
+            }
+        }
+        CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    }
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, NULL,
+                                          &decoded, NULL, NULL) == REPLAY_OK);
+    CHECK(emit_fixture(directory, "spatial2x2", &payload, &decoded) ==
+          EXIT_SUCCESS);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
+/*
  * End-to-end: encode a synthetic key frame and a following inter frame with the
  * real type 7 encoder, then hand both payloads to the compiled Decomp7. The
  * encoder mixes data, split, spatial, stationary and temporal blocks, so a
@@ -351,6 +421,7 @@ int main(int argc, char **argv)
     CHECK(make_split(argv[1]) == EXIT_SUCCESS);
     CHECK(make_temporal(argv[1]) == EXIT_SUCCESS);
     CHECK(make_spatial(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_spatial2x2(argv[1]) == EXIT_SUCCESS);
     CHECK(make_encoded(argv[1]) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

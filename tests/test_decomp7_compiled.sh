@@ -41,5 +41,6 @@ check_fixture data 8x8
 check_fixture split 4x4
 check_fixture_prev temporal 8x8
 check_fixture spatial 8x4
+check_fixture spatial2x2 16x16
 check_fixture enc_key 16x16
 check_fixture_prev enc_inter 16x16

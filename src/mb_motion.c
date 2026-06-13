@@ -104,13 +104,10 @@ ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
 }
 
 /*
- * Type 7 shares the 4x4 spatial table (spatial_4x4) but orders its 2x2 spatial
- * vectors differently (Decomp7/Docs/Stream indices 56..63).
+ * Type 7's spatial tables (Decomp7 indices 56..63) are identical to the 17/19
+ * tables -- confirmed by probing the compiled Decomp7. (Docs/Stream lists the
+ * 2x2 column in a scrambled order; the running decoder is the authority.)
  */
-static const MbMotionVector spatial_2x2_format7[8] = {
-    { -2, -2, 1 }, { -1, -2, 1 }, { -2, -1, 1 }, { 0, -2, 1 },
-    { 1, -2, 1 },  { 2, -2, 1 },  { -2, 0, 1 },  { -3, 0, 1 }
-};
 
 ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
                                     MbMotionBlockSize block_size,
@@ -168,7 +165,7 @@ ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
     } else {
         *motion = block_size == MB_MOTION_BLOCK_4X4
                       ? spatial_4x4[index - 56U]
-                      : spatial_2x2_format7[index - 56U];
+                      : spatial_2x2[index - 56U];
     }
     return REPLAY_OK;
 }
@@ -213,7 +210,7 @@ ReplayStatus mb_motion_format7_spatial_at(MbMotionBlockSize block_size,
     }
     *motion = block_size == MB_MOTION_BLOCK_4X4
                   ? spatial_4x4[index]
-                  : spatial_2x2_format7[index];
+                  : spatial_2x2[index];
     return REPLAY_OK;
 }
 
@@ -241,7 +238,7 @@ static int spatial_index_format7(MbMotionBlockSize block_size,
 {
     const MbMotionVector *table = block_size == MB_MOTION_BLOCK_4X4
                                       ? spatial_4x4
-                                      : spatial_2x2_format7;
+                                      : spatial_2x2;
     unsigned i;
 
     for (i = 0U; i < 8U; ++i) {
