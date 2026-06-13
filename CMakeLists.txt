@@ -98,6 +98,7 @@ add_replay_test(test_mb_metrics tests/test_mb_metrics.c)
 add_replay_test(test_mb_quality tests/test_mb_quality.c)
 add_replay_test(test_mb_rate_control tests/test_mb_rate_control.c)
 add_replay_test(test_mb_color tests/test_mb_color.c)
+add_replay_test(test_mb_color_complib tests/test_mb_color_complib.c)
 add_replay_test(test_codec_supermovingblocks
     tests/test_codec_supermovingblocks.c)
 add_replay_test(test_codec_movingblockshq
