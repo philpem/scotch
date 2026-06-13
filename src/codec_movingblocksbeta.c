@@ -17,8 +17,9 @@
  * Type 20 is the 6Y6UV beta branch. It reuses type 19's grammar, motion tables
  * and luma Huffman table; only the chroma differs. Two type 20 decoders shipped:
  * the v0.04 "old" module (20 Sep 1996) stores chroma directly as six bits per
- * component, and the v0.05 "new" module (19 Nov 1996) delta-codes it. This
- * implements the "old" (direct) format; see docs/type20-shipped-vs-source.md.
+ * component, and the v0.05 "new" module (19 Nov 1996) delta-codes it. Both are
+ * implemented, selected by CodecMovingBlocksBetaVariant; see
+ * docs/type20-shipped-vs-source.md.
  */
 const MbCodec codec_movingblocksbeta = {
     REPLAY_CODEC_MOVINGBLOCKSBETA,
@@ -35,17 +36,25 @@ const MbCodec codec_movingblocksbeta = {
  * Decode.
  * ---------------------------------------------------------------------- */
 
+/* "new" (v0.05) chroma delta table (Decomp20 `deltaexpand`), indexed 0..15. */
+static const int8_t delta_expand[16] = {
+    -32, -26, -20, -14, -8, -4, -2, -1, 0, 1, 2, 4, 8, 14, 20, 26
+};
+
 /*
- * Read a data header: opcode (2 bits), then U and V as six-bit fields (14 bits
- * total), matching Decomp20's `add r0,#14` then 12-bit chroma extract. The
- * chroma is the output word's U<<6|V<<12, i.e. U in bits 2..7 and V in 8..13.
+ * "old" (v0.04) data header: opcode (2 bits), then U and V as six-bit fields
+ * (14 bits total), matching the 12456-byte module's `add r0,#14` + 12-bit chroma
+ * extract. The chroma is the output word's U<<6|V<<12, i.e. U in bits 2..7 and
+ * V in 8..13, stored directly.
  */
-static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
-                                uint8_t *u, uint8_t *v, MbVerifyError *error)
+static ReplayStatus read_header_old(ReplayBitReader *reader, uint32_t opcode,
+                                    MbPredictor *predictor, uint8_t *u,
+                                    uint8_t *v, MbVerifyError *error)
 {
     uint32_t header;
     ReplayStatus status = replay_bitreader_read(reader, 14U, &header);
 
+    (void)predictor;
     if (status != REPLAY_OK) {
         if (error != NULL) {
             error->bit_position = replay_bitreader_position(reader);
@@ -64,6 +73,47 @@ static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,
     *v = (uint8_t)((header >> 8U) & 63U);
     return REPLAY_OK;
 }
+
+/*
+ * "new" (v0.05) data header: opcode (2 bits) + an 8-bit uv byte (10 bits total,
+ * the 12528-byte module's `add r0,#0xa` + `unpackuv`). The uv byte holds a
+ * 4-bit delta code per component (u low nibble, v high), added to the chroma
+ * predictor carried across data blocks and masked to six bits.
+ */
+static ReplayStatus read_header_new(ReplayBitReader *reader, uint32_t opcode,
+                                    MbPredictor *predictor, uint8_t *u,
+                                    uint8_t *v, MbVerifyError *error)
+{
+    uint32_t header;
+    unsigned uv;
+    ReplayStatus status = replay_bitreader_read(reader, 10U, &header);
+
+    if (status != REPLAY_OK) {
+        if (error != NULL) {
+            error->bit_position = replay_bitreader_position(reader);
+            error->detail = "truncated Moving Blocks Beta data header";
+        }
+        return status;
+    }
+    if ((header & UINT32_C(3)) != opcode) {
+        if (error != NULL) {
+            error->bit_position = replay_bitreader_position(reader) - 10U;
+            error->detail = "unexpected Moving Blocks Beta data opcode";
+        }
+        return REPLAY_MALFORMED_STREAM;
+    }
+    uv = (header >> 2U) & 0xFFU;
+    *u = (uint8_t)(((unsigned)predictor->chroma_u +
+                    (unsigned)delta_expand[uv & 15U]) & 63U);
+    *v = (uint8_t)(((unsigned)predictor->chroma_v +
+                    (unsigned)delta_expand[(uv >> 4U) & 15U]) & 63U);
+    predictor->chroma_u = *u;
+    predictor->chroma_v = *v;
+    return REPLAY_OK;
+}
+
+typedef ReplayStatus (*ReadHeaderFn)(ReplayBitReader *, uint32_t, MbPredictor *,
+                                     uint8_t *, uint8_t *, MbVerifyError *);
 
 static ReplayStatus read_residual(ReplayBitReader *reader, uint8_t *residual,
                                   MbVerifyError *error)
@@ -88,9 +138,9 @@ static uint8_t add6(unsigned prediction, uint8_t residual)
     return (uint8_t)((prediction + residual) & 63U);
 }
 
-ReplayStatus codec_movingblocksbeta_decode_data4x4(
+static ReplayStatus decode_data4x4(
     ReplayBitReader *reader, MbPredictor *predictor,
-    MbPixel *pixels, size_t stride, MbVerifyError *error)
+    MbPixel *pixels, size_t stride, MbVerifyError *error, ReadHeaderFn read_hdr)
 {
     uint8_t u;
     uint8_t v;
@@ -103,7 +153,7 @@ ReplayStatus codec_movingblocksbeta_decode_data4x4(
     if (reader == NULL || predictor == NULL || pixels == NULL || stride < 4U) {
         return REPLAY_INVALID_ARGUMENT;
     }
-    status = read_header(reader, UINT32_C(1), &u, &v, error);
+    status = read_hdr(reader, UINT32_C(1), predictor, &u, &v, error);
     if (status != REPLAY_OK) {
         return status;
     }
@@ -137,9 +187,9 @@ ReplayStatus codec_movingblocksbeta_decode_data4x4(
     return REPLAY_OK;
 }
 
-ReplayStatus codec_movingblocksbeta_decode_data2x2(
+static ReplayStatus decode_data2x2(
     ReplayBitReader *reader, MbPredictor *predictor,
-    MbPixel *pixels, size_t stride, MbVerifyError *error)
+    MbPixel *pixels, size_t stride, MbVerifyError *error, ReadHeaderFn read_hdr)
 {
     uint8_t u;
     uint8_t v;
@@ -151,7 +201,7 @@ ReplayStatus codec_movingblocksbeta_decode_data2x2(
     if (reader == NULL || predictor == NULL || pixels == NULL || stride < 2U) {
         return REPLAY_INVALID_ARGUMENT;
     }
-    status = read_header(reader, UINT32_C(2), &u, &v, error);
+    status = read_hdr(reader, UINT32_C(2), predictor, &u, &v, error);
     if (status != REPLAY_OK) {
         return status;
     }
@@ -182,18 +232,67 @@ ReplayStatus codec_movingblocksbeta_decode_data2x2(
     return REPLAY_OK;
 }
 
+/* The public primitives decode the "old" (direct chroma) format. */
+ReplayStatus codec_movingblocksbeta_decode_data4x4(
+    ReplayBitReader *reader, MbPredictor *predictor,
+    MbPixel *pixels, size_t stride, MbVerifyError *error)
+{
+    return decode_data4x4(reader, predictor, pixels, stride, error,
+                          read_header_old);
+}
+
+ReplayStatus codec_movingblocksbeta_decode_data2x2(
+    ReplayBitReader *reader, MbPredictor *predictor,
+    MbPixel *pixels, size_t stride, MbVerifyError *error)
+{
+    return decode_data2x2(reader, predictor, pixels, stride, error,
+                          read_header_old);
+}
+
+static ReplayStatus decode_data4x4_new(
+    ReplayBitReader *reader, MbPredictor *predictor,
+    MbPixel *pixels, size_t stride, MbVerifyError *error)
+{
+    return decode_data4x4(reader, predictor, pixels, stride, error,
+                          read_header_new);
+}
+
+static ReplayStatus decode_data2x2_new(
+    ReplayBitReader *reader, MbPredictor *predictor,
+    MbPixel *pixels, size_t stride, MbVerifyError *error)
+{
+    return decode_data2x2(reader, predictor, pixels, stride, error,
+                          read_header_new);
+}
+
+ReplayStatus codec_movingblocksbeta_verify_frame_variant(
+    const uint8_t *payload, size_t payload_size,
+    const MbFrame *previous, MbFrame *decoded,
+    size_t *bits_consumed, MbVerifyError *error,
+    CodecMovingBlocksBetaVariant variant)
+{
+    static const MbFrameVerifyCodec verifier_old = {
+        codec_movingblocksbeta_decode_data4x4,
+        codec_movingblocksbeta_decode_data2x2
+    };
+    static const MbFrameVerifyCodec verifier_new = {
+        decode_data4x4_new, decode_data2x2_new
+    };
+
+    return mb_frame_verify(
+        variant == CODEC_MOVINGBLOCKSBETA_NEW ? &verifier_new : &verifier_old,
+        payload, payload_size, previous, decoded, bits_consumed, error, NULL,
+        NULL);
+}
+
 ReplayStatus codec_movingblocksbeta_verify_frame(
     const uint8_t *payload, size_t payload_size,
     const MbFrame *previous, MbFrame *decoded,
     size_t *bits_consumed, MbVerifyError *error)
 {
-    static const MbFrameVerifyCodec verifier = {
-        codec_movingblocksbeta_decode_data4x4,
-        codec_movingblocksbeta_decode_data2x2
-    };
-
-    return mb_frame_verify(&verifier, payload, payload_size, previous, decoded,
-                           bits_consumed, error, NULL, NULL);
+    return codec_movingblocksbeta_verify_frame_variant(
+        payload, payload_size, previous, decoded, bits_consumed, error,
+        CODEC_MOVINGBLOCKSBETA_OLD);
 }
 
 /* ---------------------------------------------------------------------- *
@@ -295,25 +394,54 @@ static void make_luma(const MbFrame *source, unsigned x, unsigned y,
     predictor->luma = (uint8_t)(sum >> (size == 4U ? 4U : 2U));
 }
 
-/* Data-block coder for the shared frame encoder: write opcode + direct six-bit
- * U and V (14-bit header) + luma residuals, reconstructing the lossless luma. */
-static ReplayStatus codec20_encode_data(ReplayBitWriter *writer,
-                                        const MbFrame *source, unsigned x,
-                                        unsigned y, unsigned size,
-                                        MbPixel *recon, size_t recon_stride,
-                                        MbPredictor *predictor)
+static int sign6(uint8_t value)
 {
-    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0, 32);
-    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1, 32);
+    return value < 32U ? (int)value : (int)value - 64;
+}
+
+/* "new" variant: pick the 4-bit delta code whose reconstruction is closest to
+ * the target six-bit chroma, advance the predictor, and return the code. */
+static unsigned choose_delta(uint8_t target, uint8_t *predictor)
+{
+    int target_signed = sign6(target);
+    unsigned best_code = 0U;
+    int best_error = 1 << 20;
+    uint8_t best_value = *predictor;
+    unsigned code;
+
+    for (code = 0U; code < 16U; ++code) {
+        uint8_t candidate =
+            (uint8_t)(((unsigned)*predictor + (unsigned)delta_expand[code]) &
+                      63U);
+        int error = sign6(candidate) - target_signed;
+
+        if (error < 0) {
+            error = -error;
+        }
+        if (error < best_error) {
+            best_error = error;
+            best_code = code;
+            best_value = candidate;
+        }
+    }
+    *predictor = best_value;
+    return best_code;
+}
+
+/* Write the luma residuals (after the header) and reconstruct the block: luma
+ * lossless, chroma the supplied u, v. Shared by both variants. */
+static ReplayStatus write_luma_recon(ReplayBitWriter *writer,
+                                     const MbFrame *source, unsigned x,
+                                     unsigned y, unsigned size, MbPixel *recon,
+                                     size_t recon_stride, MbPredictor *predictor,
+                                     uint8_t u, uint8_t v)
+{
     uint8_t residuals[16];
-    uint32_t header = (size == 4U ? UINT32_C(1) : UINT32_C(2)) |
-                      ((uint32_t)u << 2U) | ((uint32_t)v << 8U);
-    ReplayStatus status;
+    ReplayStatus status = REPLAY_OK;
     unsigned i;
     unsigned count = size * size;
 
     make_luma(source, x, y, size, predictor, residuals);
-    status = replay_bitwriter_write(writer, header, 14U);
     for (i = 0U; status == REPLAY_OK && i < count; ++i) {
         status = mb_huffman_write(writer, &codec_supermovingblocks_luma_huffman,
                                   residuals[i]);
@@ -322,19 +450,60 @@ static ReplayStatus codec20_encode_data(ReplayBitWriter *writer,
         return status;
     }
     for (i = 0U; i < count; ++i) {
-        unsigned row = i / size;
-        unsigned column = i % size;
-        MbPixel *out = &recon[(size_t)row * recon_stride + column];
+        MbPixel *out = &recon[(size_t)(i / size) * recon_stride + i % size];
 
-        out->y = source->pixels[(size_t)(y + row) * source->stride +
-                                x + column].y;
+        out->y = source->pixels[(size_t)(y + i / size) * source->stride +
+                                x + i % size].y;
         out->u = u;
         out->v = v;
     }
     return REPLAY_OK;
 }
 
-static const MbEncodeDataCodec codec20_data = { codec20_encode_data };
+/* "old" data coder: opcode + direct six-bit U, V (14-bit header). */
+static ReplayStatus codec20_encode_data_old(ReplayBitWriter *writer,
+                                            const MbFrame *source, unsigned x,
+                                            unsigned y, unsigned size,
+                                            MbPixel *recon, size_t recon_stride,
+                                            MbPredictor *predictor)
+{
+    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0, 32);
+    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1, 32);
+    uint32_t header = (size == 4U ? UINT32_C(1) : UINT32_C(2)) |
+                      ((uint32_t)u << 2U) | ((uint32_t)v << 8U);
+    ReplayStatus status = replay_bitwriter_write(writer, header, 14U);
+
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    return write_luma_recon(writer, source, x, y, size, recon, recon_stride,
+                            predictor, u, v);
+}
+
+/* "new" data coder: opcode + uv-delta byte (10-bit header), chroma predicted. */
+static ReplayStatus codec20_encode_data_new(ReplayBitWriter *writer,
+                                            const MbFrame *source, unsigned x,
+                                            unsigned y, unsigned size,
+                                            MbPixel *recon, size_t recon_stride,
+                                            MbPredictor *predictor)
+{
+    uint8_t target_u = mb_encode_average_chroma(source, x, y, size, 0, 32);
+    uint8_t target_v = mb_encode_average_chroma(source, x, y, size, 1, 32);
+    unsigned u_code = choose_delta(target_u, &predictor->chroma_u);
+    unsigned v_code = choose_delta(target_v, &predictor->chroma_v);
+    uint32_t header = (size == 4U ? UINT32_C(1) : UINT32_C(2)) |
+                      (((u_code & 15U) | ((v_code & 15U) << 4U)) << 2U);
+    ReplayStatus status = replay_bitwriter_write(writer, header, 10U);
+
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    return write_luma_recon(writer, source, x, y, size, recon, recon_stride,
+                            predictor, predictor->chroma_u, predictor->chroma_v);
+}
+
+static const MbEncodeDataCodec codec20_data_old = { codec20_encode_data_old };
+static const MbEncodeDataCodec codec20_data_new = { codec20_encode_data_new };
 
 ReplayStatus codec_movingblocksbeta_encode_frame(
     const MbFrame *source, const MbFrame *previous,
@@ -356,9 +525,12 @@ ReplayStatus codec_movingblocksbeta_encode_frame(
     encode_options.policy = options->policy;
     encode_options.workspace = options->workspace;
 
-    status = mb_encode_frame(&codec20_encode, &codec20_data, source, previous,
-                             &encode_options, output, reconstructed,
-                             &encode_stats);
+    status = mb_encode_frame(
+        &codec20_encode,
+        options->variant == CODEC_MOVINGBLOCKSBETA_NEW ? &codec20_data_new
+                                                       : &codec20_data_old,
+        source, previous, &encode_options, output, reconstructed,
+        &encode_stats);
     if (status == REPLAY_OK && stats != NULL) {
         stats->data4x4_blocks = encode_stats.data4x4_blocks;
         stats->stationary4x4_blocks = encode_stats.stationary4x4_blocks;

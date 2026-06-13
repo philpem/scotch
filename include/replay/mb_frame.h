@@ -18,6 +18,11 @@ typedef struct {
 typedef struct {
     /* Average luma of the most recent data-coded block, initially zero. */
     uint8_t luma;
+    /* Type 20 "new" (delta-coded chroma) only: the previous data block's 6-bit
+       U and V, carried like luma and reset to zero each frame. Unused (zero) by
+       every other codec, including type 20 "old". */
+    uint8_t chroma_u;
+    uint8_t chroma_v;
 } MbPredictor;
 
 typedef struct {

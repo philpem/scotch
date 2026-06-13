@@ -56,7 +56,7 @@ static void usage(FILE *stream)
             "(--payload FILE | --payload-prefix PREFIX) "
             "[--input-format rgb24|6y5uv|yuv555] [--dither 4x4|8x8|--no-dither] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
-            "[--policy ordered|lowest-error] "
+            "[--policy ordered|lowest-error] [--variant old|new] "
             "[--rate-search linear|bracketed] "
             "[--target-bytes N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX] "
@@ -962,13 +962,15 @@ cleanup:
  * run_encode7/17 but converts RGB to 6Y6UV and uses the type-20 codec. Type 20
  * key frames are 18-bit and not yet emitted, so --keys is rejected.
  */
-static int run_encode20(const char *input_path, InputFormat input_format,
+static int run_encode20_variant(const char *input_path,
+                                InputFormat input_format,
                         unsigned width, unsigned height,
                         const char *payload_path, const char *payload_prefix,
                         size_t frame_limit, unsigned loss_level, int data_only,
                         const char *recon_prefix, const char *recon_ppm_path,
                         const char *keys_prefix, size_t target_bytes,
-                        MbColorDither dither, MbEncodePolicy policy)
+                        MbColorDither dither, MbEncodePolicy policy,
+                        CodecMovingBlocksBetaVariant variant)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -1044,6 +1046,7 @@ static int run_encode20(const char *input_path, InputFormat input_format,
         options.allow_spatial = !data_only;
         options.allow_split = !data_only;
         options.policy = policy;
+        options.variant = variant;
 
         {
             int rate_enabled = target_bytes != 0U && previous_arg != NULL;
@@ -1080,8 +1083,9 @@ static int run_encode20(const char *input_path, InputFormat input_format,
             }
             current_loss = options.loss_level;
         }
-        status = codec_movingblocksbeta_verify_frame(
-            payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
+        status = codec_movingblocksbeta_verify_frame_variant(
+            payload.data, payload.size, previous_arg, &decoded, NULL, NULL,
+            variant);
         if (status != REPLAY_OK ||
             memcmp(decoded_pixels, recon_pixels,
                    pixel_count * sizeof(*recon_pixels)) != 0) {
@@ -1090,11 +1094,14 @@ static int run_encode20(const char *input_path, InputFormat input_format,
             goto cleanup;
         }
 
-        printf("frame=%zu codec=20 name=\"Moving Blocks Beta\" retry=%u "
+        printf("frame=%zu codec=20 name=\"Moving Blocks Beta\" variant=%s "
+               "retry=%u "
                "loss_level=%u bits=%zu bytes=%zu data4x4=%zu stationary4x4=%zu "
                "temporal4x4=%zu spatial4x4=%zu split4x4=%zu data2x2=%zu "
                "stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu verify=ok\n",
-               frame_number, retry, options.loss_level, stats.bits_written,
+               frame_number,
+               variant == CODEC_MOVINGBLOCKSBETA_NEW ? "new" : "old", retry,
+               options.loss_level, stats.bits_written,
                payload.size, stats.data4x4_blocks, stats.stationary4x4_blocks,
                stats.temporal4x4_blocks, stats.spatial4x4_blocks,
                stats.split4x4_blocks, stats.data2x2_blocks,
@@ -1177,6 +1184,7 @@ int main(int argc, char **argv)
     size_t frame_limit = 0U;
     InputFormat input_format = INPUT_RGB24;
     MbColorDither dither = MB_COLOR_DITHER_NONE;
+    CodecMovingBlocksBetaVariant beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
     CodecSuperMovingBlocksPolicy policy =
         CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
     RateSearch rate_search = RATE_SEARCH_LINEAR;
@@ -1228,6 +1236,17 @@ int main(int argc, char **argv)
                 dither = MB_COLOR_DITHER_ORDERED_4X4;
             } else if (strcmp(mode, "8x8") == 0) {
                 dither = MB_COLOR_DITHER_ORDERED_8X8;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+        } else if (strcmp(argv[i], "--variant") == 0 && i + 1 < argc) {
+            const char *name = argv[++i];
+
+            if (strcmp(name, "old") == 0) {
+                beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
+            } else if (strcmp(name, "new") == 0) {
+                beta_variant = CODEC_MOVINGBLOCKSBETA_NEW;
             } else {
                 usage(stderr);
                 return EXIT_FAILURE;
@@ -1331,11 +1350,11 @@ int main(int argc, char **argv)
                 dither, mb_policy);
         }
         if (codec == 20U) {
-            return run_encode20(
+            return run_encode20_variant(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy);
+                dither, mb_policy, beta_variant);
         }
         return run_encode17(
             input_path, input_format, width, height, payload_path,

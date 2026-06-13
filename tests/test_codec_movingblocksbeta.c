@@ -21,16 +21,16 @@ static int encode_and_check(const MbFrame *source, const MbFrame *previous,
     CHECK(codec_movingblocksbeta_encode_frame(source, previous, options,
                                               &payload, reconstructed,
                                               NULL) == REPLAY_OK);
-    CHECK(codec_movingblocksbeta_verify_frame(payload.data, payload.size,
-                                              previous, &decoded, NULL,
-                                              NULL) == REPLAY_OK);
+    CHECK(codec_movingblocksbeta_verify_frame_variant(
+              payload.data, payload.size, previous, &decoded, NULL, NULL,
+              options->variant) == REPLAY_OK);
     CHECK(memcmp(decoded_pixels, reconstructed->pixels,
                  pixels * sizeof(MbPixel)) == 0);
     replay_buffer_free(&payload);
     return EXIT_SUCCESS;
 }
 
-static int test_encode_round_trip(void)
+static int test_encode_round_trip(CodecMovingBlocksBetaVariant variant)
 {
     enum { W = 16U, H = 16U };
     MbPixel source_pixels[W * H];
@@ -50,7 +50,7 @@ static int test_encode_round_trip(void)
                                       (uint8_t)((i % W) * 4U & 63U) };
     }
     options = (CodecMovingBlocksBetaEncodeOptions){
-        0, 0, 1, 1, 0U, MB_ENCODE_POLICY_LOWEST_ERROR, NULL
+        0, 0, 1, 1, 0U, MB_ENCODE_POLICY_LOWEST_ERROR, NULL, variant
     };
     CHECK(encode_and_check(&source, NULL, &options, &reconstructed,
                            decoded_pixels) == EXIT_SUCCESS);
@@ -68,6 +68,7 @@ static int test_encode_round_trip(void)
 
 int main(void)
 {
-    CHECK(test_encode_round_trip() == EXIT_SUCCESS);
+    CHECK(test_encode_round_trip(CODEC_MOVINGBLOCKSBETA_OLD) == EXIT_SUCCESS);
+    CHECK(test_encode_round_trip(CODEC_MOVINGBLOCKSBETA_NEW) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

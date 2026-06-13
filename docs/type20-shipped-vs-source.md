@@ -86,12 +86,16 @@ closest delta code.
 
 ## Consequence
 
-`codec_movingblocksbeta` currently implements the **"old" (direct)** variant,
-cross-checked byte-for-byte against the 20 Sep 1996 12456-byte `Decompress,ffd`
-(`test_decomp20_compiled`, `test_fullmovie_decomp20`). The **"new" (delta)**
-variant is fully reverse-engineered above and is the next piece to add (a second
-data-block chroma path selected by a variant flag, cross-checked against the
-19 Nov 1996 12528-byte module).
+`codec_movingblocksbeta` implements **both** variants, selected by
+`CodecMovingBlocksBetaVariant` (`...EncodeOptions.variant`,
+`codec_movingblocksbeta_verify_frame_variant`). Each is cross-checked
+byte-for-byte against its real module: "old" vs the 20 Sep 1996 12456-byte
+`Decompress,ffd` (`test_decomp20_compiled`), "new" vs the 19 Nov 1996 12528-byte
+module (`test_decomp20new_compiled`). The tooling exposes both:
+`replay-encode --codec 20 --variant old|new`, and `replay-make --codec 20
+[--variant new] [--type-alias N]` -- the alias writes compression type N in the
+container so the "new" Decomp module can be installed at `Decomp<N>` (free
+numbers 13, 14, 28, 29, 30) beside the "old" one without a directory clash.
 
 A stream encoded for one variant will NOT decode on the other (the 14-bit vs
 10-bit header alone desynchronises the luma), which is why the

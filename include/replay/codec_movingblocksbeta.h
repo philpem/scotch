@@ -26,7 +26,27 @@ ReplayStatus codec_movingblocksbeta_decode_data2x2(
     ReplayBitReader *reader, MbPredictor *predictor,
     MbPixel *pixels, size_t stride, MbVerifyError *error);
 
-/* Decode and strictly validate one complete type 20 frame payload. */
+/*
+ * Two type 20 decoders shipped (see docs/type20-shipped-vs-source.md): the v0.04
+ * "old" module stores chroma directly as six bits per component (14-bit data
+ * header); the v0.05 "new" module delta-codes it (10-bit header + an 8-bit uv
+ * byte of two 4-bit delta codes into a per-frame chroma predictor). They are
+ * otherwise identical. A given .ae7 declares compression type 20 either way, so
+ * a movie's bytes must match whichever Decomp20 the player has installed.
+ */
+typedef enum {
+    CODEC_MOVINGBLOCKSBETA_OLD = 0, /* v0.04, 20 Sep 1996, direct 6-bit chroma */
+    CODEC_MOVINGBLOCKSBETA_NEW      /* v0.05, 19 Nov 1996, delta-coded chroma */
+} CodecMovingBlocksBetaVariant;
+
+/* Decode/validate a type 20 frame for the chosen variant. */
+ReplayStatus codec_movingblocksbeta_verify_frame_variant(
+    const uint8_t *payload, size_t payload_size,
+    const MbFrame *previous, MbFrame *decoded,
+    size_t *bits_consumed, MbVerifyError *error,
+    CodecMovingBlocksBetaVariant variant);
+
+/* Decode/validate a type 20 "old" (direct chroma) frame. */
 ReplayStatus codec_movingblocksbeta_verify_frame(
     const uint8_t *payload, size_t payload_size,
     const MbFrame *previous, MbFrame *decoded,
@@ -41,6 +61,7 @@ typedef struct {
     unsigned loss_level;
     MbEncodePolicy policy;
     MbEncodeWorkspace *workspace;
+    CodecMovingBlocksBetaVariant variant; /* old (direct) or new (delta) chroma */
 } CodecMovingBlocksBetaEncodeOptions;
 
 typedef struct {

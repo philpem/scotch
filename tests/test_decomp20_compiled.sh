@@ -8,10 +8,11 @@ fixtures=$1
 python=$2
 harness=$3
 decompressor=$4
-work=${TMPDIR:-/tmp}/decomp20-$$
+variant=${5:-old}
+work=${TMPDIR:-/tmp}/decomp20-$variant-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work"
-"$fixtures" "$work"
+"$fixtures" "$work" "$variant"
 
 check_fixture()
 {

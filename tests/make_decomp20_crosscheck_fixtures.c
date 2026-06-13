@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "replay/codec_movingblocksbeta.h"
 #include "replay/replay_buffer.h"
@@ -81,7 +82,11 @@ int main(int argc, char **argv)
     ReplayBuffer payload;
     unsigned i;
 
-    CHECK(argc == 2);
+    CodecMovingBlocksBetaVariant variant;
+
+    CHECK(argc == 3);
+    variant = strcmp(argv[2], "new") == 0 ? CODEC_MOVINGBLOCKSBETA_NEW
+                                          : CODEC_MOVINGBLOCKSBETA_OLD;
     for (i = 0U; i < W * H; ++i) {
         unsigned x = i % W;
         unsigned y = i / W;
@@ -90,7 +95,7 @@ int main(int argc, char **argv)
                                       (uint8_t)((y * 4U) & 63U) };
     }
     options = (CodecMovingBlocksBetaEncodeOptions){
-        0, 0, 1, 1, 0U, MB_ENCODE_POLICY_LOWEST_ERROR, NULL
+        0, 0, 1, 1, 0U, MB_ENCODE_POLICY_LOWEST_ERROR, NULL, variant
     };
     replay_buffer_init(&payload);
     CHECK(codec_movingblocksbeta_encode_frame(&source, NULL, &options, &payload,

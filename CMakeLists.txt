@@ -282,7 +282,7 @@ if(Python3_Interpreter_FOUND)
                 $<TARGET_FILE:make_decomp20_crosscheck_fixtures>
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
-                ${DECOMP20_COMPILED})
+                ${DECOMP20_COMPILED} old)
         add_test(NAME test_fullmovie_decomp20
             COMMAND sh
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fullmovie_crosscheck.sh
@@ -290,5 +290,17 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP20_COMPILED} 20 6y6uv)
+    endif()
+    set(DECOMP20NEW_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20new/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-20 v0.05 (delta chroma) Decompress")
+    if(EXISTS "${DECOMP20NEW_COMPILED}")
+        add_test(NAME test_decomp20new_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp20_compiled.sh
+                $<TARGET_FILE:make_decomp20_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP20NEW_COMPILED} new)
     endif()
 endif()

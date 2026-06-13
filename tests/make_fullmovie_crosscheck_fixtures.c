@@ -199,7 +199,8 @@ static ReplayStatus encode_frame(unsigned codec, const MbFrame *source,
     if (codec == 20U) {
         CodecMovingBlocksBetaEncodeOptions o = {
             allow_copy_prev, allow_copy_prev, 1, 1, 4U,
-            MB_ENCODE_POLICY_LOWEST_ERROR, NULL
+            MB_ENCODE_POLICY_LOWEST_ERROR, NULL,
+            CODEC_MOVINGBLOCKSBETA_OLD
         };
         CodecMovingBlocksBetaEncodeStats s = { 0 };
         status = codec_movingblocksbeta_encode_frame(source, previous, &o,

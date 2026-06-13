@@ -8,7 +8,13 @@
 #
 # Options (defaults in brackets):
 #   --codec N          video codec: 19 Super Moving Blocks 6Y5UV (default),
-#                      17 Moving Blocks HQ YUV 5,5,5
+#                      17 Moving Blocks HQ YUV 5,5,5, 7 Moving Blocks YUV 5,5,5,
+#                      20 Moving Blocks Beta 6Y6UV
+#   --variant V        type 20 only: old (direct 6-bit chroma, the 20 Sep 1996
+#                      module, default) or new (delta-coded, 19 Nov 1996)
+#   --type-alias N     write compression type N in the container instead of the
+#                      codec number, so a "type 20 new" movie can target a
+#                      Decomp<N> install (free numbers: 13, 14, 28, 29, 30)
 #   --dither MODE      ordered (Bayer) luma dither in RGB->YUV: 4x4 or 8x8
 #                      [8x8]; breaks gradient banding at ~1 LSB of stable noise
 #                      and ~4% size. 8x8 is finer/less visible than 4x4.
@@ -51,10 +57,12 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
+        --variant)          variant=$2; shift 2;;
+        --type-alias)       typealias=$2; shift 2;;
         --dither)           dither=$2; shift 2;;
         --no-dither)        dither=; shift;;
         --policy)           policy=$2; shift 2;;
@@ -93,6 +101,14 @@ case $codec in
     20) vsuffix=mb20; vlabel=6Y6UV;;
     *) echo "replay-make: --codec must be 7, 17, 19 or 20" >&2; exit 1;;
 esac
+
+# Type 20 has two shipped decoder revisions (--variant old|new, see
+# docs/type20-shipped-vs-source.md). Pass the variant to the encoder, and let
+# --type-alias write a different compression-type number in the container so the
+# "new" (delta) module can be installed at Decomp<alias> beside the "old" one.
+variantarg=()
+[ "$codec" = 20 ] && variantarg=(--variant "$variant")
+ctype=${typealias:-$codec}
 
 # Source dimensions -> output height that keeps aspect and is a multiple of 4.
 iw=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \
@@ -139,13 +155,14 @@ ditharg=(--no-dither); [ -n "$dither" ] && ditharg=(--dither "$dither")
 polarg=(); [ -n "$policy" ] && polarg=(--policy "$policy")
 ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
-    "$bin/replay-encode" --codec "$codec" --input - --size "${width}x${height}" \
+    "$bin/replay-encode" --codec "$codec" "${variantarg[@]}" --input - \
+        --size "${width}x${height}" \
         --payload-prefix "$work/f-" "${keyarg[@]}" "${targetarg[@]}" \
         "${ditharg[@]}" "${polarg[@]}" --loss-level "$loss" >/dev/null
 frames=$(find "$work" -name "f-*.$vsuffix" | wc -l)
 [ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
 
-args=(--codec "$codec" --size "${width}x${height}" --fps "$fps"
+args=(--codec "$ctype" --size "${width}x${height}" --fps "$fps"
       --frames-prefix "$work/f-" --frames "$frames" --frame-suffix ".$vsuffix"
       --frames-per-chunk "$fpc" --pixel-label "$vlabel")
 [ "$keys" = 1 ] && args+=(--keys-prefix "$work/k-")

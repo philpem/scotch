@@ -39,7 +39,7 @@ static int test_data2x2_zero_residual_golden(void)
         UINT8_C(0x8e), UINT8_C(0xa2), UINT8_C(0x0a)
     };
     ReplayBitReader reader;
-    MbPredictor predictor = { 7 };
+    MbPredictor predictor = { 7, 0, 0 };
     MbPixel pixels[4];
     MbVerifyError error;
     size_t i;
@@ -65,7 +65,7 @@ static int test_predictor_wrap_and_truncation(void)
     };
     static const uint8_t truncated[] = { UINT8_C(0x8d) };
     ReplayBitReader reader;
-    MbPredictor predictor = { 63 };
+    MbPredictor predictor = { 63, 0, 0 };
     MbPixel pixels[4];
     MbVerifyError error;
 

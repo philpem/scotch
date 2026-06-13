@@ -29,7 +29,7 @@ static int test_data4x4_zero_residual(void)
         0x8dU, 0xa2U, 0xaaU, 0xaaU, 0xaaU, 0x0aU
     };
     ReplayBitReader reader;
-    MbPredictor predictor = { 7U };
+    MbPredictor predictor = { 7U, 0, 0 };
     MbPixel pixels[16];
     size_t index;
 
@@ -51,7 +51,7 @@ static int test_data2x2_wrap(void)
     /* opcode 2, U=0, V=0, then residuals 1,0,0,0. */
     static const uint8_t payload[] = { 0x02U, 0x70U, 0x15U };
     ReplayBitReader reader;
-    MbPredictor predictor = { 31U };
+    MbPredictor predictor = { 31U, 0, 0 };
     MbPixel pixels[4];
 
     replay_bitreader_init(&reader, payload, sizeof(payload));
@@ -222,8 +222,8 @@ static int test_encode_roundtrip(void)
     MbPixel source[16];
     MbPixel recon[16];
     MbPixel decoded[16];
-    MbPredictor enc = { 7U };
-    MbPredictor dec = { 7U };
+    MbPredictor enc = { 7U, 0, 0 };
+    MbPredictor dec = { 7U, 0, 0 };
     ReplayBuffer payload;
     ReplayBitWriter writer;
     ReplayBitReader reader;
@@ -258,8 +258,8 @@ static int test_encode_roundtrip(void)
         };
         MbPixel rec2[4];
         MbPixel dec2[4];
-        MbPredictor e2 = { 15U };
-        MbPredictor d2 = { 15U };
+        MbPredictor e2 = { 15U, 0, 0 };
+        MbPredictor d2 = { 15U, 0, 0 };
         uint8_t eu = (uint8_t)((8U + 9U + 11U + 12U + 2U) / 4U);
         uint8_t ev = (uint8_t)((21U + 22U + 24U + 25U + 2U) / 4U);
 
