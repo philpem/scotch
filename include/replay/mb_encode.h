@@ -1,6 +1,7 @@
 #ifndef MB_ENCODE_H
 #define MB_ENCODE_H
 
+#include "replay/mb_frame.h"
 #include "replay/mb_motion.h"
 
 /*
@@ -42,5 +43,18 @@ unsigned mb_encode_motion_bits(const MbMotionVector *motion,
  */
 int mb_encode_candidate_better(const CopyCandidate *candidate,
                                const CopyCandidate *best);
+
+/*
+ * Resolve a 2x2 spatial-copy source pixel during a split decision, enforcing
+ * the shared 4x4 raster-scan legality: a source inside the current 4x4 parent
+ * is valid only if `available_mask` marks it already decided in `tentative`; a
+ * source outside the parent is valid only if its owning 4x4 block precedes the
+ * parent in scan order. Returns the pixel, or NULL when the reference is not
+ * yet reconstructed.
+ */
+const MbPixel *mb_encode_split_spatial_pixel(
+    const MbFrame *reconstructed, const MbPixel tentative[16],
+    unsigned available_mask, unsigned block_x, unsigned block_y,
+    unsigned source_x, unsigned source_y);
 
 #endif

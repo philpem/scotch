@@ -629,48 +629,6 @@ static int match_temporal2x2(const MbFrame *source, const MbFrame *previous,
     return 1;
 }
 
-static const MbPixel *split_spatial_pixel(
-    const MbFrame *reconstructed, const MbPixel tentative[16],
-    unsigned available_mask, unsigned block_x, unsigned block_y,
-    unsigned source_x, unsigned source_y)
-{
-    /*
-     * A spatial source can fall inside the 4x4 block currently being tested.
-     * In that case it is legal only if an earlier 2x2 decision has already
-     * produced the pixel in the private tentative reconstruction.
-     */
-    if (source_x >= block_x && source_x < block_x + 4U &&
-        source_y >= block_y && source_y < block_y + 4U) {
-        unsigned local = (source_y - block_y) * 4U + source_x - block_x;
-        return (available_mask & (1U << local)) != 0U
-                   ? &tentative[local]
-                   : NULL;
-    }
-
-    /*
-     * Top-level blocks are reconstructed as complete 4x4 units in raster
-     * order. A 2x2 vector can point upward and right; near the right edge of
-     * the current parent that rectangle may cross into the next 4x4 block,
-     * whose pixels do not exist yet. Reading the live frame there observes
-     * stale buffer contents and can make an invalid match appear acceptable.
-     *
-     * Pixels outside the tentative parent are therefore available only when
-     * their owning top-level block precedes the current parent in codec scan
-     * order. Pixels inside the parent are governed by available_mask above.
-     */
-    {
-        unsigned source_block_x = source_x & ~3U;
-        unsigned source_block_y = source_y & ~3U;
-
-        if (source_block_y > block_y ||
-            (source_block_y == block_y && source_block_x >= block_x)) {
-            return NULL;
-        }
-    }
-    return &reconstructed->pixels[(size_t)source_y * reconstructed->stride +
-                                  source_x];
-}
-
 static int match_spatial2x2(const MbFrame *source,
                             const MbFrame *reconstructed,
                             const MbPixel tentative[16],
@@ -707,7 +665,7 @@ static int match_spatial2x2(const MbFrame *source,
         for (row = 0U; row < 2U; ++row) {
             unsigned column;
             for (column = 0U; column < 2U; ++column) {
-                const MbPixel *reference = split_spatial_pixel(
+                const MbPixel *reference = mb_encode_split_spatial_pixel(
                     reconstructed, tentative, available_mask,
                     parent_x, parent_y, (unsigned)source_x + column,
                     (unsigned)source_y + row);
@@ -848,7 +806,7 @@ static void fill_tentative_copy2x2(
             const MbPixel *pixel;
 
             if (motion->spatial != 0) {
-                pixel = split_spatial_pixel(
+                pixel = mb_encode_split_spatial_pixel(
                     reconstructed, tentative, *available_mask,
                     parent_x, parent_y, source_x + column, source_y + row);
             } else {
