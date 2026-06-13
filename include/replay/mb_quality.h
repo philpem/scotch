@@ -71,26 +71,10 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
                               unsigned *total_error);
 
 /*
- * The YUV555 (type 17) measurement. Identical metric to format 19 -- per-pixel
- * luma absolute error plus one block-average chroma error applied to every
- * pixel -- but chroma components are plain unsigned five-bit values, matching
- * the type 17 working-pixel layout rather than signed 6Y5UV chroma. The shared
- * MbQualityThresholds rows and mb_quality_profile_accept apply unchanged.
+ * Type 17 (YUV555) shares the 6Y5UV signed chroma model and the same luma
+ * absolute-error metric -- the 5-bit versus 6-bit Y depth does not change the
+ * measurement -- so it scores copies with the format-19 functions above. No
+ * separate format-17 metric is required.
  */
-int mb_quality_profile_format17(const MbFrame *target, unsigned target_x,
-                                unsigned target_y,
-                                const MbFrame *reference,
-                                unsigned reference_x,
-                                unsigned reference_y, unsigned block_size,
-                                uint8_t target_u, uint8_t target_v,
-                                MbQualityProfile *profile);
-
-int mb_quality_match_format17(const MbFrame *target, unsigned target_x,
-                              unsigned target_y, const MbFrame *reference,
-                              unsigned reference_x, unsigned reference_y,
-                              unsigned block_size, uint8_t target_u,
-                              uint8_t target_v,
-                              const MbQualityThresholds *thresholds,
-                              unsigned *total_error);
 
 #endif

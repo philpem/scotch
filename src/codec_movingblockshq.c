@@ -45,7 +45,9 @@ const MbCodec codec_movingblockshq = {
 /*
  * Type-17 instance of the shared mb_encode search hook table. The motion tables
  * are common to the Moving Blocks family, so the vector accessors reuse the
- * format-19 enumerators; only the block-match metric is YUV555-specific.
+ * format-19 enumerators. Type 17 also shares the 6Y5UV signed chroma model and
+ * measures luma the same way (the 5-bit vs 6-bit Y depth is immaterial to the
+ * absolute error metric), so the quality hooks use the format-19 functions.
  */
 static int codec17_temporal_vector(unsigned index, MbMotionVector *out)
 {
@@ -63,7 +65,7 @@ static int codec17_block_match(const MbFrame *source, unsigned x, unsigned y,
                                unsigned ref_y, unsigned size, uint8_t u,
                                uint8_t v, const void *quality, unsigned *error)
 {
-    return mb_quality_match_format17(source, x, y, reference, ref_x, ref_y,
+    return mb_quality_match_format19(source, x, y, reference, ref_x, ref_y,
                                      size, u, v,
                                      (const MbQualityThresholds *)quality,
                                      error);
@@ -77,7 +79,7 @@ static int codec17_profile_match(const MbFrame *source, unsigned x, unsigned y,
 {
     MbQualityProfile profile;
 
-    if (!mb_quality_profile_format17(source, x, y, reference, ref_x, ref_y,
+    if (!mb_quality_profile_format19(source, x, y, reference, ref_x, ref_y,
                                      size, u, v, &profile)) {
         return 0;
     }
@@ -170,12 +172,22 @@ static ReplayStatus write_header(ReplayBitWriter *writer, uint32_t opcode,
     return replay_bitwriter_write(writer, header, 12U);
 }
 
-/* Average chroma of a `size`x`size` source block, kept as a 5-bit value. */
+static int signed_chroma(uint8_t value)
+{
+    /* Five-bit chroma is stored as two's-complement modulo 32, as in 6Y5UV. */
+    return value < 16U ? (int)value : (int)value - 32;
+}
+
+/*
+ * Signed average chroma of a `size`x`size` block as a 5-bit value. Type 17
+ * shares the 6Y5UV signed chroma model, so this floors like the source ASR and
+ * matches the format-19 quality metric used to score copies.
+ */
 static uint8_t avg5(const MbPixel *pixels, size_t stride, unsigned size,
                     int chroma_v)
 {
-    unsigned sum = 0U;
-    unsigned n = size * size;
+    int sum = 0;
+    int area = (int)(size * size);
     unsigned row;
 
     for (row = 0U; row < size; ++row) {
@@ -184,10 +196,15 @@ static uint8_t avg5(const MbPixel *pixels, size_t stride, unsigned size,
         for (col = 0U; col < size; ++col) {
             const MbPixel *p = &pixels[(size_t)row * stride + col];
 
-            sum += chroma_v ? p->v : p->u;
+            sum += signed_chroma(chroma_v ? p->v : p->u);
         }
     }
-    return (uint8_t)(((sum + n / 2U) / n) & 31U);
+    if (sum < 0) {
+        sum = -((-sum + area - 1) / area);
+    } else {
+        sum /= area;
+    }
+    return (uint8_t)(sum & 31);
 }
 
 /*
@@ -448,7 +465,7 @@ static CopyCandidate select_copy2x2_hq(
     size_t evaluations = 0U;
 
     if (allow_stationary && previous != NULL &&
-        mb_quality_match_format17(source, x, y, previous, x, y, 2U, u, v,
+        mb_quality_match_format19(source, x, y, previous, x, y, 2U, u, v,
                                   quality, &error)) {
         candidate.mode = SPLIT_MODE_STATIONARY;
         return candidate;
@@ -690,7 +707,7 @@ ReplayStatus codec_movingblockshq_encode_frame(
 
             /* Ordered copy policy: stationary, then temporal, then spatial. */
             if (allow_stationary &&
-                mb_quality_match_format17(source, x, y, previous, x, y, 4U,
+                mb_quality_match_format19(source, x, y, previous, x, y, 4U,
                                           u, v, &thresholds, &error)) {
                 status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
                 copy_stationary4x4(previous, reconstructed, x, y);
