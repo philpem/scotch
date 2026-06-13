@@ -86,8 +86,8 @@ Replay video compression tooling.
   and cross-check them against compiled Decomp17.
 - [x] Complete type 17, Moving Blocks HQ, frame dispatch and cross-check copy
   and split modes against compiled Decomp17.
-- [ ] Add type 17, Moving Blocks HQ, encoder support and characterize its
-  quality/bitrate behavior.
+- [~] Type 17 encoder: data blocks done (codec_movingblockshq_encode_data*);
+  frame encoder with shared motion search is next.
 - [x] Add the device-bandwidth rate driver (replay-make --data-rate ...).
 - [ ] Add type 7, Moving Blocks, as the next standard Replay codec backend.
 - [x] Add a Replay/AE7 container writer (`replay_ae7_write`, `replay-join`) and

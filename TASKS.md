@@ -161,7 +161,9 @@
   and data-coded 4x4/2x2 primitives through `codec_movingblockshq`.
 - [x] Complete type 17 stationary, temporal, spatial, split, and strict frame
   verification through the shared `mb_frame_verify` grammar.
-- [ ] Implement the type 17 encoder and measure its quality/bitrate behavior.
+- [~] Type 17 encoder: data-block encoder (4x4/2x2, lossless luma, 2D
+  predictor) done and round-tripped; the frame encoder, sharing the motion
+  search / block-decision machinery factored out of type 19, is next.
 - [ ] Add type 7, Moving Blocks, through `codec_movingblocks`.
 - [ ] Add type 20, Moving Blocks Beta, through `codec_movingblocksbeta`.
 - [ ] Add Moving Lines as a separate codec core sharing only general tooling.
