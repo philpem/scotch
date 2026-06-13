@@ -106,10 +106,31 @@
 
 ## Milestone 7: Replay Container And Playback
 
-- [ ] Write a minimal video-only Replay/AE7 container.
-- [ ] Parse the generated container back and verify every extracted payload.
-- [ ] Confirm playback using an existing RISC OS Replay player.
-- [ ] Record the smallest accepted container and key-frame requirements.
+- [x] Write a Replay/AE7 container (`replay_ae7_write` + `replay-join`),
+  reproducing Join's layout: 21-line header, sector-aligned chunks, even/odd
+  buffer sizes, time-sliced interleaved sound, configurable chunk size and
+  alignment, optional key-frame area. Field requirements cross-checked against
+  Acorn's `Join` source.
+- [x] Parse the generated container back and verify every payload: a round-trip
+  unit test plus an end-to-end ffmpeg->encode->join run whose chunk-0 video
+  region is decoded by the compiled Decomp19 (12 frames, 0 trailing bytes).
+- [x] Confirm playback on real RISC OS: type 19 video + VIDC-E8 sound plays in
+  both the command-line Player and the !ARPlayer GUI.
+- [x] Record the player-compatibility constraints (see
+  `notes/replay-ae7-join-writer.md`): audio movies need >=2 chunks (a one-chunk
+  movie aliases the player's double buffers), sound-only movies need 0x0
+  dimensions, frames-per-chunk >= 3, and !ARPlayer requires an embedded poster
+  sprite (16bpp square-pixel mode word); the writer enforces all of these and
+  embeds the Replay-logo default poster when none is supplied.
+- [x] Add a one-shot `tools/replay-make` driver (ffmpeg -> encode -> join).
+- [x] Add a signed-16-PCM -> Replay sound encoder (`replay_sound`): VIDC 8-bit
+  exponential (nearest-match inverse of Acorn's exact `ELogToLinTable`, ~37 dB
+  round-trip SNR), plus 8-bit and 16-bit signed linear. Wired into `replay-join`
+  as `--sound-pcm`/`--sound-encode`, fed canonical `s16le` from ffmpeg.
+- [ ] Add a PCM -> ADPCM / format-2 framed-codec encoder and the explicit
+  per-chunk sound-size path those framed codecs need.
+- [ ] Generate type 19 per-chunk key-frame blobs so `--write-keys` random-access
+  start points can be emitted (writer plumbing is in place).
 
 ## Milestone 8: Modern Input And Uncompressed Formats
 

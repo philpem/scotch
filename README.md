@@ -194,6 +194,62 @@ Each horizontal pair has two six-bit luma samples and one shared five-bit U/V
 pair, with no vertical chroma subsampling. Extracted output expands the shared
 chroma to both pixels as packed `Y,U,V` triplets.
 
+Build a complete, playable movie from any video file in one command with the
+`tools/replay-make` driver (it wraps ffmpeg, `replay-encode` and `replay-join`,
+using temporary intermediate files):
+
+```sh
+tools/replay-make input.mp4 movie,ae7 --width 320 --loss-level 8
+```
+
+It picks an aspect-correct height (a multiple of 4), encodes type 19 video,
+adds an 11025 Hz mono VIDC-E8 sound track, and embeds a poster (the first frame,
+or `--poster IMAGE`; `--no-poster` to skip). Other options: `--fps`,
+`--frames-per-chunk`, `--start`/`--duration`, `--audio-rate`, `--no-audio`.
+
+The individual steps, if you need them, mirror Acorn's own `Join` tool
+(compress, then join):
+
+```sh
+ffmpeg -i input.mp4 -vf scale=160:128,fps=12.5 -pix_fmt rgb24 -f rawvideo - | \
+  build/replay-encode --codec 19 --input - --size 160x128 \
+    --payload-prefix frames/frame- --loss-level 7
+build/replay-join --codec 19 --size 160x128 --fps 12.5 \
+    --frames-prefix frames/frame- --frames 25 --pixel-label 6Y5UV \
+    --chunk-seconds 1.0 --output movie,ae7
+```
+
+`replay-join` embeds a poster sprite (required by the !ARPlayer GUI, which
+crashes without one): `--poster FILE.bgr555` for a custom 16bpp poster, the
+built-in Replay logo by default, or `--no-poster` for command-line-player-only
+output.
+
+The writer reproduces Join's layout: a 21-line header, a sector-aligned chunk
+catalogue, even/odd double-buffer sizes, and chunks holding even-padded video
+followed by interleaved sound. `--frames-per-chunk N` fixes the count; otherwise
+`--chunk-seconds S` targets a duration and distributes frames across chunks
+(fractional rates such as 12.5 fps alternate 12/13 frames per chunk, and the
+header records the fractional `12.5 frames per chunk` faithfully). `--align MASK`
+sets the sector mask (default 2047 = 2048-byte alignment). Audio is added either pre-encoded
+(`--sound FILE --sound-format vidc-log|<name>`) or, more usefully, as canonical
+signed-16 little-endian PCM from ffmpeg that the tool encodes itself:
+
+```sh
+ffmpeg -i input.mp4 -vn -ac 1 -ar 22050 -f s16le audio.pcm
+build/replay-join --codec 19 --size 160x96 --fps 12.5 \
+    --frames-prefix frame- --frames 100 --pixel-label 6Y5UV \
+    --sound-pcm audio.pcm --sound-encode vidc-e8 \
+    --sound-rate 22050 --sound-channels 1 --output movie.ae7
+```
+
+`--sound-encode vidc-e8` uses the 8-bit VIDC exponential companding (the
+nearest-match inverse of Acorn's `ELogToLinTable`); `signed-8` and `signed-16`
+are the linear PCM formats. The track is time-sliced per chunk so audio stays
+aligned with video. See
+[notes/replay-ae7-join-writer.md](notes/replay-ae7-join-writer.md). Player
+playback is not yet verified, but the output round-trips through the reader and
+the compiled Decomp19.
+
 ## Acorn Cross-Check
 
 When `../!ARMovie_compiled/Decomp19/Decompress,ffd` and Python Unicorn bindings

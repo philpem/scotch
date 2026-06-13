@@ -55,6 +55,43 @@ this file describes the current portable code in `replay-tooling`.
   primitives consume the complete case header, reconstruct five-bit luma with
   the codec's two-dimensional predictor, and update the shared predictor to
   the truncated block mean.
+- An AE7/Replay container writer (`replay_ae7_write`, `replay-join`) that
+  reproduces Acorn `Join`'s output: a 21-line text header with patched
+  forward-reference offsets, optional sprite/key-frame areas, a text catalogue,
+  and 2048-byte sector-aligned chunks each holding even-padded video followed by
+  per-chunk time-sliced sound tracks. Chunk size is configurable as a fixed
+  frame count or a target duration (fractional rates distribute frames as
+  `floor((i+1)F) - floor(i*F)`), and the alignment mask is configurable.
+  even/odd chunk sizes are `max(video+sound) per parity + 1`, matching Join.
+  Sound-only movies (video format 0, no frames) and uncompressed video (any
+  codec number, e.g. type 2 carrying raw 15-bit pixels) are both supported; the
+  parser accepts zero dimensions when the video format is 0.
+- Player-compatibility constraints learned from the v0.53 player source and
+  emulator testing: an audio movie must have at least two chunks (a one-chunk
+  movie aliases the player's double buffers and corrupts playback), a sound-only
+  movie must report 0x0 dimensions, the catalogue always carries a sound field
+  (";0" when silent), and frames-per-chunk must be >= 3. The writer enforces the
+  first three; the encoder-side avoids the last. Verified end to end: a
+  four-chunk 160x96 type 19 movie with 11025 Hz VIDC-E8 audio plays with sound
+  in the RISC OS Replay player.
+- !ARPlayer (GUI) reads the poster as spr_ReadSprite(sprite_offset+12,
+  sprite_size-12) with no guard, so a movie with no sprite (size 0 -> a -12 byte
+  read) crashes it; a GUI-loaded movie must embed a real RISC OS spritefile. The
+  writer embeds one (replay-join --poster FILE.bgr555) and refuses video movies
+  without one unless --no-poster is given. The poster is a 16bpp (1:5:5:5, red in
+  the low bits) sprite with a new-format square-pixel mode word
+  ((5<<27)|(90<<14)|(90<<1)|1); old numbered modes such as 28 are 8bpp. With no
+  --poster the writer embeds the built-in Replay-logo Default sprite so the movie
+  still opens in !ARPlayer.
+- A one-shot `tools/replay-make` driver: ffmpeg -> replay-encode -> replay-join
+  in a single command (aspect-correct height, type 19 video, VIDC-E8 audio, a
+  first-frame or supplied poster), cleaning up its intermediate files.
+- A signed-16-PCM sound encoder (`replay_sound`): 8-bit VIDC exponential as the
+  nearest-match inverse of Acorn's exact `ELogToLinTable` (verified ~37 dB
+  round-trip SNR on real audio), plus 8-bit and 16-bit signed linear. The
+  bits-per-sample label selects the player's format-1 decoder (SoundE8/S8/S16).
+  `replay-join` exposes it as `--sound-pcm FILE --sound-encode vidc-e8|signed-8|
+  signed-16`, taking canonical `s16le` produced by ffmpeg.
 - A shared `mb_frame_verify` dispatcher for the HQ-derived block grammar used
   by types 17 and 19: stationary, temporal, spatial, split-child ordering,
   current-frame reference legality, scan completion, and strict zero padding.
@@ -122,9 +159,17 @@ this file describes the current portable code in `replay-tooling`.
   byte-for-byte with an ARM conversion fixture.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
   they require real Replay container/chunk accounting.
-- There is no AE7/Replay container writer or player acceptance test. The
-  reader currently exposes chunk boundaries; type 19 frame splitting remains
-  a decoder-assisted operation because AE7 stores no per-frame size table.
+- The AE7/Replay container writer is implemented and round-trips through the
+  reader and the compiled Decomp19, but actual RISC OS Player playback is not
+  verified here (no player in this environment). The writer takes already
+  encoded sound bytes and emits the sound-format field, including the
+  `2 <name>` form for the extensible named decompressors (adpcm, GSM, G72x,
+  MPEG). No audio *encoder* is implemented, and the automatic per-chunk time
+  slicing is only correct for format 1 (8-bit VIDC) and uncompressed linear PCM;
+  framed format-2 codecs need explicit per-chunk byte boundaries. The key-frame
+  area is plumbed through
+  (`write_keys`) but no type 19 key-blob generator exists yet, so movies are
+  written with `-1 (no keys)` by default.
 - Temporal candidate measurements are cached in an explicit per-frame
   workspace across target-byte retries. One motion scan records the best
   vector for all 29 quality rows. Spatial candidates remain live because they
