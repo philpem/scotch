@@ -61,6 +61,26 @@ half-as-wide range, so type 17 at a given loss level is roughly twice as lossy
 (and smaller) as type 19 at the same level. Compare codecs at equal PSNR, not
 equal loss level.
 
+Measured rate/quality, Digital Circus 160x88, 30 frames (PSNR vs RGB):
+
+| loss | type 17 PSNR / B-frame | type 19 PSNR / B-frame |
+|-----:|------------------------|------------------------|
+| 0    | 28.09 / 4710           | 28.18 / 5895           |
+| 4    | 28.09 / 3652           | 28.31 / 4996           |
+| 8    | 27.79 / 3041           | 28.40 / 4437           |
+| 12   | 27.22 / 2672           | 28.20 / 4145           |
+| 16   | 25.64 / 1903           | 28.00 / 3403           |
+| 20   | 23.80 / 1420           | 27.11 / 2830           |
+
+Reading: at equal *loss level* type 17 is smaller but lower PSNR -- the earlier
+"32% smaller" was a quality illusion from comparing at equal loss, which the
+eye correctly caught. At equal *PSNR* the two are close (e.g. ~27.2 dB: type 17
+2672 vs type 19 2830 B/frame), but type 19 has the higher ceiling (~28.4 dB at
+loss 8) that type 17 cannot reach (it tops out ~28.1 dB at loss 0, its 5-bit
+luma limit) and its PSNR falls off much faster as loss rises. To make a type 17
+cut that looks like the type 19 loss-10 cut, use a much lower type 17 loss
+level (~0-4), not the same number.
+
 Future work (parked): type 17's degradation is most visible in smooth gradients
 and slow light fade-offs. Those regions stay near-constant between frames, so
 the encoder keeps choosing stationary/temporal copies that *freeze* the 5-bit
