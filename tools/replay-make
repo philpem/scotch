@@ -82,7 +82,6 @@ case $codec in
     *) echo "replay-make: --codec must be 17 or 19" >&2; exit 1;;
 esac
 if [ "$codec" = 17 ]; then
-    [ "$keys" = 0 ] || { echo "replay-make: --keys is not supported for type 17" >&2; exit 1; }
     [ -z "$datarate" ] || { echo "replay-make: --data-rate (rate control) is not supported for type 17" >&2; exit 1; }
 fi
 

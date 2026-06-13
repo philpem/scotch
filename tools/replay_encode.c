@@ -336,6 +336,46 @@ static int write_key_frame(const char *path, const MbFrame *frame)
     return EXIT_SUCCESS;
 }
 
+/*
+ * Write a reconstructed frame as packed YUV555 halfwords (Y[0:4], U[5:9],
+ * V[10:14], little-endian) -- the native type 17 key-frame format the player
+ * loads when starting decompression at a chunk boundary.
+ */
+static int write_key_frame_yuv555(const char *path, const MbFrame *frame)
+{
+    FILE *file = fopen(path, "wb");
+    unsigned y;
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+
+        for (x = 0U; x < frame->width; ++x) {
+            const MbPixel *p = &frame->pixels[(size_t)y * frame->stride + x];
+            unsigned packed = ((unsigned)p->y & 0x1FU) |
+                              (((unsigned)p->u & 0x1FU) << 5U) |
+                              (((unsigned)p->v & 0x1FU) << 10U);
+            uint8_t bytes[2] = {
+                (uint8_t)(packed & 0xFFU), (uint8_t)((packed >> 8U) & 0xFFU)
+            };
+
+            if (fwrite(bytes, 1U, sizeof(bytes), file) != sizeof(bytes)) {
+                perror(path);
+                fclose(file);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+    if (fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        unsigned height,
                        const CodecSuperMovingBlocksEncodeStats *stats,
@@ -471,7 +511,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         unsigned width, unsigned height,
                         const char *payload_path, const char *payload_prefix,
                         size_t frame_limit, unsigned loss_level, int data_only,
-                        const char *recon_prefix, const char *recon_ppm_path)
+                        const char *recon_prefix, const char *recon_ppm_path,
+                        const char *keys_prefix)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -578,6 +619,16 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             }
             if (write_yuv555_ppm(frame_ppm, &reconstructed, rgb,
                                  (size_t)width * 3U) != EXIT_SUCCESS) {
+                goto cleanup;
+            }
+        }
+        if (keys_prefix != NULL) {
+            char generated[1024];
+
+            if (make_frame_path(generated, sizeof(generated), keys_prefix,
+                                frame_number, ".key") != EXIT_SUCCESS ||
+                write_key_frame_yuv555(generated, &reconstructed) !=
+                    EXIT_SUCCESS) {
                 goto cleanup;
             }
         }
@@ -744,14 +795,15 @@ int main(int argc, char **argv)
             loss_level >= MB_QUALITY_LEVEL_COUNT ||
             (recon_ppm_path != NULL && recon_prefix != NULL) ||
             (payload_path != NULL &&
-             (frame_limit > 1U || recon_prefix != NULL))) {
+             (frame_limit > 1U || recon_prefix != NULL ||
+              keys_prefix != NULL))) {
             usage(stderr);
             return EXIT_FAILURE;
         }
         return run_encode17(input_path, input_format, width, height,
                             payload_path, payload_prefix, frame_limit,
                             loss_level, data_only, recon_prefix,
-                            recon_ppm_path);
+                            recon_ppm_path, keys_prefix);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||
