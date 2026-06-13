@@ -410,12 +410,57 @@ static int test_encode_frame_copy_modes(void)
     return EXIT_SUCCESS;
 }
 
+static int test_encode_frame_split(void)
+{
+    MbPixel source_pixels[16];
+    MbPixel previous_pixels[16];
+    MbPixel recon_pixels[16];
+    MbPixel decoded_pixels[16];
+    MbFrame source = { 4U, 4U, 4U, source_pixels };
+    MbFrame previous = { 4U, 4U, 4U, previous_pixels };
+    MbFrame reconstructed = { 4U, 4U, 4U, recon_pixels };
+    MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U };
+    CodecMovingBlocksHqEncodeStats stats;
+    ReplayBuffer payload;
+    unsigned i;
+
+    /* High-frequency luma that is expensive to data-code but matches the
+       previous frame exactly, so three quadrants copy for free. */
+    for (i = 0U; i < 16U; ++i) {
+        previous_pixels[i] = (MbPixel){ (uint8_t)((i & 1U) ? 31U : 0U), 4U, 6U };
+        source_pixels[i] = previous_pixels[i];
+    }
+    /* Change the bottom-right 2x2 quadrant so it cannot copy. */
+    source_pixels[10].y = 7U;
+    source_pixels[11].y = 18U;
+    source_pixels[14].y = 25U;
+    source_pixels[15].y = 12U;
+
+    replay_buffer_init(&payload);
+    CHECK(codec_movingblockshq_encode_frame(
+              &source, &previous, &options, &payload, &reconstructed, &stats) ==
+          REPLAY_OK);
+    CHECK(stats.split4x4_blocks == 1U);
+    CHECK(stats.stationary2x2_blocks == 3U);
+    CHECK(stats.data2x2_blocks == 1U);
+    CHECK(stats.data4x4_blocks == 0U);
+    CHECK(codec_movingblockshq_verify_frame(
+              payload.data, payload.size, &previous, &decoded, NULL, NULL) ==
+          REPLAY_OK);
+    CHECK(frames_equal(&decoded, &reconstructed));
+
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4_zero_residual() == EXIT_SUCCESS);
     CHECK(test_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_data_frame_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_encode_frame_copy_modes() == EXIT_SUCCESS);
+    CHECK(test_encode_frame_split() == EXIT_SUCCESS);
     CHECK(test_data2x2_wrap() == EXIT_SUCCESS);
     CHECK(test_table_and_truncation() == EXIT_SUCCESS);
     CHECK(test_complete_data_frame() == EXIT_SUCCESS);

@@ -211,6 +211,39 @@ static int make_temporal4x4(const char *directory)
     return EXIT_SUCCESS;
 }
 
+/* Inter frame: a 4x4 that splits into three free stationary 2x2 copies (the
+ * quadrants match the previous frame's expensive high-frequency luma) plus one
+ * changed data 2x2, so the split beats a data 4x4. */
+static int make_split4x4(const char *directory)
+{
+    MbPixel source_pixels[16];
+    MbPixel previous_pixels[16];
+    MbPixel reconstructed_pixels[16];
+    MbFrame source = { 4U, 4U, 4U, source_pixels };
+    MbFrame previous = { 4U, 4U, 4U, previous_pixels };
+    MbFrame reconstructed = { 4U, 4U, 4U, reconstructed_pixels };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U };
+    CodecMovingBlocksHqEncodeStats stats;
+    unsigned i;
+
+    for (i = 0U; i < 16U; ++i) {
+        previous_pixels[i] = (MbPixel){ (uint8_t)((i & 1U) ? 31U : 0U), 4U, 6U };
+        source_pixels[i] = previous_pixels[i];
+    }
+    source_pixels[10].y = 7U;
+    source_pixels[11].y = 18U;
+    source_pixels[14].y = 25U;
+    source_pixels[15].y = 12U;
+
+    CHECK(encode_frame_fixture(directory, "split4x4", &source, &previous,
+                               &options, &stats, &reconstructed) ==
+          EXIT_SUCCESS);
+    CHECK(stats.split4x4_blocks == 1U);
+    CHECK(stats.stationary2x2_blocks == 3U);
+    CHECK(stats.data2x2_blocks == 1U);
+    return EXIT_SUCCESS;
+}
+
 /* One 4x4 block with a luma ramp and distinct chroma. */
 static int make_data4x4(const char *directory)
 {
@@ -269,5 +302,6 @@ int main(int argc, char **argv)
     CHECK(make_spatial4x4(argv[1]) == EXIT_SUCCESS);
     CHECK(make_stationary4x4(argv[1]) == EXIT_SUCCESS);
     CHECK(make_temporal4x4(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_split4x4(argv[1]) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

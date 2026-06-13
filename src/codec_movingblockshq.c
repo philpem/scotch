@@ -368,6 +368,234 @@ ReplayStatus codec_movingblockshq_encode_data_frame(
     return status;
 }
 
+/* Append `bits` meaningful bits of a byte-padded candidate buffer to the live
+ * stream, dropping the candidate's own zero padding. */
+static ReplayStatus append_candidate(ReplayBitWriter *writer,
+                                     const ReplayBuffer *buffer, size_t bits)
+{
+    ReplayBitReader reader;
+
+    replay_bitreader_init(&reader, buffer->data, buffer->size);
+    while (bits != 0U) {
+        unsigned count = bits > 32U ? 32U : (unsigned)bits;
+        uint32_t value;
+        ReplayStatus status = replay_bitreader_read(&reader, count, &value);
+
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        status = replay_bitwriter_write(writer, value, count);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        bits -= count;
+    }
+    return REPLAY_OK;
+}
+
+/*
+ * Record a 2x2 copy child's decoded pixels in the parent's tentative 4x4
+ * reconstruction so a later spatial child can reference them. Spatial sources
+ * inside the parent read earlier tentative pixels; temporal/stationary sources
+ * and out-of-parent spatial sources read finished frames.
+ */
+static void fill_tentative_copy2x2(
+    const MbFrame *reference, const MbFrame *reconstructed,
+    MbPixel tentative[16], unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, const MbMotionVector *motion,
+    unsigned *available_mask)
+{
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+    unsigned row;
+
+    for (row = 0U; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 2U; ++column) {
+            unsigned local = (y + row - parent_y) * 4U + x + column - parent_x;
+            const MbPixel *pixel;
+
+            if (motion->spatial != 0) {
+                pixel = mb_encode_split_spatial_pixel(
+                    reconstructed, tentative, *available_mask,
+                    parent_x, parent_y, source_x + column, source_y + row);
+            } else {
+                pixel = &reference->pixels[(size_t)(source_y + row) *
+                                               reference->stride +
+                                           source_x + column];
+            }
+            tentative[local] = *pixel;
+            *available_mask |= 1U << local;
+        }
+    }
+}
+
+/*
+ * Choose the best 2x2 child mode under the ordered policy: stationary, then
+ * temporal, then spatial copy, else a data block. `u`/`v` are the data-block
+ * average chroma the copy candidates are scored against.
+ */
+static CopyCandidate select_copy2x2_hq(
+    const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, const MbPixel tentative[16],
+    unsigned available_mask, unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, uint8_t u, uint8_t v, int allow_stationary,
+    int allow_temporal, int allow_spatial,
+    const MbQualityThresholds *quality, unsigned loss_level)
+{
+    CopyCandidate candidate = { SPLIT_MODE_DATA, { 0, 0, 0 }, 0U, 0U, 0U, 0 };
+    unsigned error;
+    size_t evaluations = 0U;
+
+    if (allow_stationary && previous != NULL &&
+        mb_quality_match_format17(source, x, y, previous, x, y, 2U, u, v,
+                                  quality, &error)) {
+        candidate.mode = SPLIT_MODE_STATIONARY;
+        return candidate;
+    }
+    if (allow_temporal && previous != NULL &&
+        mb_encode_match_temporal2x2(&codec17_encode, source, previous, x, y,
+                                    u, v, loss_level, &candidate.motion,
+                                    &error, &evaluations, NULL)) {
+        candidate.mode = SPLIT_MODE_TEMPORAL;
+        return candidate;
+    }
+    if (allow_spatial &&
+        mb_encode_match_spatial2x2(&codec17_encode, source, reconstructed,
+                                   tentative, available_mask, parent_x,
+                                   parent_y, x, y, u, v, quality,
+                                   &candidate.motion, &error, &evaluations)) {
+        candidate.mode = SPLIT_MODE_SPATIAL;
+        return candidate;
+    }
+    candidate.mode = SPLIT_MODE_DATA;
+    return candidate;
+}
+
+/* Encode a data-coded 4x4 into a scratch buffer, reconstructing into a compact
+ * 16-pixel block; reports the meaningful bit count. */
+static ReplayStatus build_data4x4_candidate(
+    const MbFrame *source, unsigned x, unsigned y,
+    const MbPredictor *initial_predictor, ReplayBuffer *buffer,
+    MbPixel recon[16], MbPredictor *final_predictor, size_t *bits)
+{
+    ReplayBitWriter writer;
+    ReplayStatus status;
+
+    replay_buffer_clear(buffer);
+    replay_bitwriter_init(&writer, buffer);
+    *final_predictor = *initial_predictor;
+    status = encode_data4x4_core(
+        &writer, &source->pixels[(size_t)y * source->stride + x],
+        source->stride, recon, 4U, final_predictor);
+    *bits = replay_bitwriter_position(&writer);
+    if (status == REPLAY_OK) {
+        status = replay_bitwriter_flush_zero(&writer);
+    }
+    return status;
+}
+
+/*
+ * Encode the four 2x2 children of a split block into a scratch buffer, choosing
+ * each child's mode and filling `tentative` with the parent's reconstruction.
+ * `modes` reports each child's mode for block accounting; `bits` is the
+ * meaningful split bit count (including the `11` split prefix).
+ */
+static ReplayStatus build_split_candidate(
+    const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, unsigned x, unsigned y,
+    int allow_stationary, int allow_temporal, int allow_spatial,
+    const MbQualityThresholds *quality, unsigned loss_level,
+    const MbPredictor *initial_predictor, ReplayBuffer *buffer,
+    MbPredictor *final_predictor, MbPixel tentative[16], SplitMode modes[4],
+    size_t *bits)
+{
+    /* Decoder order inside a split block is TL, TR, BL, BR. */
+    static const unsigned offsets[4][2] = {
+        { 0U, 0U }, { 2U, 0U }, { 0U, 2U }, { 2U, 2U }
+    };
+    ReplayBitWriter writer;
+    unsigned available_mask = 0U;
+    unsigned block;
+    ReplayStatus status;
+
+    for (block = 0U; block < 16U; ++block) {
+        tentative[block] = (MbPixel){ 0U, 0U, 0U };
+    }
+    replay_buffer_clear(buffer);
+    replay_bitwriter_init(&writer, buffer);
+    *final_predictor = *initial_predictor;
+    status = replay_bitwriter_write(&writer, UINT32_C(3), 2U);
+    for (block = 0U; status == REPLAY_OK && block < 4U; ++block) {
+        unsigned block_x = x + offsets[block][0];
+        unsigned block_y = y + offsets[block][1];
+        unsigned local = (block_y - y) * 4U + block_x - x;
+        size_t child = (size_t)block_y * source->stride + block_x;
+        uint8_t u = avg5(&source->pixels[child], source->stride, 2U, 0);
+        uint8_t v = avg5(&source->pixels[child], source->stride, 2U, 1);
+        CopyCandidate selected = select_copy2x2_hq(
+            source, previous, reconstructed, tentative, available_mask,
+            x, y, block_x, block_y, u, v, allow_stationary, allow_temporal,
+            allow_spatial, quality, loss_level);
+
+        modes[block] = selected.mode;
+        if (selected.mode == SPLIT_MODE_STATIONARY) {
+            status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
+            fill_tentative_copy2x2(previous, reconstructed, tentative, x, y,
+                                   block_x, block_y, &selected.motion,
+                                   &available_mask);
+        } else if (selected.mode == SPLIT_MODE_TEMPORAL) {
+            status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
+            if (status == REPLAY_OK) {
+                status = mb_motion_write_format19(
+                    &writer, MB_MOTION_BLOCK_2X2, &selected.motion);
+            }
+            fill_tentative_copy2x2(previous, reconstructed, tentative, x, y,
+                                   block_x, block_y, &selected.motion,
+                                   &available_mask);
+        } else if (selected.mode == SPLIT_MODE_SPATIAL) {
+            status = replay_bitwriter_write(&writer, UINT32_C(1), 1U);
+            if (status == REPLAY_OK) {
+                status = mb_motion_write_format19(
+                    &writer, MB_MOTION_BLOCK_2X2, &selected.motion);
+            }
+            fill_tentative_copy2x2(reconstructed, reconstructed, tentative,
+                                   x, y, block_x, block_y, &selected.motion,
+                                   &available_mask);
+        } else {
+            /* The core writes the block, advances the predictor, and fills the
+               child's four tentative pixels (luma lossless, chroma averaged). */
+            status = encode_data2x2_core(&writer, &source->pixels[child],
+                                         source->stride, &tentative[local], 4U,
+                                         final_predictor);
+            available_mask |= 1U << local;
+            available_mask |= 1U << (local + 1U);
+            available_mask |= 1U << (local + 4U);
+            available_mask |= 1U << (local + 5U);
+        }
+    }
+    *bits = replay_bitwriter_position(&writer);
+    if (status == REPLAY_OK) {
+        status = replay_bitwriter_flush_zero(&writer);
+    }
+    return status;
+}
+
+/* Write a reconstructed 4x4 block (compact 16-pixel layout) into the frame. */
+static void blit_block4x4(MbFrame *destination, unsigned x, unsigned y,
+                          const MbPixel block[16])
+{
+    unsigned row;
+
+    for (row = 0U; row < 4U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 4U; ++column) {
+            destination->pixels[(size_t)(y + row) * destination->stride +
+                                x + column] = block[row * 4U + column];
+        }
+    }
+}
+
 /* Copy a 4x4 block from `reference` at the motion offset to `destination`. The
  * reference is the previous frame for temporal copies or the reconstruction in
  * progress for spatial copies, whose vectors always point at finished pixels. */
@@ -420,8 +648,11 @@ ReplayStatus codec_movingblockshq_encode_frame(
     int allow_stationary = options != NULL && options->allow_stationary != 0;
     int allow_temporal = options != NULL && options->allow_temporal != 0;
     int allow_spatial = options != NULL && options->allow_spatial != 0;
+    int allow_split = options != NULL && options->allow_split != 0;
     unsigned loss_level = options != NULL ? options->loss_level : 0U;
     int need_previous = allow_stationary || allow_temporal;
+    ReplayBuffer data_candidate;
+    ReplayBuffer split_candidate;
     unsigned y;
     ReplayStatus status = REPLAY_OK;
 
@@ -443,6 +674,9 @@ ReplayStatus codec_movingblockshq_encode_frame(
     }
 
     replay_bitwriter_init(&writer, output);
+    /* Reused scratch buffers avoid reallocating for every data/split decision. */
+    replay_buffer_init(&data_candidate);
+    replay_buffer_init(&split_candidate);
     for (y = 0U; status == REPLAY_OK && y < source->height; y += 4U) {
         unsigned x;
 
@@ -484,11 +718,58 @@ ReplayStatus codec_movingblockshq_encode_frame(
                 copy_motion4x4(reconstructed, reconstructed, x, y, &motion);
                 ++local_stats.spatial4x4_blocks;
             } else {
-                status = codec_movingblockshq_encode_data4x4(
-                    &writer, &source->pixels[offset],
-                    &reconstructed->pixels[offset], source->stride,
-                    &predictor);
-                ++local_stats.data4x4_blocks;
+                /* No accepted copy: compare a data 4x4 against a 2x2 split and
+                   keep whichever encodes in fewer bits (ties stay 4x4). */
+                MbPixel data_recon[16];
+                MbPixel split_recon[16];
+                MbPredictor data_predictor;
+                MbPredictor split_predictor;
+                SplitMode split_modes[4];
+                size_t data_bits;
+                size_t split_bits = SIZE_MAX;
+
+                status = build_data4x4_candidate(
+                    source, x, y, &predictor, &data_candidate, data_recon,
+                    &data_predictor, &data_bits);
+                if (status == REPLAY_OK && allow_split) {
+                    status = build_split_candidate(
+                        source, previous, reconstructed, x, y,
+                        allow_stationary, allow_temporal, allow_spatial,
+                        &thresholds, loss_level, &predictor, &split_candidate,
+                        &split_predictor, split_recon, split_modes,
+                        &split_bits);
+                }
+                if (status == REPLAY_OK && split_bits < data_bits) {
+                    unsigned block;
+
+                    status = append_candidate(&writer, &split_candidate,
+                                              split_bits);
+                    predictor = split_predictor;
+                    blit_block4x4(reconstructed, x, y, split_recon);
+                    for (block = 0U; block < 4U; ++block) {
+                        switch (split_modes[block]) {
+                        case SPLIT_MODE_STATIONARY:
+                            ++local_stats.stationary2x2_blocks;
+                            break;
+                        case SPLIT_MODE_TEMPORAL:
+                            ++local_stats.temporal2x2_blocks;
+                            break;
+                        case SPLIT_MODE_SPATIAL:
+                            ++local_stats.spatial2x2_blocks;
+                            break;
+                        default:
+                            ++local_stats.data2x2_blocks;
+                            break;
+                        }
+                    }
+                    ++local_stats.split4x4_blocks;
+                } else if (status == REPLAY_OK) {
+                    status = append_candidate(&writer, &data_candidate,
+                                              data_bits);
+                    predictor = data_predictor;
+                    blit_block4x4(reconstructed, x, y, data_recon);
+                    ++local_stats.data4x4_blocks;
+                }
             }
         }
     }
@@ -497,6 +778,8 @@ ReplayStatus codec_movingblockshq_encode_frame(
         local_stats.bits_written = replay_bitwriter_position(&writer);
         status = replay_bitwriter_flush_zero(&writer);
     }
+    replay_buffer_free(&split_candidate);
+    replay_buffer_free(&data_candidate);
     if (status == REPLAY_OK && stats != NULL) {
         *stats = local_stats;
     }

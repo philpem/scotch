@@ -36,3 +36,4 @@ check_fixture data-wrap 4x4
 check_fixture spatial4x4 8x4
 check_fixture stationary4x4 8x4
 check_fixture temporal4x4 8x4
+check_fixture split4x4 4x4
