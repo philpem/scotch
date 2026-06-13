@@ -129,8 +129,10 @@
   as `--sound-pcm`/`--sound-encode`, fed canonical `s16le` from ffmpeg.
 - [ ] Add a PCM -> ADPCM / format-2 framed-codec encoder and the explicit
   per-chunk sound-size path those framed codecs need.
-- [ ] Generate type 19 per-chunk key-frame blobs so `--write-keys` random-access
-  start points can be emitted (writer plumbing is in place).
+- [x] Generate type 19 per-chunk key frames (reconstruction packed as 6Y5UV
+  halfwords) so the player can start at any chunk: replay-encode --keys-prefix
+  emits one per frame, the writer selects the chunk boundaries (chunk_count-1
+  blocks) and replay-join/replay-make expose --keys-prefix/--keys.
 
 ## Milestone 8: Modern Input And Uncompressed Formats
 

@@ -215,5 +215,43 @@ int main(void)
         replay_ae7_movie_destroy(&movie);
         replay_buffer_free(&movie_bytes);
     }
+
+    /* Key frames: one block per chunk except the first, each the per-frame blob
+     * of that chunk's last frame. 30 frames at 12.5 fps / 1 s -> chunks 12,13,5,
+     * so two keys from frames 11 and 24. */
+    {
+        static uint8_t key_blobs[FRAME_COUNT][4];
+        const uint8_t *key_ptrs[FRAME_COUNT];
+
+        for (i = 0U; i < FRAME_COUNT; ++i) {
+            key_blobs[i][0] = (uint8_t)i;
+            key_ptrs[i] = key_blobs[i];
+        }
+        options.sprite_data = NULL;
+        options.sprite_size = 0U;
+        options.track_count = 0U;
+        options.frames_per_chunk = 0U;
+        options.chunk_seconds = 1.0;
+        options.write_keys = 1;
+        options.key_data = key_ptrs;
+        options.key_size = sizeof(key_blobs[0]);
+        replay_buffer_init(&movie_bytes);
+        status = replay_ae7_write(&options, &movie_bytes, error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        status = replay_ae7_parse(movie_bytes.data, movie_bytes.size, &movie,
+                                  error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        CHECK(movie.chunk_count == 3U);
+        CHECK(movie.key_frame_offset > 0);
+        /* Two key blocks (chunk_count - 1). */
+        CHECK(movie.catalogue_offset - (uint64_t)movie.key_frame_offset ==
+              2U * sizeof(key_blobs[0]));
+        /* Block 0 is frame 11 (end of chunk 0), block 1 is frame 24. */
+        CHECK(movie_bytes.data[movie.key_frame_offset] == 11U);
+        CHECK(movie_bytes.data[(size_t)movie.key_frame_offset +
+                               sizeof(key_blobs[0])] == 24U);
+        replay_ae7_movie_destroy(&movie);
+        replay_buffer_free(&movie_bytes);
+    }
     return EXIT_SUCCESS;
 }

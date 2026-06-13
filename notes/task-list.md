@@ -97,7 +97,8 @@ Replay video compression tooling.
 - [x] Add a signed-16-PCM -> VIDC E8 (and 8/16-bit signed linear) sound encoder
   (`replay_sound`); wire it and a poster into `replay-join`.
 - [x] Add a one-shot `replay-make` driver (ffmpeg -> encode -> join in one step).
-- [ ] Generate type 19 per-chunk key frames so !ARPlayer can seek (priority 1).
+- [x] Generate type 19 per-chunk key frames so !ARPlayer can seek: encoder
+  --keys-prefix, writer boundary selection (chunk_count-1 blocks), join --keys.
 - [ ] Add a PCM -> ADPCM (format 2) audio encoder (priority 2).
 - [ ] Investigate the original compressor's unplayable `6YVUV` output before
   reproducing that historical colour-space path.

@@ -255,3 +255,20 @@ movie can accidentally crash !ARPlayer; `--poster FILE.bgr555` overrides it and
 ffmpeg + `replay-encode` + `replay-join`: it auto-computes an aspect-correct,
 ÷4 height, encodes video, extracts mono VIDC-E8 audio, builds a poster from the
 first frame (or `--poster IMAGE`), and joins, cleaning up the intermediate files.
+
+## Key frames (chunk seeking)
+
+The "key frame offset" field points to a block per chunk except the first
+(chunk_count-1 blocks of width*height*2 bytes). The v0.53 player, to start at
+chunk `fchunk` (fchunk != 0), reads `ipsz% = width*height*2` bytes from
+`KF + (fchunk-1)*ipsz%` and runs `.keyer` to expand them into the previous-frame
+buffer, so key block j is the start state for chunk j+1: the reconstruction at
+the *end* of chunk j. Chunk 0 starts unaided (its first frame is intra).
+
+Each block is the reconstructed frame packed as 6Y5UV halfwords -- one
+little-endian halfword per pixel, `Y[0:5] | U[6:10] | V[11:15]` (the same layout
+as type 2 `type19-fields`). `replay-encode --keys-prefix` writes one such block
+per frame; `replay_ae7_write` is given the per-frame blobs and selects the
+end-of-chunk frames itself; `replay-join --keys-prefix` and `replay-make --keys`
+drive it. Verified: for 60 frames at 25 frames/chunk the two emitted keys are
+byte-identical to the reconstructions of frames 24 and 49.

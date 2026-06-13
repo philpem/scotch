@@ -271,6 +271,7 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
     uint64_t odd_size = 0U;
     uint64_t sprite_size = (uint64_t)options->sprite_size;
     uint64_t keys_total;
+    size_t key_count;
     uint64_t header_len = 0U;
     uint64_t catalogue_offset = 0U;
     uint64_t sprite_offset = 0U;
@@ -518,9 +519,15 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
         odd_size += 1U;
     }
 
-    keys_total = options->write_keys
-                     ? (uint64_t)chunk_count * (uint64_t)options->key_size
-                     : 0U;
+    /*
+     * The key-frame area holds one block per chunk except the first (the player
+     * reads block fchunk-1 to start chunk fchunk, and chunk 0 starts unaided):
+     * chunk_count-1 blocks of key_size bytes. key_data[j] is the start state for
+     * chunk j+1 (the reconstruction at the end of chunk j).
+     */
+    key_count = (options->write_keys && chunk_count >= 2U) ? chunk_count - 1U
+                                                           : 0U;
+    keys_total = (uint64_t)key_count * (uint64_t)options->key_size;
 
     /* Fixed-point on the header length: the three offset fields depend on it. */
     for (iteration = 0; iteration < 8; ++iteration) {
@@ -528,7 +535,7 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
          * sprite, when present, sits immediately after the text header. */
         sprite_offset = sprite_size != 0U ? header_len : 0U;
         catalogue_offset = header_len + sprite_size + keys_total;
-        keys_offset = options->write_keys
+        keys_offset = key_count != 0U
                           ? (int64_t)(header_len + sprite_size)
                           : -1;
         status = render_header(options, even_size, odd_size,
@@ -566,11 +573,14 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
         status = replay_buffer_append(out, options->sprite_data,
                                       options->sprite_size);
     }
-    if (status == REPLAY_OK && options->write_keys) {
-        for (index = 0U; index < chunk_count && status == REPLAY_OK; ++index) {
-            status = replay_buffer_append(out, options->key_data[index],
-                                          options->key_size);
-        }
+    for (index = 0U; index < key_count && status == REPLAY_OK; ++index) {
+        /* The key to start chunk index+1 is the reconstruction of the last frame
+         * of chunk index; key_data is indexed by video frame. */
+        size_t boundary =
+            chunks[index].first_frame + chunks[index].frame_count - 1U;
+
+        status = replay_buffer_append(out, options->key_data[boundary],
+                                      options->key_size);
     }
     if (status == REPLAY_OK) {
         status = replay_buffer_append(out, catalogue.data, catalogue.size);

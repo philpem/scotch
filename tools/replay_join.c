@@ -24,6 +24,7 @@ static void usage(FILE *stream)
             "  [--frame-suffix .mb19] [--pixel-depth 16] [--pixel-label LABEL]\n"
             "  [--frames-per-chunk N | --chunk-seconds S] [--align MASK]\n"
             "  [--title T] [--copyright C] [--author A]\n"
+            "  [--keys-prefix PREFIX]   (per-frame .key files for chunk seeking)\n"
             "  [--poster FILE.bgr555 [--poster-size WxH]] [--no-poster]\n"
             "    (16bpp poster for !ARPlayer; default = built-in Replay logo)\n"
             "  --sound-rate HZ --sound-channels N]\n"
@@ -149,6 +150,9 @@ int main(int argc, char **argv)
     ReplayBuffer *frame_buffers = NULL;
     const uint8_t **frame_ptrs = NULL;
     size_t *frame_sizes = NULL;
+    ReplayBuffer *key_buffers = NULL;
+    const uint8_t **key_ptrs = NULL;
+    const char *keys_prefix = NULL;
     ReplayBuffer sound_buffer;
     ReplayBuffer poster_buffer;
     ReplayBuffer sprite_buffer;
@@ -244,6 +248,9 @@ int main(int argc, char **argv)
         } else if (strcmp(a, "--sound") == 0) {
             NEED(value);
             sound_path = value;
+        } else if (strcmp(a, "--keys-prefix") == 0) {
+            NEED(value);
+            keys_prefix = value;
         } else if (strcmp(a, "--poster") == 0) {
             NEED(value);
             poster_path = value;
@@ -318,6 +325,42 @@ int main(int argc, char **argv)
         }
         frame_ptrs[i] = frame_buffers[i].data;
         frame_sizes[i] = frame_buffers[i].size;
+    }
+
+    /* Optional per-frame key frames (from replay-encode --keys-prefix), one
+     * native-format reconstruction per frame; the writer picks the chunk
+     * boundaries. */
+    if (keys_prefix != NULL && frame_count != 0U) {
+        size_t key_size = (size_t)width * height * 2U;
+
+        key_buffers = calloc(frame_count, sizeof(*key_buffers));
+        key_ptrs = calloc(frame_count, sizeof(*key_ptrs));
+        if (key_buffers == NULL || key_ptrs == NULL) {
+            fprintf(stderr, "unable to allocate key tables\n");
+            goto done;
+        }
+        for (i = 0U; i < frame_count; ++i) {
+            int length = snprintf(path, sizeof(path), "%s%06zu.key",
+                                  keys_prefix, i);
+
+            if (length < 0 || (size_t)length >= sizeof(path)) {
+                fprintf(stderr, "generated key path is too long\n");
+                goto done;
+            }
+            replay_buffer_init(&key_buffers[i]);
+            if (read_file(path, &key_buffers[i]) != EXIT_SUCCESS) {
+                goto done;
+            }
+            if (key_buffers[i].size != key_size) {
+                fprintf(stderr, "%s: key frame is %zu bytes, expected %zu\n",
+                        path, key_buffers[i].size, key_size);
+                goto done;
+            }
+            key_ptrs[i] = key_buffers[i].data;
+        }
+        options.write_keys = 1;
+        options.key_data = key_ptrs;
+        options.key_size = key_size;
     }
 
     if (sound_pcm_path != NULL) {
@@ -468,6 +511,13 @@ done:
         }
         free(frame_buffers);
     }
+    if (key_buffers != NULL) {
+        for (i = 0U; i < frame_count; ++i) {
+            replay_buffer_free(&key_buffers[i]);
+        }
+        free(key_buffers);
+    }
+    free(key_ptrs);
     free(frame_ptrs);
     free(frame_sizes);
     replay_buffer_free(&sound_buffer);

@@ -55,7 +55,8 @@ static void usage(FILE *stream)
             "[--policy ordered|lowest-error] "
             "[--rate-search linear|bracketed] "
             "[--target-bytes N] [--trace FILE] "
-            "[--recon-ppm FILE | --recon-prefix PREFIX]\n");
+            "[--recon-ppm FILE | --recon-prefix PREFIX] "
+            "[--keys-prefix PREFIX]\n");
 }
 
 static int bracketed_rate_next(BracketedRateSearch *search,
@@ -293,6 +294,46 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
     return EXIT_SUCCESS;
 }
 
+/*
+ * Write a reconstructed frame as packed 6Y5UV halfwords (Y[0:5], U[6:10],
+ * V[11:15], little-endian) -- the native key-frame format the Replay player
+ * expands when starting decompression at a chunk boundary.
+ */
+static int write_key_frame(const char *path, const MbFrame *frame)
+{
+    FILE *file = fopen(path, "wb");
+    unsigned y;
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+
+        for (x = 0U; x < frame->width; ++x) {
+            const MbPixel *p = &frame->pixels[(size_t)y * frame->stride + x];
+            unsigned packed = ((unsigned)p->y & 0x3FU) |
+                              (((unsigned)p->u & 0x1FU) << 6U) |
+                              (((unsigned)p->v & 0x1FU) << 11U);
+            uint8_t bytes[2] = {
+                (uint8_t)(packed & 0xFFU), (uint8_t)((packed >> 8U) & 0xFFU)
+            };
+
+            if (fwrite(bytes, 1U, sizeof(bytes), file) != sizeof(bytes)) {
+                perror(path);
+                fclose(file);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+    if (fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
                        unsigned height,
                        const CodecSuperMovingBlocksEncodeStats *stats,
@@ -373,6 +414,7 @@ int main(int argc, char **argv)
     const char *trace_path = NULL;
     const char *recon_ppm_path = NULL;
     const char *recon_prefix = NULL;
+    const char *keys_prefix = NULL;
     unsigned width = 0U;
     unsigned height = 0U;
     unsigned codec = 0U;
@@ -433,6 +475,8 @@ int main(int argc, char **argv)
             recon_ppm_path = argv[++i];
         } else if (strcmp(argv[i], "--recon-prefix") == 0 && i + 1 < argc) {
             recon_prefix = argv[++i];
+        } else if (strcmp(argv[i], "--keys-prefix") == 0 && i + 1 < argc) {
+            keys_prefix = argv[++i];
         } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             char *end;
             unsigned long value = strtoul(argv[++i], &end, 10);
@@ -495,8 +539,10 @@ int main(int argc, char **argv)
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||
         (recon_ppm_path != NULL && recon_prefix != NULL) ||
-        (payload_path != NULL && (frame_limit > 1U || recon_prefix != NULL)) ||
+        (payload_path != NULL &&
+         (frame_limit > 1U || recon_prefix != NULL || keys_prefix != NULL)) ||
         (payload_prefix != NULL && recon_ppm_path != NULL) ||
+        (recon_ppm_path != NULL && keys_prefix != NULL) ||
         (data_only && target_bytes != 0U) || width == 0U ||
         height == 0U || (width & 3U) != 0U || (height & 3U) != 0U ||
         (size_t)width > SIZE_MAX / (size_t)height) {
@@ -565,6 +611,7 @@ int main(int argc, char **argv)
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
         char generated_payload[4096];
         char generated_ppm[4096];
+        char generated_key[4096];
         const char *frame_payload = payload_path;
         const char *frame_ppm = recon_ppm_path;
         size_t consumed_bits;
@@ -669,6 +716,15 @@ int main(int argc, char **argv)
             write_reconstructed_ppm(frame_ppm, &reconstructed, rgb,
                                     (size_t)width * 3U) != EXIT_SUCCESS) {
             goto free_payload;
+        }
+        if (keys_prefix != NULL) {
+            if (make_frame_path(generated_key, sizeof(generated_key),
+                                keys_prefix, frame_number, ".key") !=
+                    EXIT_SUCCESS ||
+                write_key_frame(generated_key, &reconstructed) !=
+                    EXIT_SUCCESS) {
+                goto free_payload;
+            }
         }
         printf("frame=%zu codec=19 name=\"Super Moving Blocks\" "
                "retry=%u loss_level=%u bits=%zu bytes=%zu data4x4=%zu "

@@ -83,6 +83,11 @@ this file describes the current portable code in `replay-tooling`.
   ((5<<27)|(90<<14)|(90<<1)|1); old numbered modes such as 28 are 8bpp. With no
   --poster the writer embeds the built-in Replay-logo Default sprite so the movie
   still opens in !ARPlayer.
+- Type 19 key frames for chunk seeking: replay-encode --keys-prefix writes
+  each reconstruction packed as 6Y5UV halfwords (Y[0:5] U[6:10] V[11:15]);
+  the writer emits one key per chunk except the first (the end-of-chunk
+  reconstruction, chunk_count-1 blocks) and replay-join/--keys-prefix and
+  replay-make/--keys drive it.
 - A one-shot `tools/replay-make` driver: ffmpeg -> replay-encode -> replay-join
   in a single command (aspect-correct height, type 19 video, VIDC-E8 audio, a
   first-frame or supplied poster), cleaning up its intermediate files.

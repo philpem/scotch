@@ -101,10 +101,14 @@ typedef struct {
     size_t track_count;
 
     /*
-     * Optional per-chunk key-frame blobs (the "Join keys" option). When
-     * write_keys is non-zero, key_data must supply chunk_count blobs each of
-     * key_size bytes; the writer emits the key area and sets the key-frame
-     * offset. When zero, the movie is written with "-1 (no keys)".
+     * Optional key frames (the "Join keys" option) that let the player start at
+     * a chunk boundary. key_data is one blob per video frame (frame_count
+     * entries, parallel to frame_data) holding that frame's reconstruction
+     * packed as the codec's native frame (width*height*2 bytes for 16bpp). The
+     * writer emits one key per chunk except the first -- the reconstruction at
+     * the end of each chunk -- selecting the right frames itself. When
+     * write_keys is zero, or there is only one chunk, the movie is written with
+     * "-1 (no keys)".
      */
     int write_keys;
     const uint8_t *const *key_data;
