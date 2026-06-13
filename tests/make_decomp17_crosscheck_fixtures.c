@@ -126,7 +126,7 @@ static int make_spatial4x4(const char *directory)
     MbPixel reconstructed_pixels[32];
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     unsigned y;
 
@@ -155,7 +155,7 @@ static int make_stationary4x4(const char *directory)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     unsigned i;
 
@@ -188,7 +188,7 @@ static int make_temporal4x4(const char *directory)
     MbFrame source = { 8U, 4U, 8U, source_pixels };
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed = { 8U, 4U, 8U, reconstructed_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 0, 0, 0U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 0, 0, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     unsigned y;
 
@@ -222,7 +222,7 @@ static int make_split4x4(const char *directory)
     MbFrame source = { 4U, 4U, 4U, source_pixels };
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, reconstructed_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     unsigned i;
 

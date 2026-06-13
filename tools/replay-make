@@ -13,6 +13,8 @@
 #                      [8x8]; breaks gradient banding at ~1 LSB of stable noise
 #                      and ~4% size. 8x8 is finer/less visible than 4x4.
 #   --no-dither        disable luma dither
+#   --policy P         copy selection: ordered | lowest-error [lowest-error];
+#                      lowest-error picks the least-error copy (cleaner edges)
 #   --width N          output width in pixels [320]; height keeps aspect, /4
 #   --fps F            output frame rate [12.5]
 #   --loss-level N     quality 0 (exact) .. 28 (roughest) [10]
@@ -49,12 +51,13 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
         --dither)           dither=$2; shift 2;;
         --no-dither)        dither=; shift;;
+        --policy)           policy=$2; shift 2;;
         --width)            width=$2; shift 2;;
         --fps)              fps=$2; shift 2;;
         --loss-level)       loss=$2; shift 2;;
@@ -130,11 +133,12 @@ fi
 # Video: scale and frame-rate convert, encode each frame as a codec payload.
 keyarg=(); [ "$keys" = 1 ] && keyarg=(--keys-prefix "$work/k-")
 ditharg=(--no-dither); [ -n "$dither" ] && ditharg=(--dither "$dither")
+polarg=(); [ -n "$policy" ] && polarg=(--policy "$policy")
 ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
     "$bin/replay-encode" --codec "$codec" --input - --size "${width}x${height}" \
         --payload-prefix "$work/f-" "${keyarg[@]}" "${targetarg[@]}" \
-        "${ditharg[@]}" --loss-level "$loss" >/dev/null
+        "${ditharg[@]}" "${polarg[@]}" --loss-level "$loss" >/dev/null
 frames=$(find "$work" -name "f-*.$vsuffix" | wc -l)
 [ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
 

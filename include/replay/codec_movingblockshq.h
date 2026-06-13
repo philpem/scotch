@@ -57,8 +57,12 @@ ReplayStatus codec_movingblockshq_encode_data_frame(
  * temporal copies reference the previous decoded frame and so require it;
  * spatial copies reference already-reconstructed current-frame pixels and are
  * legal in a key frame. `loss_level` selects the shared QP% acceptance row
- * (0 = exact). Copy families are tried stationary, then temporal, then spatial,
- * matching the original compressor's ordered policy.
+ * (0 = exact).
+ *
+ * `policy` selects how accepted copies compete: MB_ENCODE_POLICY_ORDERED takes
+ * the first acceptable family (stationary, then temporal, then spatial);
+ * MB_ENCODE_POLICY_LOWEST_ERROR compares every accepted copy by reconstruction
+ * error, which tends to pick cleaner copies near high-frequency detail.
  *
  * `workspace` is optional: when supplied (and sized to the frame) it caches the
  * temporal motion search so repeated rate-control retries of one frame at
@@ -70,6 +74,7 @@ typedef struct {
     int allow_spatial;
     int allow_split;
     unsigned loss_level;
+    MbEncodePolicy policy;
     MbEncodeWorkspace *workspace;
 } CodecMovingBlocksHqEncodeOptions;
 

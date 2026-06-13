@@ -513,7 +513,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         size_t frame_limit, unsigned loss_level, int data_only,
                         const char *recon_prefix, const char *recon_ppm_path,
                         const char *keys_prefix, size_t target_bytes,
-                        MbColorDither dither)
+                        MbColorDither dither, MbEncodePolicy policy)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -584,6 +584,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         options.allow_temporal = !data_only && previous_arg != NULL;
         options.allow_spatial = !data_only;
         options.allow_split = !data_only;
+        options.policy = policy;
 
         /*
          * Device-bandwidth rate control: retry the frame at successively looser
@@ -875,10 +876,13 @@ int main(int argc, char **argv)
             usage(stderr);
             return EXIT_FAILURE;
         }
-        return run_encode17(input_path, input_format, width, height,
-                            payload_path, payload_prefix, frame_limit,
-                            loss_level, data_only, recon_prefix,
-                            recon_ppm_path, keys_prefix, target_bytes, dither);
+        return run_encode17(
+            input_path, input_format, width, height, payload_path,
+            payload_prefix, frame_limit, loss_level, data_only, recon_prefix,
+            recon_ppm_path, keys_prefix, target_bytes, dither,
+            policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
+                ? MB_ENCODE_POLICY_LOWEST_ERROR
+                : MB_ENCODE_POLICY_ORDERED);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||

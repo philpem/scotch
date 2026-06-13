@@ -367,7 +367,7 @@ static int test_encode_frame_copy_modes(void)
     }
     replay_buffer_init(&payload);
     {
-        CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U, NULL };
+        CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
         CHECK(codec_movingblockshq_encode_frame(
                   &source, NULL, &options, &payload, &reconstructed, &stats) ==
               REPLAY_OK);
@@ -394,7 +394,7 @@ static int test_encode_frame_copy_modes(void)
     }
     replay_buffer_clear(&payload);
     {
-        CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U, NULL };
+        CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
         CHECK(codec_movingblockshq_encode_frame(
                   &source, &previous, &options, &payload, &reconstructed,
                   &stats) == REPLAY_OK);
@@ -420,7 +420,7 @@ static int test_encode_frame_split(void)
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, recon_pixels };
     MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U, MB_ENCODE_POLICY_ORDERED, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     ReplayBuffer payload;
     unsigned i;
@@ -464,7 +464,7 @@ static int test_workspace_equivalence(void)
     MbFrame previous = { 8U, 4U, 8U, previous_pixels };
     MbFrame reconstructed_a = { 8U, 4U, 8U, recon_a };
     MbFrame reconstructed_b = { 8U, 4U, 8U, recon_b };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 1, 1, 4U, NULL };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 1, 1, 4U, MB_ENCODE_POLICY_ORDERED, NULL };
     MbEncodeWorkspace workspace = { 0U, 0U, 0U, 0U, NULL, NULL };
     ReplayBuffer payload_a;
     ReplayBuffer payload_b;

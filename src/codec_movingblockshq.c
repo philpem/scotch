@@ -431,7 +431,8 @@ ReplayStatus codec_movingblockshq_encode_frame(
         options != NULL && options->allow_spatial != 0;
     encode_options.allow_split = options != NULL && options->allow_split != 0;
     encode_options.loss_level = options != NULL ? options->loss_level : 0U;
-    encode_options.policy = MB_ENCODE_POLICY_ORDERED;
+    encode_options.policy =
+        options != NULL ? options->policy : MB_ENCODE_POLICY_ORDERED;
     encode_options.workspace = options != NULL ? options->workspace : NULL;
 
     status = mb_encode_frame(&codec17_encode, &codec17_data, source, previous,
