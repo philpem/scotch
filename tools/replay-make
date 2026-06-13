@@ -34,6 +34,9 @@
 #                      pass --no-poster to embed nothing (command-line player only)
 #   --no-poster        do not embed a poster sprite
 #   --keys             emit per-chunk key frames so !ARPlayer can seek
+#   --no-pad-last-chunk  do not pad the final chunk to frames-per-chunk with
+#                      "repeat last frame" frames (padding is on by default and
+#                      stops the player decoding garbage past the end)
 #   --audio-format F   vidc-e8 (default) | signed-8 | signed-16 | adpcm | adpcm2
 #   --title TEXT       movie title metadata
 #   --data-rate KB     device-bandwidth mode: target kB/s of playback data;
@@ -57,7 +60,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=; pad=1
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
@@ -70,6 +73,7 @@ while [ $# -gt 0 ]; do
         --fps)              fps=$2; shift 2;;
         --loss-level)       loss=$2; shift 2;;
         --frames-per-chunk) fpc=$2; shift 2;;
+        --no-pad-last-chunk) pad=0; shift;;
         --start)            start=$2; shift 2;;
         --duration)         duration=$2; shift 2;;
         --audio-rate)       arate=$2; shift 2;;
@@ -153,12 +157,17 @@ fi
 keyarg=(); [ "$keys" = 1 ] && keyarg=(--keys-prefix "$work/k-")
 ditharg=(--no-dither); [ -n "$dither" ] && ditharg=(--dither "$dither")
 polarg=(); [ -n "$policy" ] && polarg=(--policy "$policy")
+# Pad the final chunk up to frames-per-chunk with "repeat last frame" frames so
+# the player (which decodes a fixed number of frames per chunk) does not run off
+# the end into garbage -- matches Acorn's own compressor. --no-pad-last-chunk
+# disables it.
+padarg=(); [ "$pad" = 1 ] && padarg=(--pad-to-multiple "$fpc")
 ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
     "$bin/replay-encode" --codec "$codec" "${variantarg[@]}" --input - \
         --size "${width}x${height}" \
         --payload-prefix "$work/f-" "${keyarg[@]}" "${targetarg[@]}" \
-        "${ditharg[@]}" "${polarg[@]}" --loss-level "$loss" >/dev/null
+        "${ditharg[@]}" "${polarg[@]}" "${padarg[@]}" --loss-level "$loss" >/dev/null
 frames=$(find "$work" -name "f-*.$vsuffix" | wc -l)
 [ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
 

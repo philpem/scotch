@@ -24,6 +24,7 @@ add_library(replay STATIC
     src/mb_metrics.c
     src/mb_quality.c
     src/mb_rate_control.c
+    src/mb_repeat.c
     src/codec_movingblocks.c
     src/codec_movingblockshq.c
     src/codec_supermovingblocks.c
@@ -97,6 +98,7 @@ add_replay_test(test_mb_encode tests/test_mb_encode.c)
 add_replay_test(test_mb_metrics tests/test_mb_metrics.c)
 add_replay_test(test_mb_quality tests/test_mb_quality.c)
 add_replay_test(test_mb_rate_control tests/test_mb_rate_control.c)
+add_replay_test(test_mb_repeat tests/test_mb_repeat.c)
 add_replay_test(test_mb_color tests/test_mb_color.c)
 add_replay_test(test_mb_color_complib tests/test_mb_color_complib.c)
 add_replay_test(test_codec_supermovingblocks

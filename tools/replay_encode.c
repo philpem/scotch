@@ -10,6 +10,7 @@
 #include "replay/mb_metrics.h"
 #include "replay/mb_quality.h"
 #include "replay/mb_rate_control.h"
+#include "replay/mb_repeat.h"
 
 /*
  * This program is intentionally a thin development harness around the codec:
@@ -58,7 +59,7 @@ static void usage(FILE *stream)
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] [--variant old|new] "
             "[--rate-search linear|bracketed] "
-            "[--target-bytes N] [--trace FILE] "
+            "[--target-bytes N] [--pad-to-multiple N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX] "
             "[--keys-prefix PREFIX]\n");
 }
@@ -262,6 +263,110 @@ static int write_payload(const char *path, const ReplayBuffer *payload)
         perror(path);
         result = EXIT_FAILURE;
     }
+    return result;
+}
+
+static int copy_file(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "rb");
+    FILE *out;
+    int result = EXIT_SUCCESS;
+    uint8_t block[65536];
+
+    if (in == NULL) {
+        perror(src);
+        return EXIT_FAILURE;
+    }
+    out = fopen(dst, "wb");
+    if (out == NULL) {
+        perror(dst);
+        fclose(in);
+        return EXIT_FAILURE;
+    }
+    for (;;) {
+        size_t count = fread(block, 1U, sizeof(block), in);
+
+        if (count != 0U && fwrite(block, 1U, count, out) != count) {
+            perror(dst);
+            result = EXIT_FAILURE;
+            break;
+        }
+        if (count != sizeof(block)) {
+            if (ferror(in)) {
+                perror(src);
+                result = EXIT_FAILURE;
+            }
+            break;
+        }
+    }
+    if (fclose(in) != 0 && result == EXIT_SUCCESS) {
+        perror(src);
+        result = EXIT_FAILURE;
+    }
+    if (fclose(out) != 0 && result == EXIT_SUCCESS) {
+        perror(dst);
+        result = EXIT_FAILURE;
+    }
+    return result;
+}
+
+/*
+ * Pad the encoded sequence up to a multiple of `multiple` frames by appending
+ * "repeat last frame" payloads -- a frame in which every block is stationary, so
+ * the decoder reproduces the previous reconstruction unchanged. The player
+ * decodes a fixed number of frames per chunk, so a partial final chunk would
+ * otherwise be filled with decode garbage; Acorn's own compressor pads the same
+ * way ("repeating last frame"). Only meaningful when writing a movie's per-frame
+ * payloads (payload_prefix set) and after at least one real frame. When key
+ * frames are emitted, each pad frame reuses the previous frame's key (which the
+ * repeat frame reproduces). On return *frame_number counts the pad frames too.
+ */
+static int write_pad_frames(unsigned codec, unsigned width, unsigned height,
+                            const char *payload_prefix,
+                            const char *payload_suffix, const char *keys_prefix,
+                            unsigned multiple, size_t *frame_number)
+{
+    ReplayBuffer payload;
+    size_t pad_count;
+    size_t i;
+    int result = EXIT_FAILURE;
+
+    if (payload_prefix == NULL || multiple <= 1U || *frame_number == 0U ||
+        *frame_number % multiple == 0U) {
+        return EXIT_SUCCESS;
+    }
+    pad_count = multiple - (*frame_number % multiple);
+
+    replay_buffer_init(&payload);
+    if (mb_repeat_payload(codec, width, height, &payload) != REPLAY_OK) {
+        fprintf(stderr, "cannot build repeat frame for codec %u\n", codec);
+        goto done;
+    }
+    for (i = 0U; i < pad_count; ++i) {
+        char path[1024];
+
+        if (make_frame_path(path, sizeof(path), payload_prefix, *frame_number,
+                            payload_suffix) != EXIT_SUCCESS ||
+            write_payload(path, &payload) != EXIT_SUCCESS) {
+            goto done;
+        }
+        if (keys_prefix != NULL) {
+            char prev_key[1024];
+            char pad_key[1024];
+
+            if (make_frame_path(prev_key, sizeof(prev_key), keys_prefix,
+                                *frame_number - 1U, ".key") != EXIT_SUCCESS ||
+                make_frame_path(pad_key, sizeof(pad_key), keys_prefix,
+                                *frame_number, ".key") != EXIT_SUCCESS ||
+                copy_file(prev_key, pad_key) != EXIT_SUCCESS) {
+                goto done;
+            }
+        }
+        ++*frame_number;
+    }
+    result = EXIT_SUCCESS;
+done:
+    replay_buffer_free(&payload);
     return result;
 }
 
@@ -546,7 +651,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         size_t frame_limit, unsigned loss_level, int data_only,
                         const char *recon_prefix, const char *recon_ppm_path,
                         const char *keys_prefix, size_t target_bytes,
-                        MbColorDither dither, MbEncodePolicy policy)
+                        MbColorDither dither, MbEncodePolicy policy,
+                        unsigned pad_to_multiple)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -732,6 +838,11 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             break;
         }
     }
+    if (write_pad_frames(17U, width, height, payload_prefix, ".mb17",
+                         keys_prefix, pad_to_multiple,
+                         &frame_number) != EXIT_SUCCESS) {
+        goto cleanup;
+    }
     result = EXIT_SUCCESS;
 
 cleanup:
@@ -762,7 +873,8 @@ static int run_encode7(const char *input_path, InputFormat input_format,
                        size_t frame_limit, unsigned loss_level, int data_only,
                        const char *recon_prefix, const char *recon_ppm_path,
                        const char *keys_prefix, size_t target_bytes,
-                       MbColorDither dither, MbEncodePolicy policy)
+                       MbColorDither dither, MbEncodePolicy policy,
+                       unsigned pad_to_multiple)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -939,6 +1051,11 @@ static int run_encode7(const char *input_path, InputFormat input_format,
             break;
         }
     }
+    if (write_pad_frames(7U, width, height, payload_prefix, ".mb7",
+                         keys_prefix, pad_to_multiple,
+                         &frame_number) != EXIT_SUCCESS) {
+        goto cleanup;
+    }
     result = EXIT_SUCCESS;
 
 cleanup:
@@ -970,7 +1087,8 @@ static int run_encode20_variant(const char *input_path,
                         const char *recon_prefix, const char *recon_ppm_path,
                         const char *keys_prefix, size_t target_bytes,
                         MbColorDither dither, MbEncodePolicy policy,
-                        CodecMovingBlocksBetaVariant variant)
+                        CodecMovingBlocksBetaVariant variant,
+                        unsigned pad_to_multiple)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -1148,6 +1266,11 @@ static int run_encode20_variant(const char *input_path,
             break;
         }
     }
+    if (write_pad_frames(20U, width, height, payload_prefix, ".mb20",
+                         keys_prefix, pad_to_multiple,
+                         &frame_number) != EXIT_SUCCESS) {
+        goto cleanup;
+    }
     result = EXIT_SUCCESS;
 
 cleanup:
@@ -1185,6 +1308,7 @@ int main(int argc, char **argv)
     InputFormat input_format = INPUT_RGB24;
     MbColorDither dither = MB_COLOR_DITHER_NONE;
     CodecMovingBlocksBetaVariant beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
+    unsigned pad_to_multiple = 0U;
     CodecSuperMovingBlocksPolicy policy =
         CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
     RateSearch rate_search = RATE_SEARCH_LINEAR;
@@ -1313,6 +1437,14 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
             target_bytes = (size_t)value;
+        } else if (strcmp(argv[i], "--pad-to-multiple") == 0 && i + 1 < argc) {
+            char *end;
+            unsigned long value = strtoul(argv[++i], &end, 10);
+            if (*end != '\0' || value > 100000UL) {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+            pad_to_multiple = (unsigned)value;
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -1347,14 +1479,14 @@ int main(int argc, char **argv)
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy);
+                dither, mb_policy, pad_to_multiple);
         }
         if (codec == 20U) {
             return run_encode20_variant(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, beta_variant);
+                dither, mb_policy, beta_variant, pad_to_multiple);
         }
         return run_encode17(
             input_path, input_format, width, height, payload_path,
@@ -1362,7 +1494,8 @@ int main(int argc, char **argv)
             recon_ppm_path, keys_prefix, target_bytes, dither,
             policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
                 ? MB_ENCODE_POLICY_LOWEST_ERROR
-                : MB_ENCODE_POLICY_ORDERED);
+                : MB_ENCODE_POLICY_ORDERED,
+            pad_to_multiple);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||
@@ -1581,6 +1714,11 @@ int main(int argc, char **argv)
     }
     if ((payload_path != NULL || frame_limit != 0U) &&
         require_eof(input, input_path) != EXIT_SUCCESS) {
+        goto free_payload;
+    }
+    if (write_pad_frames(19U, width, height, payload_prefix, ".mb19",
+                         keys_prefix, pad_to_multiple, &frame_number) !=
+        EXIT_SUCCESS) {
         goto free_payload;
     }
     replay_buffer_free(&payload);
