@@ -24,5 +24,5 @@ check_fixture()
     cmp "$work/$stem.expected.yuv555" "$work/$stem.acorn.yuv555"
 }
 
-check_fixture data 4x4
+check_fixture data 8x8
 check_fixture split 4x4

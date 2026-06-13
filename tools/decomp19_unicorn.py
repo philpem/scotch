@@ -28,6 +28,10 @@ try:
         UC_ARM_REG_R6,
         UC_ARM_REG_R7,
         UC_ARM_REG_R8,
+        UC_ARM_REG_R9,
+        UC_ARM_REG_R10,
+        UC_ARM_REG_R11,
+        UC_ARM_REG_R12,
         UC_ARM_REG_R13,
         UC_ARM_REG_R14,
         UC_ARM_REG_R15,
@@ -210,6 +214,33 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
                 (base_register, first_register, second_register),
                 address, address
             )
+
+    # Type 7 reads a whole literal 4x4 data block (90 bits, more than the 64-bit
+    # two-word window) with one four-word load, LDMIA r7,{r5,r6,r7,r8}, where r7
+    # is the bitstream byte pointer. As with the two-word lookahead the real ARM
+    # ignores the low address bits; emulate that for the unaligned read (r7 is
+    # base and a destination, so the source is captured before any write). Types
+    # 17/19 do not use this instruction.
+    quad_load = bytes.fromhex("e00197e8")  # LDMIA r7,{r5,r6,r7,r8}
+    quad_registers = (UC_ARM_REG_R5, UC_ARM_REG_R6,
+                      UC_ARM_REG_R7, UC_ARM_REG_R8)
+
+    def emulate_quad(machine: Uc, current: int, size: int,
+                     unused: object) -> None:
+        source = machine.reg_read(UC_ARM_REG_R7)
+        if source & 3:
+            words = struct.unpack(
+                "<IIII", bytes(machine.mem_read(source & ~3, 16))
+            )
+            for register, value in zip(quad_registers, words):
+                machine.reg_write(register, value)
+            machine.reg_write(UC_ARM_REG_R15, current + size)
+
+    offset = decompressor.find(quad_load)
+    while offset >= 0:
+        address = CODE_BASE + offset
+        machine.hook_add(UC_HOOK_CODE, emulate_quad, None, address, address)
+        offset = decompressor.find(quad_load, offset + 1)
 
 
 def numbered_path(prefix: Path, frame: int, suffix: str) -> Path:

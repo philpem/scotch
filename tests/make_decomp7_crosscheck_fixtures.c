@@ -111,24 +111,39 @@ static int emit_fixture(const char *directory, const char *stem,
     return EXIT_SUCCESS;
 }
 
-/* A single literal 4x4 data block: a luma ramp with distinct chroma. */
+/* An 8x8 frame of four literal 4x4 data blocks (per-block uniform chroma). Each
+ * 90-bit block spans the four-word bitstream load, so this exercises the
+ * unaligned multi-block read across block boundaries. */
 static int make_data(const char *directory)
 {
-    MbPixel source_pixels[16];
-    MbPixel decoded_pixels[16];
-    MbFrame source = { 4U, 4U, 4U, source_pixels };
-    MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
+    MbPixel source_pixels[64];
+    MbPixel decoded_pixels[64];
+    MbFrame source = { 8U, 8U, 8U, source_pixels };
+    MbFrame decoded = { 8U, 8U, 8U, decoded_pixels };
     ReplayBuffer payload;
-    unsigned i;
+    unsigned by;
 
-    for (i = 0U; i < 16U; ++i) {
-        source_pixels[i] = (MbPixel){ (uint8_t)((i * 2U) & 31U), 9U, 21U };
+    for (by = 0U; by < 8U; ++by) {
+        unsigned bx;
+        for (bx = 0U; bx < 8U; ++bx) {
+            unsigned block = (by / 4U) * 2U + bx / 4U;
+            source_pixels[by * 8U + bx] = (MbPixel){
+                (uint8_t)((by * 8U + bx) & 31U),
+                (uint8_t)((block * 7U + 1U) & 31U),
+                (uint8_t)((block * 5U + 2U) & 31U)
+            };
+        }
     }
     replay_buffer_init(&payload);
     {
         ReplayBitWriter writer;
         replay_bitwriter_init(&writer, &payload);
-        put_data4x4(&writer, &source, 0U, 0U);
+        for (by = 0U; by < 8U; by += 4U) {
+            unsigned bx;
+            for (bx = 0U; bx < 8U; bx += 4U) {
+                put_data4x4(&writer, &source, bx, by);
+            }
+        }
         CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
     }
     CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, NULL,
