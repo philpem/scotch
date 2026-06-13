@@ -144,6 +144,14 @@ if(NOT MSVC)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+add_executable(make_fullmovie_crosscheck_fixtures
+    tests/make_fullmovie_crosscheck_fixtures.c)
+target_link_libraries(make_fullmovie_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_fullmovie_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
@@ -189,6 +197,13 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP19_COMPILED})
+        add_test(NAME test_fullmovie_decomp19
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fullmovie_crosscheck.sh
+                $<TARGET_FILE:make_fullmovie_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP19_COMPILED} 19 6y5uv)
     endif()
     set(DECOMP23_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd"
@@ -218,6 +233,13 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP17_COMPILED})
+        add_test(NAME test_fullmovie_decomp17
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fullmovie_crosscheck.sh
+                $<TARGET_FILE:make_fullmovie_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP17_COMPILED} 17 yuv555)
     endif()
     set(DECOMP7_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp7/Decompress,ffd"
@@ -230,5 +252,12 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP7_COMPILED})
+        add_test(NAME test_fullmovie_decomp7
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fullmovie_crosscheck.sh
+                $<TARGET_FILE:make_fullmovie_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP7_COMPILED} 7 yuv555)
     endif()
 endif()
