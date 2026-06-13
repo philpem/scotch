@@ -52,7 +52,7 @@ static void usage(FILE *stream)
     fprintf(stream,
             "usage: replay-encode --codec 17|19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
-            "[--input-format rgb24|6y5uv|yuv555] "
+            "[--input-format rgb24|6y5uv|yuv555] [--dither|--no-dither] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] "
             "[--rate-search linear|bracketed] "
@@ -512,7 +512,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         const char *payload_path, const char *payload_prefix,
                         size_t frame_limit, unsigned loss_level, int data_only,
                         const char *recon_prefix, const char *recon_ppm_path,
-                        const char *keys_prefix, size_t target_bytes)
+                        const char *keys_prefix, size_t target_bytes,
+                        MbColorDither dither)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -571,7 +572,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         }
         status = input_format == INPUT_RGB24
                      ? mb_color_rgb24_to_yuv555(rgb, (size_t)width * 3U,
-                                                &source)
+                                                &source, dither)
                      : unpack_yuv555(rgb, &source);
         if (status != REPLAY_OK) {
             fprintf(stderr, "frame %zu: input conversion failed: %s\n",
@@ -732,6 +733,7 @@ int main(int argc, char **argv)
     size_t target_bytes = 0U;
     size_t frame_limit = 0U;
     InputFormat input_format = INPUT_RGB24;
+    MbColorDither dither = MB_COLOR_DITHER_NONE;
     CodecSuperMovingBlocksPolicy policy =
         CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
     RateSearch rate_search = RATE_SEARCH_LINEAR;
@@ -776,6 +778,10 @@ int main(int argc, char **argv)
                 usage(stderr);
                 return EXIT_FAILURE;
             }
+        } else if (strcmp(argv[i], "--dither") == 0) {
+            dither = MB_COLOR_DITHER_ORDERED;
+        } else if (strcmp(argv[i], "--no-dither") == 0) {
+            dither = MB_COLOR_DITHER_NONE;
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
             payload_path = argv[++i];
         } else if (strcmp(argv[i], "--payload-prefix") == 0 && i + 1 < argc) {
@@ -863,7 +869,7 @@ int main(int argc, char **argv)
         return run_encode17(input_path, input_format, width, height,
                             payload_path, payload_prefix, frame_limit,
                             loss_level, data_only, recon_prefix,
-                            recon_ppm_path, keys_prefix, target_bytes);
+                            recon_ppm_path, keys_prefix, target_bytes, dither);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||
@@ -959,7 +965,7 @@ int main(int argc, char **argv)
         codec_supermovingblocks_workspace_reset(&workspace);
         status = input_format == INPUT_RGB24
                      ? mb_color_rgb24_to_6y5uv(
-                           rgb, (size_t)width * 3U, &source)
+                           rgb, (size_t)width * 3U, &source, dither)
                      : unpack_6y5uv(rgb, &source);
         if (status != REPLAY_OK) {
             fprintf(stderr, "input conversion failed: %s\n",

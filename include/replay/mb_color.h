@@ -7,9 +7,22 @@
 #include "replay/mb_frame.h"
 #include "replay/replay_status.h"
 
-/* Convert packed R,G,B bytes using CompLib's non-dithered 6Y5UV path. */
+/*
+ * Luma quantisation mode for the RGB->YUV conversions. MB_COLOR_DITHER_NONE is
+ * Acorn's straight round-to-nearest. MB_COLOR_DITHER_ORDERED adds a fixed 4x4
+ * Bayer threshold so a gradient breaks into a stable spatial pattern instead of
+ * hard bands -- useful for the family's coarse 5/6-bit luma. Only luma is
+ * dithered: chroma is block-averaged by the codecs, so a per-pixel chroma dither
+ * would be averaged away. Dithering trades banding for ~1 LSB of noise.
+ */
+typedef enum {
+    MB_COLOR_DITHER_NONE,
+    MB_COLOR_DITHER_ORDERED
+} MbColorDither;
+
+/* Convert packed R,G,B bytes using CompLib's 6Y5UV path. */
 ReplayStatus mb_color_rgb24_to_6y5uv(const uint8_t *rgb, size_t rgb_stride,
-                                    MbFrame *output);
+                                    MbFrame *output, MbColorDither dither);
 
 /* Convert 6Y5UV to display RGB; this is a preview, not a reversible mapping. */
 ReplayStatus mb_color_6y5uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
@@ -20,7 +33,7 @@ ReplayStatus mb_color_6y5uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
  * These mirror the 6Y5UV pair with luma scaled to five bits.
  */
 ReplayStatus mb_color_rgb24_to_yuv555(const uint8_t *rgb, size_t rgb_stride,
-                                      MbFrame *output);
+                                      MbFrame *output, MbColorDither dither);
 
 ReplayStatus mb_color_yuv555_to_rgb24(const MbFrame *input, uint8_t *rgb,
                                       size_t rgb_stride);

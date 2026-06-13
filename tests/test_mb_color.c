@@ -9,7 +9,7 @@ static int check_pixel(const uint8_t rgb[3], uint8_t y, uint8_t u, uint8_t v)
     MbPixel pixel;
     MbFrame frame = { 1U, 1U, 1U, &pixel };
 
-    CHECK(mb_color_rgb24_to_6y5uv(rgb, 3U, &frame) == REPLAY_OK);
+    CHECK(mb_color_rgb24_to_6y5uv(rgb, 3U, &frame, MB_COLOR_DITHER_NONE) == REPLAY_OK);
     CHECK(pixel.y == y);
     CHECK(pixel.u == u);
     CHECK(pixel.v == v);
@@ -21,10 +21,43 @@ static int check_pixel555(const uint8_t rgb[3], uint8_t y, uint8_t u, uint8_t v)
     MbPixel pixel;
     MbFrame frame = { 1U, 1U, 1U, &pixel };
 
-    CHECK(mb_color_rgb24_to_yuv555(rgb, 3U, &frame) == REPLAY_OK);
+    CHECK(mb_color_rgb24_to_yuv555(rgb, 3U, &frame, MB_COLOR_DITHER_NONE) == REPLAY_OK);
     CHECK(pixel.y == y);
     CHECK(pixel.u == u);
     CHECK(pixel.v == v);
+    return EXIT_SUCCESS;
+}
+
+/* A flat grey landing exactly between two luma levels: round-to-nearest gives
+ * one uniform value, while ordered dithering splits the 4x4 Bayer cell evenly
+ * between the two neighbouring levels. */
+static int test_ordered_dither(void)
+{
+    uint8_t grey[16U * 3U];
+    MbPixel pixels[16];
+    MbFrame frame = { 4U, 4U, 4U, pixels };
+    unsigned i;
+    unsigned below = 0U;
+    unsigned at = 0U;
+
+    for (i = 0U; i < sizeof(grey); ++i) {
+        grey[i] = 128U; /* 5-bit luma 128*31/256 = 15.5 */
+    }
+    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame, MB_COLOR_DITHER_NONE) ==
+          REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        CHECK(pixels[i].y == 16U);
+    }
+    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame, MB_COLOR_DITHER_ORDERED) ==
+          REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        if (pixels[i].y == 15U) {
+            ++below;
+        } else if (pixels[i].y == 16U) {
+            ++at;
+        }
+    }
+    CHECK(below == 8U && at == 8U);
     return EXIT_SUCCESS;
 }
 
@@ -70,5 +103,7 @@ int main(void)
           preview555_rgb[2] == 0U);
     CHECK(preview555_rgb[3] == 255U && preview555_rgb[4] == 255U &&
           preview555_rgb[5] == 255U);
+
+    CHECK(test_ordered_dither() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }
