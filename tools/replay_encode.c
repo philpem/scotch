@@ -11,6 +11,10 @@
 #include "replay/mb_quality.h"
 #include "replay/mb_rate_control.h"
 #include "replay/mb_repeat.h"
+#include "replay/replay_ae7_write.h"
+#include "replay/replay_movie.h"
+
+#include "default_poster.h"
 
 /*
  * This program is intentionally a thin development harness around the codec:
@@ -54,14 +58,23 @@ static void usage(FILE *stream)
 {
     fprintf(stream,
             "usage: replay-encode --codec 7|17|19|20 --input FILE|- --size WxH "
-            "(--payload FILE | --payload-prefix PREFIX) "
+            "(--payload FILE | --payload-prefix PREFIX | --output MOVIE,ae7) "
             "[--input-format rgb24|6y5uv|yuv555] [--dither 4x4|8x8|--no-dither] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] [--variant old|new] "
             "[--rate-search linear|bracketed] "
             "[--target-bytes N] [--pad-to-multiple N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX] "
-            "[--keys-prefix PREFIX]\n");
+            "[--keys-prefix PREFIX]\n"
+            "  direct-to-container (--output) also takes:\n"
+            "    --fps F --frames-per-chunk N [--container-type N] "
+            "[--pixel-label L] [--pixel-depth N] [--align MASK] [--keys]\n"
+            "    [--audio-input FILE|- --sound-encode vidc-e8|signed-8|signed-16|"
+            "adpcm|adpcm2 --sound-rate HZ --sound-channels N]\n"
+            "    [--poster FILE.bgr555 [--poster-size WxH] | --no-poster] "
+            "[--title T] [--copyright C] [--author A]\n"
+            "    (--payload-prefix may be added to also dump per-frame payloads "
+            "for debugging)\n");
 }
 
 static int bracketed_rate_next(BracketedRateSearch *search,
@@ -321,18 +334,25 @@ static int copy_file(const char *src, const char *dst)
  * frames are emitted, each pad frame reuses the previous frame's key (which the
  * repeat frame reproduces). On return *frame_number counts the pad frames too.
  */
+/* Forward declarations: the padding writer feeds the in-memory frame sink used
+ * by the direct-to-container path; both are fully defined below. */
+typedef struct FrameSink FrameSink;
+static int frame_sink_add(FrameSink *sink, const ReplayBuffer *payload,
+                          const MbFrame *key_recon);
+
 static int write_pad_frames(unsigned codec, unsigned width, unsigned height,
                             const char *payload_prefix,
                             const char *payload_suffix, const char *keys_prefix,
-                            unsigned multiple, size_t *frame_number)
+                            unsigned multiple, size_t *frame_number,
+                            FrameSink *sink)
 {
     ReplayBuffer payload;
     size_t pad_count;
     size_t i;
     int result = EXIT_FAILURE;
 
-    if (payload_prefix == NULL || multiple <= 1U || *frame_number == 0U ||
-        *frame_number % multiple == 0U) {
+    if ((payload_prefix == NULL && sink == NULL) || multiple <= 1U ||
+        *frame_number == 0U || *frame_number % multiple == 0U) {
         return EXIT_SUCCESS;
     }
     pad_count = multiple - (*frame_number % multiple);
@@ -343,24 +363,31 @@ static int write_pad_frames(unsigned codec, unsigned width, unsigned height,
         goto done;
     }
     for (i = 0U; i < pad_count; ++i) {
-        char path[1024];
+        if (payload_prefix != NULL) {
+            char path[1024];
 
-        if (make_frame_path(path, sizeof(path), payload_prefix, *frame_number,
-                            payload_suffix) != EXIT_SUCCESS ||
-            write_payload(path, &payload) != EXIT_SUCCESS) {
-            goto done;
-        }
-        if (keys_prefix != NULL) {
-            char prev_key[1024];
-            char pad_key[1024];
-
-            if (make_frame_path(prev_key, sizeof(prev_key), keys_prefix,
-                                *frame_number - 1U, ".key") != EXIT_SUCCESS ||
-                make_frame_path(pad_key, sizeof(pad_key), keys_prefix,
-                                *frame_number, ".key") != EXIT_SUCCESS ||
-                copy_file(prev_key, pad_key) != EXIT_SUCCESS) {
+            if (make_frame_path(path, sizeof(path), payload_prefix,
+                                *frame_number, payload_suffix) != EXIT_SUCCESS ||
+                write_payload(path, &payload) != EXIT_SUCCESS) {
                 goto done;
             }
+            if (keys_prefix != NULL) {
+                char prev_key[1024];
+                char pad_key[1024];
+
+                if (make_frame_path(prev_key, sizeof(prev_key), keys_prefix,
+                                    *frame_number - 1U, ".key") != EXIT_SUCCESS ||
+                    make_frame_path(pad_key, sizeof(pad_key), keys_prefix,
+                                    *frame_number, ".key") != EXIT_SUCCESS ||
+                    copy_file(prev_key, pad_key) != EXIT_SUCCESS) {
+                    goto done;
+                }
+            }
+        }
+        /* A pad frame repeats the previous frame, so its key is the previous
+         * key (key_recon == NULL tells the sink to reuse it). */
+        if (sink != NULL && frame_sink_add(sink, &payload, NULL) != EXIT_SUCCESS) {
+            goto done;
         }
         ++*frame_number;
     }
@@ -404,83 +431,175 @@ static int write_reconstructed_ppm(const char *path, const MbFrame *frame,
 }
 
 /*
- * Write a reconstructed frame as packed 6Y5UV halfwords (Y[0:5], U[6:10],
- * V[11:15], little-endian) -- the native key-frame format the Replay player
- * expands when starting decompression at a chunk boundary.
+ * Pack a reconstructed frame into the player's native key-frame halfwords --
+ * 6Y5UV (Y[0:5], U[6:10], V[11:15]) for type 19, YUV555 (Y[0:4], U[5:9],
+ * V[10:14]) for types 7/17, little-endian -- the format the player expands when
+ * starting decompression at a chunk boundary. (Type 20 does not support keys.)
  */
-static int write_key_frame(const char *path, const MbFrame *frame)
+static ReplayStatus pack_key_frame(unsigned codec, const MbFrame *frame,
+                                   ReplayBuffer *out)
 {
-    FILE *file = fopen(path, "wb");
+    unsigned y_mask = codec == 19U ? 0x3FU : 0x1FU;
+    unsigned u_shift = codec == 19U ? 6U : 5U;
+    unsigned v_shift = codec == 19U ? 11U : 10U;
     unsigned y;
 
-    if (file == NULL) {
-        perror(path);
-        return EXIT_FAILURE;
-    }
+    replay_buffer_clear(out);
     for (y = 0U; y < frame->height; ++y) {
         unsigned x;
 
         for (x = 0U; x < frame->width; ++x) {
             const MbPixel *p = &frame->pixels[(size_t)y * frame->stride + x];
-            unsigned packed = ((unsigned)p->y & 0x3FU) |
-                              (((unsigned)p->u & 0x1FU) << 6U) |
-                              (((unsigned)p->v & 0x1FU) << 11U);
+            unsigned packed = ((unsigned)p->y & y_mask) |
+                              (((unsigned)p->u & 0x1FU) << u_shift) |
+                              (((unsigned)p->v & 0x1FU) << v_shift);
             uint8_t bytes[2] = {
                 (uint8_t)(packed & 0xFFU), (uint8_t)((packed >> 8U) & 0xFFU)
             };
 
-            if (fwrite(bytes, 1U, sizeof(bytes), file) != sizeof(bytes)) {
-                perror(path);
-                fclose(file);
-                return EXIT_FAILURE;
+            if (replay_buffer_append(out, bytes, sizeof(bytes)) != REPLAY_OK) {
+                return REPLAY_OUT_OF_MEMORY;
             }
         }
     }
-    if (fclose(file) != 0) {
-        perror(path);
+    return REPLAY_OK;
+}
+
+static int write_key_file(const char *path, unsigned codec,
+                          const MbFrame *frame)
+{
+    ReplayBuffer key;
+    int result = EXIT_SUCCESS;
+
+    replay_buffer_init(&key);
+    if (pack_key_frame(codec, frame, &key) != REPLAY_OK) {
+        fprintf(stderr, "unable to pack key frame\n");
+        replay_buffer_free(&key);
         return EXIT_FAILURE;
     }
+    result = write_payload(path, &key);
+    replay_buffer_free(&key);
+    return result;
+}
+
+/* Type 19 keys are 6Y5UV; types 7/17 keys are YUV555. */
+static int write_key_frame(const char *path, const MbFrame *frame)
+{
+    return write_key_file(path, 19U, frame);
+}
+
+static int write_key_frame_yuv555(const char *path, const MbFrame *frame)
+{
+    return write_key_file(path, 17U, frame);
+}
+
+/*
+ * Collects encoded frame payloads (and, when keys are wanted, packed key frames)
+ * in memory so the direct-to-container path (--output) can hand them to
+ * replay_ae7_write without writing per-frame temp files. Same memory profile as
+ * replay-join, which already buffers every frame.
+ */
+struct FrameSink {
+    ReplayBuffer *payloads;
+    ReplayBuffer *keys; /* parallel to payloads; used only when want_keys */
+    size_t count;
+    size_t capacity;
+    unsigned codec;
+    int want_keys;
+};
+
+static void frame_sink_init(FrameSink *sink, unsigned codec, int want_keys)
+{
+    sink->payloads = NULL;
+    sink->keys = NULL;
+    sink->count = 0U;
+    sink->capacity = 0U;
+    sink->codec = codec;
+    sink->want_keys = want_keys;
+}
+
+static int frame_sink_reserve(FrameSink *sink)
+{
+    size_t newcap;
+    ReplayBuffer *grown;
+
+    if (sink->count < sink->capacity) {
+        return EXIT_SUCCESS;
+    }
+    newcap = sink->capacity != 0U ? sink->capacity * 2U : 64U;
+    grown = realloc(sink->payloads, newcap * sizeof(*grown));
+    if (grown == NULL) {
+        return EXIT_FAILURE;
+    }
+    sink->payloads = grown;
+    if (sink->want_keys) {
+        grown = realloc(sink->keys, newcap * sizeof(*grown));
+        if (grown == NULL) {
+            return EXIT_FAILURE;
+        }
+        sink->keys = grown;
+    }
+    sink->capacity = newcap;
     return EXIT_SUCCESS;
 }
 
 /*
- * Write a reconstructed frame as packed YUV555 halfwords (Y[0:4], U[5:9],
- * V[10:14], little-endian) -- the native type 17 key-frame format the player
- * loads when starting decompression at a chunk boundary.
+ * Append one frame. `key_recon` is the reconstruction to pack as this frame's
+ * key, or NULL for a padding frame (which repeats the previous frame's key).
  */
-static int write_key_frame_yuv555(const char *path, const MbFrame *frame)
+static int frame_sink_add(FrameSink *sink, const ReplayBuffer *payload,
+                          const MbFrame *key_recon)
 {
-    FILE *file = fopen(path, "wb");
-    unsigned y;
+    ReplayBuffer *slot;
 
-    if (file == NULL) {
-        perror(path);
+    if (frame_sink_reserve(sink) != EXIT_SUCCESS) {
+        fprintf(stderr, "out of memory collecting frames\n");
         return EXIT_FAILURE;
     }
-    for (y = 0U; y < frame->height; ++y) {
-        unsigned x;
+    slot = &sink->payloads[sink->count];
+    replay_buffer_init(slot);
+    if (replay_buffer_append(slot, payload->data, payload->size) != REPLAY_OK) {
+        fprintf(stderr, "out of memory collecting frames\n");
+        return EXIT_FAILURE;
+    }
+    if (sink->want_keys) {
+        ReplayBuffer *key = &sink->keys[sink->count];
 
-        for (x = 0U; x < frame->width; ++x) {
-            const MbPixel *p = &frame->pixels[(size_t)y * frame->stride + x];
-            unsigned packed = ((unsigned)p->y & 0x1FU) |
-                              (((unsigned)p->u & 0x1FU) << 5U) |
-                              (((unsigned)p->v & 0x1FU) << 10U);
-            uint8_t bytes[2] = {
-                (uint8_t)(packed & 0xFFU), (uint8_t)((packed >> 8U) & 0xFFU)
-            };
+        replay_buffer_init(key);
+        if (key_recon != NULL) {
+            if (pack_key_frame(sink->codec, key_recon, key) != REPLAY_OK) {
+                fprintf(stderr, "out of memory collecting frames\n");
+                return EXIT_FAILURE;
+            }
+        } else if (sink->count > 0U) {
+            const ReplayBuffer *prev = &sink->keys[sink->count - 1U];
 
-            if (fwrite(bytes, 1U, sizeof(bytes), file) != sizeof(bytes)) {
-                perror(path);
-                fclose(file);
+            if (replay_buffer_append(key, prev->data, prev->size) != REPLAY_OK) {
+                fprintf(stderr, "out of memory collecting frames\n");
                 return EXIT_FAILURE;
             }
         }
     }
-    if (fclose(file) != 0) {
-        perror(path);
-        return EXIT_FAILURE;
-    }
+    ++sink->count;
     return EXIT_SUCCESS;
+}
+
+static void frame_sink_free(FrameSink *sink)
+{
+    size_t i;
+
+    for (i = 0U; i < sink->count; ++i) {
+        replay_buffer_free(&sink->payloads[i]);
+        if (sink->want_keys) {
+            replay_buffer_free(&sink->keys[i]);
+        }
+    }
+    free(sink->payloads);
+    free(sink->keys);
+    sink->payloads = NULL;
+    sink->keys = NULL;
+    sink->count = 0U;
+    sink->capacity = 0U;
 }
 
 static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
@@ -652,7 +771,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         const char *recon_prefix, const char *recon_ppm_path,
                         const char *keys_prefix, size_t target_bytes,
                         MbColorDither dither, MbEncodePolicy policy,
-                        unsigned pad_to_multiple)
+                        unsigned pad_to_multiple, FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -788,7 +907,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                stats.stationary2x2_blocks, stats.temporal2x2_blocks,
                stats.spatial2x2_blocks);
 
-        {
+        if (payload_path != NULL || payload_prefix != NULL) {
             char generated[1024];
             const char *frame_payload = payload_path;
 
@@ -803,6 +922,10 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
                 goto cleanup;
             }
+        }
+        if (sink != NULL &&
+            frame_sink_add(sink, &payload, &reconstructed) != EXIT_SUCCESS) {
+            goto cleanup;
         }
         if (recon_ppm_path != NULL || recon_prefix != NULL) {
             char generated[1024];
@@ -839,8 +962,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         }
     }
     if (write_pad_frames(17U, width, height, payload_prefix, ".mb17",
-                         keys_prefix, pad_to_multiple,
-                         &frame_number) != EXIT_SUCCESS) {
+                         keys_prefix, pad_to_multiple, &frame_number,
+                         sink) != EXIT_SUCCESS) {
         goto cleanup;
     }
     result = EXIT_SUCCESS;
@@ -874,7 +997,7 @@ static int run_encode7(const char *input_path, InputFormat input_format,
                        const char *recon_prefix, const char *recon_ppm_path,
                        const char *keys_prefix, size_t target_bytes,
                        MbColorDither dither, MbEncodePolicy policy,
-                       unsigned pad_to_multiple)
+                       unsigned pad_to_multiple, FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -1001,7 +1124,7 @@ static int run_encode7(const char *input_path, InputFormat input_format,
                stats.stationary2x2_blocks, stats.temporal2x2_blocks,
                stats.spatial2x2_blocks);
 
-        {
+        if (payload_path != NULL || payload_prefix != NULL) {
             char generated[1024];
             const char *frame_payload = payload_path;
 
@@ -1016,6 +1139,10 @@ static int run_encode7(const char *input_path, InputFormat input_format,
             if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
                 goto cleanup;
             }
+        }
+        if (sink != NULL &&
+            frame_sink_add(sink, &payload, &reconstructed) != EXIT_SUCCESS) {
+            goto cleanup;
         }
         if (recon_ppm_path != NULL || recon_prefix != NULL) {
             char generated[1024];
@@ -1052,8 +1179,8 @@ static int run_encode7(const char *input_path, InputFormat input_format,
         }
     }
     if (write_pad_frames(7U, width, height, payload_prefix, ".mb7",
-                         keys_prefix, pad_to_multiple,
-                         &frame_number) != EXIT_SUCCESS) {
+                         keys_prefix, pad_to_multiple, &frame_number,
+                         sink) != EXIT_SUCCESS) {
         goto cleanup;
     }
     result = EXIT_SUCCESS;
@@ -1088,7 +1215,7 @@ static int run_encode20_variant(const char *input_path,
                         const char *keys_prefix, size_t target_bytes,
                         MbColorDither dither, MbEncodePolicy policy,
                         CodecMovingBlocksBetaVariant variant,
-                        unsigned pad_to_multiple)
+                        unsigned pad_to_multiple, FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -1226,7 +1353,7 @@ static int run_encode20_variant(const char *input_path,
                stats.stationary2x2_blocks, stats.temporal2x2_blocks,
                stats.spatial2x2_blocks);
 
-        {
+        if (payload_path != NULL || payload_prefix != NULL) {
             char generated[1024];
             const char *frame_payload = payload_path;
 
@@ -1241,6 +1368,10 @@ static int run_encode20_variant(const char *input_path,
             if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
                 goto cleanup;
             }
+        }
+        if (sink != NULL &&
+            frame_sink_add(sink, &payload, &reconstructed) != EXIT_SUCCESS) {
+            goto cleanup;
         }
         if (recon_ppm_path != NULL || recon_prefix != NULL) {
             char generated[1024];
@@ -1267,8 +1398,8 @@ static int run_encode20_variant(const char *input_path,
         }
     }
     if (write_pad_frames(20U, width, height, payload_prefix, ".mb20",
-                         keys_prefix, pad_to_multiple,
-                         &frame_number) != EXIT_SUCCESS) {
+                         keys_prefix, pad_to_multiple, &frame_number,
+                         sink) != EXIT_SUCCESS) {
         goto cleanup;
     }
     result = EXIT_SUCCESS;
@@ -1286,6 +1417,220 @@ cleanup:
     free(source_pixels);
     free(rgb);
     replay_buffer_free(&payload);
+    return result;
+}
+
+static int read_file_buffer(const char *path, ReplayBuffer *out)
+{
+    FILE *file = strcmp(path, "-") == 0 ? stdin : fopen(path, "rb");
+    uint8_t block[65536];
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    for (;;) {
+        size_t count = fread(block, 1U, sizeof(block), file);
+
+        if (count != 0U && replay_buffer_append(out, block, count) != REPLAY_OK) {
+            fprintf(stderr, "%s: out of memory\n", path);
+            if (file != stdin) {
+                fclose(file);
+            }
+            return EXIT_FAILURE;
+        }
+        if (count != sizeof(block)) {
+            if (ferror(file)) {
+                perror(path);
+                if (file != stdin) {
+                    fclose(file);
+                }
+                return EXIT_FAILURE;
+            }
+            break;
+        }
+    }
+    if (file != stdin && fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+/*
+ * Options for assembling the collected frames (and optional audio/poster) into a
+ * complete AE7 movie -- the direct-to-container path. Mirrors the subset of
+ * replay-join's interface the encoder drives. `container_type` is the
+ * compression number written in the movie header, which may differ from the
+ * encoding codec (e.g. type 20 "new" aliased to a free Decomp number).
+ */
+typedef struct {
+    unsigned codec;            /* encoding codec, for key packing */
+    unsigned container_type;   /* compression number in the header */
+    unsigned width;
+    unsigned height;
+    unsigned pixel_depth;
+    const char *pixel_label;
+    double fps;
+    unsigned frames_per_chunk;
+    unsigned align_mask;
+    int want_keys;
+    const char *audio_input_path;
+    const char *sound_encode;
+    unsigned sound_rate;
+    unsigned sound_channels;
+    const char *poster_path;
+    unsigned poster_w;
+    unsigned poster_h;
+    int no_poster;
+    const char *title;
+    const char *copyright;
+    const char *author;
+    const char *output_path;
+} ContainerOptions;
+
+static int assemble_container(const FrameSink *sink, const ContainerOptions *c)
+{
+    ReplayAe7WriteOptions options;
+    ReplayAe7WriteTrack track;
+    ReplayBuffer sound_encoded;
+    ReplayBuffer pcm;
+    ReplayBuffer poster_pixels;
+    ReplayBuffer sprite;
+    ReplayBuffer movie;
+    const uint8_t **frame_ptrs = NULL;
+    size_t *frame_sizes = NULL;
+    const uint8_t **key_ptrs = NULL;
+    char error[256];
+    int result = EXIT_FAILURE;
+    size_t i;
+
+    memset(&options, 0, sizeof(options));
+    memset(&track, 0, sizeof(track));
+    replay_buffer_init(&sound_encoded);
+    replay_buffer_init(&pcm);
+    replay_buffer_init(&poster_pixels);
+    replay_buffer_init(&sprite);
+    replay_buffer_init(&movie);
+
+    if (sink->count == 0U) {
+        fprintf(stderr, "%s: no frames encoded\n", c->output_path);
+        goto done;
+    }
+    frame_ptrs = calloc(sink->count, sizeof(*frame_ptrs));
+    frame_sizes = calloc(sink->count, sizeof(*frame_sizes));
+    if (frame_ptrs == NULL || frame_sizes == NULL) {
+        fprintf(stderr, "unable to allocate frame tables\n");
+        goto done;
+    }
+    for (i = 0U; i < sink->count; ++i) {
+        frame_ptrs[i] = sink->payloads[i].data;
+        frame_sizes[i] = sink->payloads[i].size;
+    }
+
+    options.title = c->title;
+    options.copyright = c->copyright;
+    options.author = c->author;
+    options.video_codec = c->container_type;
+    options.width = c->width;
+    options.height = c->height;
+    options.pixel_depth = c->pixel_depth;
+    options.pixel_label = c->pixel_label;
+    options.frames_per_second = c->fps;
+    options.frame_data = frame_ptrs;
+    options.frame_size = frame_sizes;
+    options.frame_count = sink->count;
+    options.frames_per_chunk = c->frames_per_chunk;
+    options.chunk_seconds = 1.0;
+    options.align_mask = c->align_mask;
+
+    if (c->want_keys && sink->want_keys) {
+        key_ptrs = calloc(sink->count, sizeof(*key_ptrs));
+        if (key_ptrs == NULL) {
+            fprintf(stderr, "unable to allocate key tables\n");
+            goto done;
+        }
+        for (i = 0U; i < sink->count; ++i) {
+            key_ptrs[i] = sink->keys[i].data;
+        }
+        options.write_keys = 1;
+        options.key_data = key_ptrs;
+        options.key_size = (size_t)c->width * c->height * 2U;
+    }
+
+    if (c->audio_input_path != NULL) {
+        if (read_file_buffer(c->audio_input_path, &pcm) != EXIT_SUCCESS) {
+            goto done;
+        }
+        if (replay_build_pcm_track(pcm.data, pcm.size, c->sound_encode,
+                                   c->sound_rate, c->sound_channels,
+                                   &sound_encoded, &track, error,
+                                   sizeof(error)) != REPLAY_OK) {
+            fprintf(stderr, "%s\n", error);
+            goto done;
+        }
+        options.tracks = &track;
+        options.track_count = 1U;
+    }
+
+    if (c->poster_path != NULL) {
+        unsigned pw = c->poster_w != 0U ? c->poster_w : c->width;
+        unsigned ph = c->poster_h != 0U ? c->poster_h : c->height;
+        size_t want = (size_t)pw * ph * 2U;
+
+        if (read_file_buffer(c->poster_path, &poster_pixels) != EXIT_SUCCESS) {
+            goto done;
+        }
+        if (poster_pixels.size != want) {
+            fprintf(stderr,
+                    "%s: poster must be %ux%u bgr555 pixels (%zu bytes), got %zu\n",
+                    c->poster_path, pw, ph, want, poster_pixels.size);
+            goto done;
+        }
+        if (replay_build_poster(poster_pixels.data, pw, ph, &sprite) !=
+            REPLAY_OK) {
+            fprintf(stderr, "unable to build poster sprite\n");
+            goto done;
+        }
+        options.sprite_data = sprite.data;
+        options.sprite_size = sprite.size;
+    } else if (!c->no_poster) {
+        options.sprite_data = replay_default_poster;
+        options.sprite_size = replay_default_poster_size;
+    }
+
+    if (replay_ae7_write(&options, &movie, error, sizeof(error)) != REPLAY_OK) {
+        fprintf(stderr, "%s: %s\n", c->output_path, error);
+        goto done;
+    }
+    {
+        FILE *out = fopen(c->output_path, "wb");
+
+        if (out == NULL) {
+            perror(c->output_path);
+            goto done;
+        }
+        if (fwrite(movie.data, 1U, movie.size, out) != movie.size ||
+            fclose(out) != 0) {
+            perror(c->output_path);
+            goto done;
+        }
+    }
+    printf("codec=%u container=%u size=%ux%u frames=%zu fps=%g bytes=%zu "
+           "output=\"%s\"\n",
+           c->codec, c->container_type, c->width, c->height, sink->count,
+           c->fps, movie.size, c->output_path);
+    result = EXIT_SUCCESS;
+
+done:
+    free(frame_ptrs);
+    free(frame_sizes);
+    free(key_ptrs);
+    replay_buffer_free(&sound_encoded);
+    replay_buffer_free(&pcm);
+    replay_buffer_free(&poster_pixels);
+    replay_buffer_free(&sprite);
+    replay_buffer_free(&movie);
     return result;
 }
 
@@ -1309,6 +1654,11 @@ int main(int argc, char **argv)
     MbColorDither dither = MB_COLOR_DITHER_NONE;
     CodecMovingBlocksBetaVariant beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
     unsigned pad_to_multiple = 0U;
+    /* Direct-to-container (--output) options, mirroring replay-join. */
+    ContainerOptions container;
+    FrameSink sink;
+    FrameSink *sinkp = NULL;
+    int want_keys = 0;
     CodecSuperMovingBlocksPolicy policy =
         CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR;
     RateSearch rate_search = RATE_SEARCH_LINEAR;
@@ -1327,6 +1677,12 @@ int main(int argc, char **argv)
     size_t frame_number = 0U;
     int result = EXIT_FAILURE;
     int i;
+
+    memset(&container, 0, sizeof(container));
+    container.pixel_depth = 16U;
+    container.sound_encode = "vidc-e8";
+    container.sound_rate = 11025U;
+    container.sound_channels = 1U;
 
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--codec") == 0 && i + 1 < argc) {
@@ -1445,6 +1801,46 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
             pad_to_multiple = (unsigned)value;
+        } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
+            container.output_path = argv[++i];
+        } else if (strcmp(argv[i], "--audio-input") == 0 && i + 1 < argc) {
+            container.audio_input_path = argv[++i];
+        } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
+            container.fps = strtod(argv[++i], NULL);
+        } else if (strcmp(argv[i], "--frames-per-chunk") == 0 && i + 1 < argc) {
+            container.frames_per_chunk = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--container-type") == 0 && i + 1 < argc) {
+            container.container_type = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--pixel-label") == 0 && i + 1 < argc) {
+            container.pixel_label = argv[++i];
+        } else if (strcmp(argv[i], "--pixel-depth") == 0 && i + 1 < argc) {
+            container.pixel_depth = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--align") == 0 && i + 1 < argc) {
+            container.align_mask = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--keys") == 0) {
+            want_keys = 1;
+        } else if (strcmp(argv[i], "--sound-encode") == 0 && i + 1 < argc) {
+            container.sound_encode = argv[++i];
+        } else if (strcmp(argv[i], "--sound-rate") == 0 && i + 1 < argc) {
+            container.sound_rate = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--sound-channels") == 0 && i + 1 < argc) {
+            container.sound_channels = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--poster") == 0 && i + 1 < argc) {
+            container.poster_path = argv[++i];
+        } else if (strcmp(argv[i], "--poster-size") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%ux%u", &container.poster_w,
+                       &container.poster_h) != 2) {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
+        } else if (strcmp(argv[i], "--no-poster") == 0) {
+            container.no_poster = 1;
+        } else if (strcmp(argv[i], "--title") == 0 && i + 1 < argc) {
+            container.title = argv[++i];
+        } else if (strcmp(argv[i], "--copyright") == 0 && i + 1 < argc) {
+            container.copyright = argv[++i];
+        } else if (strcmp(argv[i], "--author") == 0 && i + 1 < argc) {
+            container.author = argv[++i];
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%ux%u%c", &width, &height, &tail) != 2) {
@@ -1456,6 +1852,31 @@ int main(int argc, char **argv)
             return EXIT_FAILURE;
         }
     }
+
+    /*
+     * Direct-to-container mode: collect frames in memory and write a complete
+     * movie. Incompatible with the single-frame --payload sink; --payload-prefix
+     * may still be given to additionally dump per-frame payloads for debugging.
+     */
+    if (container.output_path != NULL) {
+        if (payload_path != NULL || !(container.fps > 0.0)) {
+            fprintf(stderr,
+                    "--output needs --fps and is incompatible with --payload\n");
+            return EXIT_FAILURE;
+        }
+        if (want_keys && codec == 20U) {
+            fprintf(stderr, "type 20 key frames are not supported (--keys)\n");
+            return EXIT_FAILURE;
+        }
+        container.codec = codec;
+        container.container_type =
+            container.container_type != 0U ? container.container_type : codec;
+        container.width = width;
+        container.height = height;
+        container.want_keys = want_keys;
+        frame_sink_init(&sink, codec, want_keys);
+        sinkp = &sink;
+    }
     if (codec == 7U || codec == 17U || codec == 20U) {
         MbEncodePolicy mb_policy =
             policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
@@ -1463,7 +1884,8 @@ int main(int argc, char **argv)
                 : MB_ENCODE_POLICY_ORDERED;
 
         if (input_path == NULL ||
-            (payload_path == NULL) == (payload_prefix == NULL) ||
+            (sinkp == NULL &&
+             (payload_path == NULL) == (payload_prefix == NULL)) ||
             width == 0U || height == 0U ||
             (width % 4U) != 0U || (height % 4U) != 0U ||
             loss_level >= MB_QUALITY_LEVEL_COUNT ||
@@ -1475,30 +1897,28 @@ int main(int argc, char **argv)
             return EXIT_FAILURE;
         }
         if (codec == 7U) {
-            return run_encode7(
+            result = run_encode7(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, pad_to_multiple);
-        }
-        if (codec == 20U) {
-            return run_encode20_variant(
+                dither, mb_policy, pad_to_multiple, sinkp);
+        } else if (codec == 20U) {
+            result = run_encode20_variant(
                 input_path, input_format, width, height, payload_path,
                 payload_prefix, frame_limit, loss_level, data_only,
                 recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, beta_variant, pad_to_multiple);
+                dither, mb_policy, beta_variant, pad_to_multiple, sinkp);
+        } else {
+            result = run_encode17(
+                input_path, input_format, width, height, payload_path,
+                payload_prefix, frame_limit, loss_level, data_only,
+                recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
+                dither, mb_policy, pad_to_multiple, sinkp);
         }
-        return run_encode17(
-            input_path, input_format, width, height, payload_path,
-            payload_prefix, frame_limit, loss_level, data_only, recon_prefix,
-            recon_ppm_path, keys_prefix, target_bytes, dither,
-            policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
-                ? MB_ENCODE_POLICY_LOWEST_ERROR
-                : MB_ENCODE_POLICY_ORDERED,
-            pad_to_multiple);
+        goto assemble;
     }
     if (codec != 19U || input_path == NULL ||
-        (payload_path == NULL) == (payload_prefix == NULL) ||
+        (sinkp == NULL && (payload_path == NULL) == (payload_prefix == NULL)) ||
         (recon_ppm_path != NULL && recon_prefix != NULL) ||
         (payload_path != NULL &&
          (frame_limit > 1U || recon_prefix != NULL || keys_prefix != NULL)) ||
@@ -1673,9 +2093,17 @@ int main(int argc, char **argv)
             }
             frame_ppm = generated_ppm;
         }
-        if (write_payload(frame_payload, &payload) != EXIT_SUCCESS ||
+        if ((payload_path != NULL || payload_prefix != NULL) &&
+            write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
+            goto free_payload;
+        }
+        if (frame_ppm != NULL &&
             write_reconstructed_ppm(frame_ppm, &reconstructed, rgb,
                                     (size_t)width * 3U) != EXIT_SUCCESS) {
+            goto free_payload;
+        }
+        if (sinkp != NULL &&
+            frame_sink_add(sinkp, &payload, &reconstructed) != EXIT_SUCCESS) {
             goto free_payload;
         }
         if (keys_prefix != NULL) {
@@ -1717,8 +2145,8 @@ int main(int argc, char **argv)
         goto free_payload;
     }
     if (write_pad_frames(19U, width, height, payload_prefix, ".mb19",
-                         keys_prefix, pad_to_multiple, &frame_number) !=
-        EXIT_SUCCESS) {
+                         keys_prefix, pad_to_multiple, &frame_number,
+                         sinkp) != EXIT_SUCCESS) {
         goto free_payload;
     }
     replay_buffer_free(&payload);
@@ -1743,5 +2171,12 @@ done:
     free(reconstructed_pixels);
     free(source_pixels);
     free(rgb);
+assemble:
+    if (result == EXIT_SUCCESS && container.output_path != NULL) {
+        result = assemble_container(&sink, &container);
+    }
+    if (sinkp != NULL) {
+        frame_sink_free(&sink);
+    }
     return result;
 }
