@@ -219,6 +219,11 @@ build/replay-join --codec 19 --size 160x128 --fps 12.5 \
     --chunk-seconds 1.0 --output movie,ae7
 ```
 
+The three encoder rate-control modes -- fixed quality (`--loss-level`), fixed
+frame size (`--target-bytes`), and device bandwidth (`replay-make
+--data-rate KB [--latency S] [--double]`) -- are described in
+[notes/rate-control.md](notes/rate-control.md).
+
 `replay-join` embeds a poster sprite (required by the !ARPlayer GUI, which
 crashes without one): `--poster FILE.bgr555` for a custom 16bpp poster, the
 built-in Replay logo by default, or `--no-poster` for command-line-player-only

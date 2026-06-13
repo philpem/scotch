@@ -141,6 +141,9 @@
 - [x] Accept raw RGB24 from an FFmpeg pipe.
 - [x] Document and test FFmpeg commands, frame sizing, aspect handling, EOF,
   and pipe error propagation.
+- [x] Add the AREncode device-bandwidth rate driver (replay-make --data-rate/
+  --latency/--double/--arm2-max -> per-frame --target-bytes), documented in
+  notes/rate-control.md.
 - [ ] Decide whether direct libavformat/libavcodec integration adds enough
   value over the raw pipe to justify an optional dependency.
 - [x] Implement type 23, 6Y6Y5U5V packed 4:2:2 frame packing, unpacking, and

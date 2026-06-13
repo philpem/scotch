@@ -185,10 +185,10 @@ and map onto our existing `replay-encode` controls:
 - **Frame size (bytes)** → `--target-bytes` (fixed size, variable quality);
   "Faster Matching" ≈ a reduced motion search, "Limit to ARM2" ≈ clamp decode
   cost for slow CPUs (CompLib `-arm2`).
-- **Device bandwidth** (latency seconds default 0.4, data rate kB/s default 150,
-  "Assume Double Buffers") → a not-yet-implemented driver that converts a target
-  kB/s + fps into a per-frame/per-chunk byte budget and feeds `--target-bytes`.
-  CompLib computes this from `datarate`, `latency`, and `double`.
+- **Device bandwidth** (latency, data rate kB/s, "Assume Double Buffers") →
+  `replay-make --data-rate KB [--latency S] [--double]`, which computes a
+  per-frame byte budget with Decomp19 BatchComp's formula and feeds
+  `--target-bytes`. See `rate-control.md`.
 
 ## Player compatibility constraints (from the v0.53 Player and !ARPlayer source)
 

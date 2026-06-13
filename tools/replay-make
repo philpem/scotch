@@ -23,6 +23,11 @@
 #   --keys             emit per-chunk key frames so !ARPlayer can seek
 #   --audio-format F   vidc-e8 (default) | signed-8 | signed-16 | adpcm | adpcm2
 #   --title TEXT       movie title metadata
+#   --data-rate KB     device-bandwidth mode: target kB/s of playback data;
+#                      sets a per-frame byte budget (CompLib's formula)
+#   --latency SECONDS  IO latency allowance for --data-rate [0.4]
+#   --double           assume the player double-buffers chunks (with --data-rate)
+#   --arm2-max N       cap the per-frame budget at N bytes ("Limit to ARM2")
 #
 set -euo pipefail
 
@@ -39,7 +44,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=
 while [ $# -gt 0 ]; do
     case $1 in
         --width)            width=$2; shift 2;;
@@ -56,6 +61,10 @@ while [ $# -gt 0 ]; do
         --audio-format)     aformat=$2; shift 2;;
         --title)            title=$2; shift 2;;
         --audio-channels)   achan=$2; shift 2;;
+        --data-rate)        datarate=$2; shift 2;;
+        --latency)          latency=$2; shift 2;;
+        --double)           dblbuf=2; shift;;
+        --arm2-max)         arm2max=$2; shift 2;;
         *) echo "replay-make: unknown option $1" >&2; exit 1;;
     esac
 done
@@ -77,12 +86,37 @@ tt=(); [ -n "$duration" ] && tt=(-t "$duration")
 
 echo "replay-make: ${width}x${height} @ ${fps}fps, loss $loss -> $output" >&2
 
+# Device-bandwidth rate control: per-frame byte budget (Decomp19 BatchComp's
+# formula) from the target data rate, IO latency, buffering and sound size.
+targetarg=()
+if [ -n "$datarate" ]; then
+    target=$(python3 -c "
+import math
+fps=$fps; fpc=$fpc; rate=$arate; ch=$achan; dr=$datarate; lat=$latency; dbl=$dblbuf
+fmt='$aformat'; noaudio=$no_audio
+chunktime=fpc/fps
+if noaudio: bps=0
+elif fmt=='signed-16': bps=rate*ch*2
+elif fmt in ('adpcm','adpcm2','adpcm-sounda4'): bps=rate*ch/2
+else: bps=rate*ch
+snd=math.ceil(bps*chunktime)
+data=int((chunktime*dbl-lat)/dbl*dr*1024-snd) & ~1023
+if data < 1024: data = 1024
+fs=data // int(fpc)
+am='$arm2max'
+if am: fs=min(fs, int(am))
+print(max(64, fs))")
+    targetarg=(--target-bytes "$target")
+    echo "replay-make: ${datarate}kB/s, latency ${latency}s, x${dblbuf} buffer -> ~${target} bytes/frame" >&2
+fi
+
 # Video: scale and frame-rate convert, encode each frame as a type 19 payload.
 keyarg=(); [ "$keys" = 1 ] && keyarg=(--keys-prefix "$work/k-")
 ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
     "$bin/replay-encode" --codec 19 --input - --size "${width}x${height}" \
-        --payload-prefix "$work/f-" "${keyarg[@]}" --loss-level "$loss" >/dev/null
+        --payload-prefix "$work/f-" "${keyarg[@]}" "${targetarg[@]}" \
+        --loss-level "$loss" >/dev/null
 frames=$(find "$work" -name 'f-*.mb19' | wc -l)
 [ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
 
