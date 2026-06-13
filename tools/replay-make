@@ -9,10 +9,10 @@
 # Options (defaults in brackets):
 #   --codec N          video codec: 19 Super Moving Blocks 6Y5UV (default),
 #                      17 Moving Blocks HQ YUV 5,5,5
-#   --dither MODE      ordered (Bayer) luma dither in RGB->YUV: 4x4 or 8x8 (8x8
-#                      is finer/less visible) [off]; breaks gradient banding at
-#                      the cost of ~1 LSB of stable noise
-#   --no-dither        disable luma dither (default)
+#   --dither MODE      ordered (Bayer) luma dither in RGB->YUV: 4x4 or 8x8
+#                      [8x8]; breaks gradient banding at ~1 LSB of stable noise
+#                      and ~4% size. 8x8 is finer/less visible than 4x4.
+#   --no-dither        disable luma dither
 #   --width N          output width in pixels [320]; height keeps aspect, /4
 #   --fps F            output frame rate [12.5]
 #   --loss-level N     quality 0 (exact) .. 28 (roughest) [10]
@@ -49,7 +49,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
