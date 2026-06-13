@@ -29,27 +29,30 @@ static int check_pixel555(const uint8_t rgb[3], uint8_t y, uint8_t u, uint8_t v)
 }
 
 /* A flat grey landing exactly between two luma levels: round-to-nearest gives
- * one uniform value, while ordered dithering splits the 4x4 Bayer cell evenly
- * between the two neighbouring levels. */
+ * one uniform value, while ordered dithering splits each Bayer cell evenly
+ * between the two neighbouring levels (8/8 over a 4x4, 32/32 over an 8x8). */
 static int test_ordered_dither(void)
 {
-    uint8_t grey[16U * 3U];
-    MbPixel pixels[16];
-    MbFrame frame = { 4U, 4U, 4U, pixels };
+    uint8_t grey[64U * 3U];
+    MbPixel pixels[64];
+    MbFrame frame4 = { 4U, 4U, 4U, pixels };
+    MbFrame frame8 = { 8U, 8U, 8U, pixels };
     unsigned i;
-    unsigned below = 0U;
-    unsigned at = 0U;
+    unsigned below;
+    unsigned at;
 
     for (i = 0U; i < sizeof(grey); ++i) {
         grey[i] = 128U; /* 5-bit luma 128*31/256 = 15.5 */
     }
-    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame, MB_COLOR_DITHER_NONE) ==
+    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame4, MB_COLOR_DITHER_NONE) ==
           REPLAY_OK);
     for (i = 0U; i < 16U; ++i) {
         CHECK(pixels[i].y == 16U);
     }
-    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame, MB_COLOR_DITHER_ORDERED) ==
-          REPLAY_OK);
+
+    below = at = 0U;
+    CHECK(mb_color_rgb24_to_yuv555(grey, 12U, &frame4,
+                                   MB_COLOR_DITHER_ORDERED_4X4) == REPLAY_OK);
     for (i = 0U; i < 16U; ++i) {
         if (pixels[i].y == 15U) {
             ++below;
@@ -58,6 +61,18 @@ static int test_ordered_dither(void)
         }
     }
     CHECK(below == 8U && at == 8U);
+
+    below = at = 0U;
+    CHECK(mb_color_rgb24_to_yuv555(grey, 24U, &frame8,
+                                   MB_COLOR_DITHER_ORDERED_8X8) == REPLAY_OK);
+    for (i = 0U; i < 64U; ++i) {
+        if (pixels[i].y == 15U) {
+            ++below;
+        } else if (pixels[i].y == 16U) {
+            ++at;
+        }
+    }
+    CHECK(below == 32U && at == 32U);
     return EXIT_SUCCESS;
 }
 

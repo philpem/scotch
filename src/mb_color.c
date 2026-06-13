@@ -59,15 +59,28 @@ static uint8_t clamp_u8(int value)
 }
 
 /*
- * Ordered 4x4 Bayer matrix, values 0..15. The luma quantiser scales these to
- * the rounding domain: the centre value 8 reproduces straight round-to-nearest,
- * so the matrix spreads the threshold +/- half a quantiser step around it.
+ * Ordered Bayer matrices. The luma quantiser scales each entry into the rounding
+ * domain, centred so the middle value (8 of 16, or 32 of 64) reproduces straight
+ * round-to-nearest and the matrix spreads the threshold +/- half a quantiser
+ * step around it. The 8x8 is the recursive doubling of the 4x4 -- a finer, less
+ * visible pattern.
  */
 static const uint8_t bayer4x4[4][4] = {
     {  0U,  8U,  2U, 10U },
     { 12U,  4U, 14U,  6U },
     {  3U, 11U,  1U,  9U },
     { 15U,  7U, 13U,  5U }
+};
+
+static const uint8_t bayer8x8[8][8] = {
+    {  0U, 32U,  8U, 40U,  2U, 34U, 10U, 42U },
+    { 48U, 16U, 56U, 24U, 50U, 18U, 58U, 26U },
+    { 12U, 44U,  4U, 36U, 14U, 46U,  6U, 38U },
+    { 60U, 28U, 52U, 20U, 62U, 30U, 54U, 22U },
+    {  3U, 35U, 11U, 43U,  1U, 33U,  9U, 41U },
+    { 51U, 19U, 59U, 27U, 49U, 17U, 57U, 25U },
+    { 15U, 47U,  7U, 39U, 13U, 45U,  5U, 37U },
+    { 63U, 31U, 55U, 23U, 61U, 29U, 53U, 21U }
 };
 
 /*
@@ -107,11 +120,18 @@ static ReplayStatus rgb24_to_yuv(const uint8_t *rgb, size_t rgb_stride,
             MbPixel *pixel = &output->pixels[(size_t)y * output->stride + x];
             /* The quantiser truncates fixed_y*luma_max >> 24, so the rounding
                threshold lives in bits 0..23. 1<<23 is the round-to-nearest
-               half step; a Bayer value b replaces it with b<<20, centred on
-               1<<23 at b==8. */
-            int threshold = dither == MB_COLOR_DITHER_ORDERED
-                                ? (int)bayer4x4[y & 3U][x & 3U] << 20
-                                : (1 << 23);
+               half step; a Bayer value b replaces it, scaled to span the same
+               24-bit range and centred on 1<<23 (b<<20 for the 16-entry 4x4,
+               b<<18 for the 64-entry 8x8). */
+            int threshold;
+
+            if (dither == MB_COLOR_DITHER_ORDERED_8X8) {
+                threshold = (int)bayer8x8[y & 7U][x & 7U] << 18;
+            } else if (dither == MB_COLOR_DITHER_ORDERED_4X4) {
+                threshold = (int)bayer4x4[y & 3U][x & 3U] << 20;
+            } else {
+                threshold = (1 << 23);
+            }
 
             pixel->y = (uint8_t)(((int64_t)fixed_y * luma_max + threshold)
                                  >> 24U);

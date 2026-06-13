@@ -9,15 +9,18 @@
 
 /*
  * Luma quantisation mode for the RGB->YUV conversions. MB_COLOR_DITHER_NONE is
- * Acorn's straight round-to-nearest. MB_COLOR_DITHER_ORDERED adds a fixed 4x4
- * Bayer threshold so a gradient breaks into a stable spatial pattern instead of
- * hard bands -- useful for the family's coarse 5/6-bit luma. Only luma is
- * dithered: chroma is block-averaged by the codecs, so a per-pixel chroma dither
- * would be averaged away. Dithering trades banding for ~1 LSB of noise.
+ * Acorn's straight round-to-nearest. The ORDERED modes add a fixed Bayer
+ * threshold so a gradient breaks into a stable spatial pattern instead of hard
+ * bands -- useful for the family's coarse 5/6-bit luma. The 8x8 matrix is finer
+ * than the 4x4, so its pattern is less visible at the cost of slightly more
+ * varied (less compressible) output. Only luma is dithered: chroma is
+ * block-averaged by the codecs, so a per-pixel chroma dither would be averaged
+ * away. Dithering trades banding for ~1 LSB of noise.
  */
 typedef enum {
     MB_COLOR_DITHER_NONE,
-    MB_COLOR_DITHER_ORDERED
+    MB_COLOR_DITHER_ORDERED_4X4,
+    MB_COLOR_DITHER_ORDERED_8X8
 } MbColorDither;
 
 /* Convert packed R,G,B bytes using CompLib's 6Y5UV path. */

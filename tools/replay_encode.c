@@ -52,7 +52,7 @@ static void usage(FILE *stream)
     fprintf(stream,
             "usage: replay-encode --codec 17|19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
-            "[--input-format rgb24|6y5uv|yuv555] [--dither|--no-dither] "
+            "[--input-format rgb24|6y5uv|yuv555] [--dither 4x4|8x8|--no-dither] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] "
             "[--rate-search linear|bracketed] "
@@ -778,8 +778,17 @@ int main(int argc, char **argv)
                 usage(stderr);
                 return EXIT_FAILURE;
             }
-        } else if (strcmp(argv[i], "--dither") == 0) {
-            dither = MB_COLOR_DITHER_ORDERED;
+        } else if (strcmp(argv[i], "--dither") == 0 && i + 1 < argc) {
+            const char *mode = argv[++i];
+
+            if (strcmp(mode, "4x4") == 0) {
+                dither = MB_COLOR_DITHER_ORDERED_4X4;
+            } else if (strcmp(mode, "8x8") == 0) {
+                dither = MB_COLOR_DITHER_ORDERED_8X8;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
         } else if (strcmp(argv[i], "--no-dither") == 0) {
             dither = MB_COLOR_DITHER_NONE;
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {

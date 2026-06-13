@@ -61,7 +61,7 @@ def read_ppm(path, width, height):
     return pixels.reshape(height, width, 3).astype(np.float64)
 
 
-def measure(encode_bin, work, codec, loss, src, width, height, frames):
+def measure(encode_bin, work, codec, loss, src, width, height, frames, dither):
     """Encode one (codec, loss) point and return (psnr_db, total_bytes)."""
     import numpy as np
     for stale in glob.glob(f"{work}/r*.ppm") + glob.glob(f"{work}/f*"):
@@ -70,6 +70,7 @@ def measure(encode_bin, work, codec, loss, src, width, height, frames):
            "--size", f"{width}x{height}", "--input-format", "rgb24",
            "--payload-prefix", f"{work}/f", "--recon-prefix", f"{work}/r",
            "--frames", str(frames), "--loss-level", str(loss)]
+    cmd += ["--no-dither"] if dither == "none" else ["--dither", dither]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
     recons = sorted(glob.glob(f"{work}/r*.ppm"))
@@ -103,6 +104,9 @@ def main():
                         help="comma-separated codec numbers")
     parser.add_argument("--loss-levels", default="0,4,8,12,16,20,24,28",
                         help="comma-separated loss levels")
+    parser.add_argument("--dither", default="none",
+                        choices=("none", "4x4", "8x8"),
+                        help="luma dither mode passed to replay-encode")
     parser.add_argument("--encode-bin", default="./build/replay-encode")
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--csv", help="write results as CSV to this path")
@@ -142,7 +146,8 @@ def main():
         for codec in codecs:
             for loss in losses:
                 psnr, total = measure(args.encode_bin, work, codec, loss, src,
-                                      width, height, args.frames)
+                                      width, height, args.frames,
+                                      args.dither)
                 per_frame = total / args.frames
                 rows.append((codec, loss, psnr, total, per_frame))
                 print(f"{codec:5d} {loss:4d} {psnr:9.2f} {total:9d} {per_frame:8.1f}",

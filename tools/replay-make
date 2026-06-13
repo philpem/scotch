@@ -9,8 +9,9 @@
 # Options (defaults in brackets):
 #   --codec N          video codec: 19 Super Moving Blocks 6Y5UV (default),
 #                      17 Moving Blocks HQ YUV 5,5,5
-#   --dither           ordered (Bayer) luma dither in RGB->YUV [off]; breaks
-#                      gradient banding at the cost of ~1 LSB of stable noise
+#   --dither MODE      ordered (Bayer) luma dither in RGB->YUV: 4x4 or 8x8 (8x8
+#                      is finer/less visible) [off]; breaks gradient banding at
+#                      the cost of ~1 LSB of stable noise
 #   --no-dither        disable luma dither (default)
 #   --width N          output width in pixels [320]; height keeps aspect, /4
 #   --fps F            output frame rate [12.5]
@@ -48,12 +49,12 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=0
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
-        --dither)           dither=1; shift;;
-        --no-dither)        dither=0; shift;;
+        --dither)           dither=$2; shift 2;;
+        --no-dither)        dither=; shift;;
         --width)            width=$2; shift 2;;
         --fps)              fps=$2; shift 2;;
         --loss-level)       loss=$2; shift 2;;
@@ -128,7 +129,7 @@ fi
 
 # Video: scale and frame-rate convert, encode each frame as a codec payload.
 keyarg=(); [ "$keys" = 1 ] && keyarg=(--keys-prefix "$work/k-")
-ditharg=(--no-dither); [ "$dither" = 1 ] && ditharg=(--dither)
+ditharg=(--no-dither); [ -n "$dither" ] && ditharg=(--dither "$dither")
 ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
     "$bin/replay-encode" --codec "$codec" --input - --size "${width}x${height}" \
