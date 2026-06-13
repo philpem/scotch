@@ -212,4 +212,89 @@ ReplayStatus mb_encode_append_candidate(ReplayBitWriter *writer,
                                         const ReplayBuffer *buffer,
                                         size_t bits);
 
+/*
+ * Signed average chroma of a size x size source block as a 5-bit value, the
+ * value a data block would store. Floors like the source ASR; the Moving Blocks
+ * family shares this signed five-bit chroma model.
+ */
+uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
+                                 unsigned size, int use_v);
+
+/* ------------------------------------------------------------------------- *
+ * Shared frame encoder.
+ *
+ * The block grammar, motion search, quality model, copy reconstruction and the
+ * data-vs-split size decision are identical across the Moving Blocks family;
+ * only the data-block coding (luma residuals and predictor) differs. mb_encode_
+ * frame implements everything shared and reaches the codec-specific part through
+ * MbEncodeDataCodec, so each codec's public encode_frame is a thin adapter.
+ * ------------------------------------------------------------------------- */
+
+/* Copy-family selection policy. */
+typedef enum {
+    /* Historical order: take the first accepted stationary, temporal, spatial. */
+    MB_ENCODE_POLICY_ORDERED,
+    /* Compare every accepted copy by error, then encoded bits, then order. */
+    MB_ENCODE_POLICY_LOWEST_ERROR
+} MbEncodePolicy;
+
+/* Per-frame block tally and search-evaluation counters. */
+typedef struct {
+    size_t data4x4_blocks;
+    size_t stationary4x4_blocks;
+    size_t temporal4x4_blocks;
+    size_t spatial4x4_blocks;
+    size_t split4x4_blocks;
+    size_t data2x2_blocks;
+    size_t stationary2x2_blocks;
+    size_t temporal2x2_blocks;
+    size_t spatial2x2_blocks;
+    size_t stationary4x4_evaluations;
+    size_t temporal4x4_evaluations;
+    size_t spatial4x4_evaluations;
+    size_t stationary2x2_evaluations;
+    size_t temporal2x2_evaluations;
+    size_t spatial2x2_evaluations;
+    size_t bits_written;
+} MbEncodeStats;
+
+/*
+ * Codec data-block coding. encode_data writes one size x size data block to
+ * `writer` from `source` at (x, y), reconstructs it into `recon` (at
+ * recon_stride, a compact 4-pitch buffer during candidate evaluation), and
+ * advances `predictor`. Luma is lossless in every family codec, so the
+ * reconstruction is the source luma plus the block-average chroma.
+ */
+typedef struct {
+    ReplayStatus (*encode_data)(ReplayBitWriter *writer, const MbFrame *source,
+                                unsigned x, unsigned y, unsigned size,
+                                MbPixel *recon, size_t recon_stride,
+                                MbPredictor *predictor);
+} MbEncodeDataCodec;
+
+/* Enabled block decisions and quality/rate state for one frame. */
+typedef struct {
+    int allow_stationary;
+    int allow_temporal;
+    int allow_spatial;
+    int allow_split;
+    unsigned loss_level;
+    MbEncodePolicy policy;
+    MbEncodeWorkspace *workspace; /* optional temporal-search cache */
+} MbEncodeOptions;
+
+/*
+ * Encode one frame. `search` supplies the motion tables and quality model,
+ * `data` the codec's data-block coding. `source` holds quantised working pixels;
+ * `reconstructed` is filled with exactly what a decoder retains and is the
+ * `previous` for the next inter frame. `output` is cleared on entry. The caller
+ * is responsible for codec-specific source-range validation. `stats` optional.
+ */
+ReplayStatus mb_encode_frame(const MbEncodeCodec *search,
+                             const MbEncodeDataCodec *data,
+                             const MbFrame *source, const MbFrame *previous,
+                             const MbEncodeOptions *options,
+                             ReplayBuffer *output, MbFrame *reconstructed,
+                             MbEncodeStats *stats);
+
 #endif
