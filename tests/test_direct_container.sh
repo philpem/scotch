@@ -22,14 +22,16 @@ FPC=4
 python3 - "$work" "$W" "$H" <<'PY'
 import sys, struct
 work, w, h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-frames = 6
-with open(work + "/vid.rgb", "wb") as f:
-    for n in range(frames):
-        for y in range(h):
-            for x in range(w):
-                f.write(bytes(((x * 7 + n * 11) & 255,
-                               (y * 5 + n * 3) & 255,
-                               (x * y + n) & 255)))
+def write_frames(path, frames):
+    with open(path, "wb") as f:
+        for n in range(frames):
+            for y in range(h):
+                for x in range(w):
+                    f.write(bytes(((x * 7 + n * 11) & 255,
+                                   (y * 5 + n * 3) & 255,
+                                   (x * y + n) & 255)))
+write_frames(work + "/vid.rgb", 6)
+write_frames(work + "/vid4.rgb", 4)
 with open(work + "/aud.pcm", "wb") as f:
     for i in range(2000):
         f.write(struct.pack("<h", ((i * 137) % 20000) - 10000))
@@ -104,7 +106,30 @@ check_short_audio()
     echo "ok: short-audio (2 equal chunks of 3)"
 }
 
+# Frames-per-chunk must be >= 3 (the player's look-ahead needs a margin). A
+# 4-frame clip with audio would split into two chunks of 2; the planner floors
+# the chunk size at 3, so it becomes two chunks of 3.
+check_tiny_audio_floor()
+{
+    "$encode" --codec 19 --output "$work/tiny.ae7" --size "${W}x${H}" \
+        --fps "$FPS" --frames-per-chunk 10 --pixel-label 6Y5UV --no-poster \
+        --loss-level 4 --pad-to-multiple 10 \
+        --audio-input "$work/aud.pcm" --sound-encode vidc-e8 \
+        --sound-rate 8000 --sound-channels 1 \
+        --input "$work/vid4.rgb" >/dev/null
+    info=$("$inspect" "$work/tiny.ae7")
+    chunks=$(printf '%s\n' "$info" | sed -n 's/^chunks: \([0-9]*\) entries.*/\1/p')
+    fpc=$(printf '%s\n' "$info" | sed -n 's/.* \([0-9]*\) frames\/chunk/\1/p')
+    if [ "$chunks" != 2 ] || [ "$fpc" != 3 ]; then
+        echo "FAIL (tiny-audio-floor): expected 2 chunks of 3, got $chunks of" \
+             "$fpc" >&2
+        exit 1
+    fi
+    echo "ok: tiny-audio-floor (2 chunks of 3, not 2)"
+}
+
 check_video_only
 check_with_audio
 check_short_audio
+check_tiny_audio_floor
 echo "direct-container: all checks passed"

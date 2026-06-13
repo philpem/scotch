@@ -1666,7 +1666,10 @@ static int pad_sink_for_chunks(FrameSink *sink, unsigned codec, unsigned width,
         return EXIT_SUCCESS;
     }
     if (have_audio && real <= (size_t)fpc) {
-        chunk = (unsigned)((real + 1U) / 2U); /* ceil(real / 2), >= 1 */
+        chunk = (unsigned)((real + 1U) / 2U); /* ceil(real / 2) */
+        if (chunk < 3U) {
+            chunk = 3U; /* the player needs frames-per-chunk >= 3 (player-bugs.md) */
+        }
         target = (size_t)chunk * 2U;
     } else {
         chunk = fpc;

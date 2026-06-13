@@ -66,8 +66,9 @@ this file describes the current portable code in `replay-tooling`.
   Sound-only movies (video format 0, no frames) and uncompressed video (any
   codec number, e.g. type 2 carrying raw 15-bit pixels) are both supported; the
   parser accepts zero dimensions when the video format is 0.
-- Player-compatibility constraints learned from the v0.53 player source and
-  emulator testing: an audio movie must have at least two chunks (a one-chunk
+- Player-compatibility constraints learned from the player source and emulator
+  testing (see `docs/player-bugs.md` for the bugs, code locations and player
+  version): an audio movie must have at least two chunks (a one-chunk
   movie aliases the player's double buffers and corrupts playback), a sound-only
   movie must report 0x0 dimensions, the catalogue always carries a sound field
   (";0" when silent), and frames-per-chunk must be >= 3. The writer enforces the
