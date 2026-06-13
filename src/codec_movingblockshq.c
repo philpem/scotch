@@ -191,14 +191,13 @@ static uint8_t avg5(const MbPixel *pixels, size_t stride, unsigned size,
 }
 
 /*
- * Encode one 4x4 source block as a data-coded 4x4. Luma is lossless: the normal
- * 32-symbol table codes every residual, so each reconstructed pixel equals the
- * source. Predictions follow already-reconstructed neighbours exactly as the
- * decoder does, and the carried predictor becomes the block's truncated mean.
+ * Core 4x4 data encoder allowing independent source and reconstruction strides.
+ * The split path reconstructs into a compact tentative buffer while reading the
+ * full-stride source; the public wrapper passes one stride for both.
  */
-ReplayStatus codec_movingblockshq_encode_data4x4(
-    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
-    size_t stride, MbPredictor *predictor)
+static ReplayStatus encode_data4x4_core(
+    ReplayBitWriter *writer, const MbPixel *source, size_t source_stride,
+    MbPixel *recon, size_t recon_stride, MbPredictor *predictor)
 {
     uint8_t u;
     uint8_t v;
@@ -207,18 +206,18 @@ ReplayStatus codec_movingblockshq_encode_data4x4(
     ReplayStatus status;
 
     if (writer == NULL || source == NULL || recon == NULL ||
-        predictor == NULL || stride < 4U) {
+        predictor == NULL || source_stride < 4U || recon_stride < 4U) {
         return REPLAY_INVALID_ARGUMENT;
     }
-    u = avg5(source, stride, 4U, 0);
-    v = avg5(source, stride, 4U, 1);
+    u = avg5(source, source_stride, 4U, 0);
+    v = avg5(source, source_stride, 4U, 1);
     status = write_header(writer, UINT32_C(1), u, v);
     for (row = 0U; status == REPLAY_OK && row < 4U; ++row) {
         unsigned column;
 
         for (column = 0U; status == REPLAY_OK && column < 4U; ++column) {
-            MbPixel *out = &recon[(size_t)row * stride + column];
-            unsigned target = source[(size_t)row * stride + column].y;
+            MbPixel *out = &recon[(size_t)row * recon_stride + column];
+            unsigned target = source[(size_t)row * source_stride + column].y;
             unsigned prediction;
             uint8_t residual;
 
@@ -226,11 +225,11 @@ ReplayStatus codec_movingblockshq_encode_data4x4(
                 prediction = column == 0U ? predictor->luma
                                           : recon[column - 1U].y;
             } else if (column == 0U) {
-                prediction = recon[(size_t)(row - 1U) * stride].y;
+                prediction = recon[(size_t)(row - 1U) * recon_stride].y;
             } else {
                 prediction =
-                    ((unsigned)recon[(size_t)row * stride + column - 1U].y +
-                     (unsigned)recon[(size_t)(row - 1U) * stride + column].y)
+                    ((unsigned)recon[(size_t)row * recon_stride + column - 1U].y +
+                     (unsigned)recon[(size_t)(row - 1U) * recon_stride + column].y)
                     >> 1U;
             }
             residual = (uint8_t)((target - prediction) & 31U);
@@ -249,10 +248,10 @@ ReplayStatus codec_movingblockshq_encode_data4x4(
     return status;
 }
 
-/* Encode one 2x2 source block as a data-coded 2x2 (split child). */
-ReplayStatus codec_movingblockshq_encode_data2x2(
-    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
-    size_t stride, MbPredictor *predictor)
+/* Core 2x2 data encoder with independent source and reconstruction strides. */
+static ReplayStatus encode_data2x2_core(
+    ReplayBitWriter *writer, const MbPixel *source, size_t source_stride,
+    MbPixel *recon, size_t recon_stride, MbPredictor *predictor)
 {
     uint8_t u;
     uint8_t v;
@@ -261,17 +260,17 @@ ReplayStatus codec_movingblockshq_encode_data2x2(
     ReplayStatus status;
 
     if (writer == NULL || source == NULL || recon == NULL ||
-        predictor == NULL || stride < 2U) {
+        predictor == NULL || source_stride < 2U || recon_stride < 2U) {
         return REPLAY_INVALID_ARGUMENT;
     }
-    u = avg5(source, stride, 2U, 0);
-    v = avg5(source, stride, 2U, 1);
+    u = avg5(source, source_stride, 2U, 0);
+    v = avg5(source, source_stride, 2U, 1);
     status = write_header(writer, UINT32_C(2), u, v);
     for (index = 0U; status == REPLAY_OK && index < 4U; ++index) {
         unsigned row = index >> 1U;
         unsigned column = index & 1U;
-        MbPixel *out = &recon[(size_t)row * stride + column];
-        unsigned target = source[(size_t)row * stride + column].y;
+        MbPixel *out = &recon[(size_t)row * recon_stride + column];
+        unsigned target = source[(size_t)row * source_stride + column].y;
         unsigned prediction;
         uint8_t residual;
 
@@ -281,7 +280,7 @@ ReplayStatus codec_movingblockshq_encode_data2x2(
             prediction = recon[0].y;
         } else {
             prediction = ((unsigned)recon[1].y +
-                          (unsigned)recon[stride].y) >> 1U;
+                          (unsigned)recon[recon_stride].y) >> 1U;
         }
         residual = (uint8_t)((target - prediction) & 31U);
         status = mb_huffman_write(writer, &codec_movingblockshq_luma_huffman,
@@ -295,6 +294,29 @@ ReplayStatus codec_movingblockshq_encode_data2x2(
         predictor->luma = (uint8_t)(sum >> 2U);
     }
     return status;
+}
+
+/*
+ * Encode one 4x4 source block as a data-coded 4x4. Luma is lossless: the normal
+ * 32-symbol table codes every residual, so each reconstructed pixel equals the
+ * source. Predictions follow already-reconstructed neighbours exactly as the
+ * decoder does, and the carried predictor becomes the block's truncated mean.
+ */
+ReplayStatus codec_movingblockshq_encode_data4x4(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor)
+{
+    return encode_data4x4_core(writer, source, stride, recon, stride,
+                               predictor);
+}
+
+/* Encode one 2x2 source block as a data-coded 2x2 (split child). */
+ReplayStatus codec_movingblockshq_encode_data2x2(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor)
+{
+    return encode_data2x2_core(writer, source, stride, recon, stride,
+                               predictor);
 }
 
 /* A frame the encoder can scan: 4x4-aligned, non-empty, stride covers width. */
