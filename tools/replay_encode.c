@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "replay/codec_movingblockshq.h"
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
 #include "replay/mb_metrics.h"
@@ -27,7 +28,8 @@ typedef enum {
 
 typedef enum {
     INPUT_RGB24,
-    INPUT_6Y5UV
+    INPUT_6Y5UV,
+    INPUT_YUV555
 } InputFormat;
 
 typedef enum {
@@ -48,9 +50,9 @@ typedef struct {
 static void usage(FILE *stream)
 {
     fprintf(stream,
-            "usage: replay-encode --codec 19 --input FILE|- --size WxH "
+            "usage: replay-encode --codec 17|19 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX) "
-            "[--input-format rgb24|6y5uv] "
+            "[--input-format rgb24|6y5uv|yuv555] "
             "[--frames N] [--data-only] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] "
             "[--rate-search linear|bracketed] "
@@ -406,6 +408,202 @@ static int trace_frame(FILE *trace, size_t frame_number, unsigned width,
     return EXIT_SUCCESS;
 }
 
+static ReplayStatus unpack_yuv555(const uint8_t *packed, MbFrame *frame)
+{
+    unsigned y;
+
+    for (y = 0U; y < frame->height; ++y) {
+        unsigned x;
+
+        for (x = 0U; x < frame->width; ++x) {
+            size_t input_offset =
+                ((size_t)y * (size_t)frame->width + (size_t)x) * 3U;
+            MbPixel *pixel = &frame->pixels[(size_t)y * frame->stride + x];
+
+            pixel->y = packed[input_offset];
+            pixel->u = packed[input_offset + 1U];
+            pixel->v = packed[input_offset + 2U];
+            if (pixel->y > 31U || pixel->u > 31U || pixel->v > 31U) {
+                return REPLAY_MALFORMED_STREAM;
+            }
+        }
+    }
+    return REPLAY_OK;
+}
+
+static int write_yuv555_ppm(const char *path, const MbFrame *frame,
+                            uint8_t *rgb, size_t rgb_stride)
+{
+    FILE *file;
+
+    if (path == NULL) {
+        return EXIT_SUCCESS;
+    }
+    if (mb_color_yuv555_to_rgb24(frame, rgb, rgb_stride) != REPLAY_OK) {
+        fprintf(stderr, "reconstructed RGB conversion failed\n");
+        return EXIT_FAILURE;
+    }
+    file = fopen(path, "wb");
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    if (fprintf(file, "P6\n%u %u\n255\n", frame->width, frame->height) < 0 ||
+        fwrite(rgb, rgb_stride, frame->height, file) != frame->height) {
+        perror(path);
+        fclose(file);
+        return EXIT_FAILURE;
+    }
+    if (fclose(file) != 0) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
+
+/*
+ * Self-contained type 17 (Moving Blocks HQ) encode loop. RGB input is converted
+ * to YUV555; copy modes are enabled for inter frames (stationary/temporal need
+ * the previous reconstruction) with spatial and split also legal in the key
+ * frame. Each frame is independently decoded as a self-check.
+ */
+static int run_encode17(const char *input_path, InputFormat input_format,
+                        unsigned width, unsigned height,
+                        const char *payload_path, const char *payload_prefix,
+                        size_t frame_limit, unsigned loss_level, int data_only,
+                        const char *recon_prefix, const char *recon_ppm_path)
+{
+    size_t pixel_count = (size_t)width * (size_t)height;
+    size_t rgb_size = pixel_count * 3U;
+    uint8_t *rgb = malloc(rgb_size);
+    MbPixel *source_pixels = malloc(pixel_count * sizeof(*source_pixels));
+    MbPixel *recon_pixels = malloc(pixel_count * sizeof(*recon_pixels));
+    MbPixel *previous_pixels = malloc(pixel_count * sizeof(*previous_pixels));
+    MbPixel *decoded_pixels = malloc(pixel_count * sizeof(*decoded_pixels));
+    ReplayBuffer payload;
+    FILE *input = NULL;
+    size_t frame_number = 0U;
+    int result = EXIT_FAILURE;
+
+    replay_buffer_init(&payload);
+    if (rgb == NULL || source_pixels == NULL || recon_pixels == NULL ||
+        previous_pixels == NULL || decoded_pixels == NULL) {
+        fprintf(stderr, "unable to allocate frame buffers\n");
+        goto cleanup;
+    }
+    input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
+    if (input == NULL) {
+        perror(input_path);
+        goto cleanup;
+    }
+
+    for (;;) {
+        FrameReadResult read_result =
+            read_frame(input, input_path, rgb, rgb_size);
+        MbFrame source = { width, height, width, source_pixels };
+        MbFrame reconstructed = { width, height, width, recon_pixels };
+        MbFrame previous = { width, height, width, previous_pixels };
+        MbFrame decoded = { width, height, width, decoded_pixels };
+        const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
+        CodecMovingBlocksHqEncodeOptions options;
+        CodecMovingBlocksHqEncodeStats stats;
+        ReplayStatus status;
+
+        if (read_result == FRAME_READ_EOF) {
+            break;
+        }
+        if (read_result != FRAME_READ_OK) {
+            goto cleanup;
+        }
+        status = input_format == INPUT_RGB24
+                     ? mb_color_rgb24_to_yuv555(rgb, (size_t)width * 3U,
+                                                &source)
+                     : unpack_yuv555(rgb, &source);
+        if (status != REPLAY_OK) {
+            fprintf(stderr, "frame %zu: input conversion failed: %s\n",
+                    frame_number, replay_status_string(status));
+            goto cleanup;
+        }
+
+        options.allow_stationary = !data_only && previous_arg != NULL;
+        options.allow_temporal = !data_only && previous_arg != NULL;
+        options.allow_spatial = !data_only;
+        options.allow_split = !data_only;
+        options.loss_level = loss_level;
+
+        status = codec_movingblockshq_encode_frame(
+            &source, previous_arg, &options, &payload, &reconstructed, &stats);
+        if (status != REPLAY_OK) {
+            fprintf(stderr, "frame %zu: encode failed: %s\n", frame_number,
+                    replay_status_string(status));
+            goto cleanup;
+        }
+        /* Independent decode confirms the stream matches the reconstruction. */
+        status = codec_movingblockshq_verify_frame(
+            payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
+        if (status != REPLAY_OK ||
+            memcmp(decoded_pixels, recon_pixels,
+                   pixel_count * sizeof(*recon_pixels)) != 0) {
+            fprintf(stderr, "frame %zu: decode self-check failed\n",
+                    frame_number);
+            goto cleanup;
+        }
+
+        {
+            char generated[1024];
+            const char *frame_payload = payload_path;
+
+            if (payload_prefix != NULL) {
+                if (make_frame_path(generated, sizeof(generated),
+                                    payload_prefix, frame_number, ".mb17") !=
+                    EXIT_SUCCESS) {
+                    goto cleanup;
+                }
+                frame_payload = generated;
+            }
+            if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
+                goto cleanup;
+            }
+        }
+        if (recon_ppm_path != NULL || recon_prefix != NULL) {
+            char generated[1024];
+            const char *frame_ppm = recon_ppm_path;
+
+            if (recon_prefix != NULL) {
+                if (make_frame_path(generated, sizeof(generated), recon_prefix,
+                                    frame_number, ".ppm") != EXIT_SUCCESS) {
+                    goto cleanup;
+                }
+                frame_ppm = generated;
+            }
+            if (write_yuv555_ppm(frame_ppm, &reconstructed, rgb,
+                                 (size_t)width * 3U) != EXIT_SUCCESS) {
+                goto cleanup;
+            }
+        }
+
+        memcpy(previous_pixels, recon_pixels,
+               pixel_count * sizeof(*recon_pixels));
+        ++frame_number;
+        if (frame_limit != 0U && frame_number >= frame_limit) {
+            break;
+        }
+    }
+    result = EXIT_SUCCESS;
+
+cleanup:
+    if (input != NULL && input != stdin) {
+        fclose(input);
+    }
+    free(decoded_pixels);
+    free(previous_pixels);
+    free(recon_pixels);
+    free(source_pixels);
+    free(rgb);
+    replay_buffer_free(&payload);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL;
@@ -461,6 +659,8 @@ int main(int argc, char **argv)
                 input_format = INPUT_RGB24;
             } else if (strcmp(format, "6y5uv") == 0) {
                 input_format = INPUT_6Y5UV;
+            } else if (strcmp(format, "yuv555") == 0) {
+                input_format = INPUT_YUV555;
             } else {
                 usage(stderr);
                 return EXIT_FAILURE;
@@ -535,6 +735,23 @@ int main(int argc, char **argv)
             usage(stderr);
             return EXIT_FAILURE;
         }
+    }
+    if (codec == 17U) {
+        if (input_path == NULL ||
+            (payload_path == NULL) == (payload_prefix == NULL) ||
+            width == 0U || height == 0U ||
+            (width % 4U) != 0U || (height % 4U) != 0U ||
+            loss_level >= MB_QUALITY_LEVEL_COUNT ||
+            (recon_ppm_path != NULL && recon_prefix != NULL) ||
+            (payload_path != NULL &&
+             (frame_limit > 1U || recon_prefix != NULL))) {
+            usage(stderr);
+            return EXIT_FAILURE;
+        }
+        return run_encode17(input_path, input_format, width, height,
+                            payload_path, payload_prefix, frame_limit,
+                            loss_level, data_only, recon_prefix,
+                            recon_ppm_path);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||

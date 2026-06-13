@@ -16,6 +16,18 @@ static int check_pixel(const uint8_t rgb[3], uint8_t y, uint8_t u, uint8_t v)
     return EXIT_SUCCESS;
 }
 
+static int check_pixel555(const uint8_t rgb[3], uint8_t y, uint8_t u, uint8_t v)
+{
+    MbPixel pixel;
+    MbFrame frame = { 1U, 1U, 1U, &pixel };
+
+    CHECK(mb_color_rgb24_to_yuv555(rgb, 3U, &frame) == REPLAY_OK);
+    CHECK(pixel.y == y);
+    CHECK(pixel.u == u);
+    CHECK(pixel.v == v);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     static const uint8_t black[3] = { 0U, 0U, 0U };
@@ -28,6 +40,11 @@ int main(void)
     };
     MbFrame preview_frame = { 2U, 1U, 2U, preview_pixels };
     uint8_t preview_rgb[6];
+    MbPixel preview555_pixels[2] = {
+        { 0U, 0U, 0U }, { 31U, 0U, 0U }
+    };
+    MbFrame preview555_frame = { 2U, 1U, 2U, preview555_pixels };
+    uint8_t preview555_rgb[6];
 
     CHECK(check_pixel(black, 0U, 0U, 0U) == EXIT_SUCCESS);
     CHECK(check_pixel(white, 63U, 0U, 0U) == EXIT_SUCCESS);
@@ -40,5 +57,18 @@ int main(void)
           preview_rgb[2] == 0U);
     CHECK(preview_rgb[3] == 255U && preview_rgb[4] == 255U &&
           preview_rgb[5] == 255U);
+
+    /* YUV555 shares the 6Y5UV chroma; only luma is rescaled to five bits. */
+    CHECK(check_pixel555(black, 0U, 0U, 0U) == EXIT_SUCCESS);
+    CHECK(check_pixel555(white, 31U, 0U, 0U) == EXIT_SUCCESS);
+    CHECK(check_pixel555(red, 9U, 26U, 15U) == EXIT_SUCCESS);
+    CHECK(check_pixel555(green, 18U, 21U, 18U) == EXIT_SUCCESS);
+    CHECK(check_pixel555(blue, 4U, 15U, 28U) == EXIT_SUCCESS);
+    CHECK(mb_color_yuv555_to_rgb24(&preview555_frame, preview555_rgb, 6U) ==
+          REPLAY_OK);
+    CHECK(preview555_rgb[0] == 0U && preview555_rgb[1] == 0U &&
+          preview555_rgb[2] == 0U);
+    CHECK(preview555_rgb[3] == 255U && preview555_rgb[4] == 255U &&
+          preview555_rgb[5] == 255U);
     return EXIT_SUCCESS;
 }
