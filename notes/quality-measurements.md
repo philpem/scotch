@@ -61,6 +61,15 @@ half-as-wide range, so type 17 at a given loss level is roughly twice as lossy
 (and smaller) as type 19 at the same level. Compare codecs at equal PSNR, not
 equal loss level.
 
+Future work (parked): type 17's degradation is most visible in smooth gradients
+and slow light fade-offs. Those regions stay near-constant between frames, so
+the encoder keeps choosing stationary/temporal copies that *freeze* the 5-bit
+luma quantisation banding instead of refreshing it with a data block -- the
+error stops moving and the eye locks onto it. Candidate mitigations to try:
+periodically force a data-block refresh of long-lived copy regions, tighten copy
+acceptance in low-detail/low-motion blocks, or add luma dither. A synthetic
+`gradients`/`testsrc2` source (via `--lavfi`) is a good way to stress this.
+
 ## Measurement tools
 
 - `tools/replay_quality_curve.py` - PSNR-vs-size rate/quality curves for any

@@ -34,13 +34,21 @@ def parse_size(text):
     return width, height
 
 
-def extract_rgb(ffmpeg, video, width, height, frames, fps, start, out_path):
+def extract_rgb(ffmpeg, video, lavfi, width, height, frames, fps, start,
+                out_path):
     vf = f"fps={fps},scale={width}:{height}:flags=lanczos"
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error"]
-    if start:
-        cmd += ["-ss", str(start)]
-    cmd += ["-i", video, "-vf", vf, "-frames:v", str(frames),
-            "-pix_fmt", "rgb24", "-f", "rawvideo", out_path]
+    if lavfi:
+        # A synthetic source already carries its own size/rate; e.g.
+        #   "testsrc2=size=160x88:rate=12.5" or "gradients=size=160x88".
+        cmd += ["-f", "lavfi", "-t", str(max(1, frames) / float(fps)),
+                "-i", lavfi]
+    else:
+        if start:
+            cmd += ["-ss", str(start)]
+        cmd += ["-i", video]
+    cmd += ["-vf", vf, "-frames:v", str(frames), "-pix_fmt", "rgb24",
+            "-f", "rawvideo", out_path]
     subprocess.run(cmd, check=True)
 
 
@@ -84,6 +92,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", help="source video (decoded with ffmpeg)")
+    source.add_argument("--lavfi", help="synthetic ffmpeg source, e.g. "
+                        "'testsrc2=size=160x88:rate=12.5' or 'gradients=size=160x88'")
     source.add_argument("--rgb", help="pre-extracted packed RGB24 frames")
     parser.add_argument("--size", required=True, help="WIDTHxHEIGHT")
     parser.add_argument("--frames", type=int, required=True)
@@ -110,9 +120,9 @@ def main():
 
     work = tempfile.mkdtemp(prefix="replay-quality-")
     try:
-        if args.input:
-            extract_rgb(args.ffmpeg, args.input, width, height, args.frames,
-                        args.fps, args.start, f"{work}/src.rgb")
+        if args.input or args.lavfi:
+            extract_rgb(args.ffmpeg, args.input, args.lavfi, width, height,
+                        args.frames, args.fps, args.start, f"{work}/src.rgb")
         else:
             import shutil
             shutil.copyfile(args.rgb, f"{work}/src.rgb")
@@ -135,7 +145,8 @@ def main():
                                       width, height, args.frames)
                 per_frame = total / args.frames
                 rows.append((codec, loss, psnr, total, per_frame))
-                print(f"{codec:5d} {loss:4d} {psnr:9.2f} {total:9d} {per_frame:8.1f}")
+                print(f"{codec:5d} {loss:4d} {psnr:9.2f} {total:9d} {per_frame:8.1f}",
+                      flush=True)
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
