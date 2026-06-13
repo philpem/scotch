@@ -101,6 +101,8 @@ add_replay_test(test_codec_supermovingblocks
     tests/test_codec_supermovingblocks.c)
 add_replay_test(test_codec_movingblockshq
     tests/test_codec_movingblockshq.c)
+add_replay_test(test_codec_movingblocks
+    tests/test_codec_movingblocks.c)
 add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
 add_replay_test(test_supermovingblocks_encoder
@@ -131,6 +133,14 @@ add_executable(make_decomp17_crosscheck_fixtures
 target_link_libraries(make_decomp17_crosscheck_fixtures PRIVATE replay)
 if(NOT MSVC)
     target_compile_options(make_decomp17_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
+add_executable(make_decomp7_crosscheck_fixtures
+    tests/make_decomp7_crosscheck_fixtures.c)
+target_link_libraries(make_decomp7_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_decomp7_crosscheck_fixtures PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
@@ -208,5 +218,17 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP17_COMPILED})
+    endif()
+    set(DECOMP7_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp7/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-7 Decompress file")
+    if(EXISTS "${DECOMP7_COMPILED}")
+        add_test(NAME test_decomp7_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp7_compiled.sh
+                $<TARGET_FILE:make_decomp7_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP7_COMPILED})
     endif()
 endif()
