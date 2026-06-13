@@ -253,5 +253,47 @@ int main(void)
         replay_ae7_movie_destroy(&movie);
         replay_buffer_free(&movie_bytes);
     }
+
+    /* ADPCM: the writer encodes raw PCM per chunk. Each chunk's sound is a
+     * 4-byte state header plus one nibble per sample; chunk 0 begins at the zero
+     * initial state. 30 frames at 12.5 fps, 1000 Hz mono -> chunk 0 spans 12/12.5
+     * s = 960 samples, so 4 + 480 bytes. */
+    {
+        static uint8_t pcm[4800]; /* 2400 samples of silence (s16le) */
+
+        options.write_keys = 0;
+        options.key_data = NULL;
+        track.codec = 1U;
+        track.codec_name = NULL;
+        track.rate_hz = 1000U;
+        track.channels = 1U;
+        track.precision_bits = 4U;
+        track.label = "bit ADPCM";
+        track.data = pcm;
+        track.size = sizeof(pcm);
+        track.encode_adpcm = 1;
+        options.tracks = &track;
+        options.track_count = 1U;
+        replay_buffer_init(&movie_bytes);
+        status = replay_ae7_write(&options, &movie_bytes, error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        status = replay_ae7_parse(movie_bytes.data, movie_bytes.size, &movie,
+                                  error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        CHECK(movie.sound_channels == 1U);
+        CHECK(movie.chunks[0].sound_bytes == 4U + 480U);
+        /* The chunk's sound region opens with the 4-byte state header (the zero
+         * initial state for chunk 0). */
+        {
+            uint64_t s = movie.chunks[0].file_offset +
+                         movie.chunks[0].video_bytes;
+
+            CHECK(movie_bytes.data[s] == 0U && movie_bytes.data[s + 1U] == 0U &&
+                  movie_bytes.data[s + 2U] == 0U && movie_bytes.data[s + 3U] ==
+                  0U);
+        }
+        replay_ae7_movie_destroy(&movie);
+        replay_buffer_free(&movie_bytes);
+    }
     return EXIT_SUCCESS;
 }

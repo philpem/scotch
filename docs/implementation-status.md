@@ -88,6 +88,11 @@ this file describes the current portable code in `replay-tooling`.
   the writer emits one key per chunk except the first (the end-of-chunk
   reconstruction, chunk_count-1 blocks) and replay-join/--keys-prefix and
   replay-make/--keys drive it.
+- IMA ADPCM (mono) sound: the writer encodes raw s16 PCM per chunk, each
+  chunk a 4-byte state header then 4-bit codes so the player can start there.
+  replay-join/replay-make --sound-encode adpcm is the built-in SoundA4
+  (format 1, 4 bits); adpcm2 is the named-decompressor form ("2 adpcm");
+  both emit the same bytes. Round-trips a tone at ~32 dB.
 - A one-shot `tools/replay-make` driver: ffmpeg -> replay-encode -> replay-join
   in a single command (aspect-correct height, type 19 video, VIDC-E8 audio, a
   first-frame or supplied poster), cleaning up its intermediate files.

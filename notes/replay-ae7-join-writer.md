@@ -272,3 +272,21 @@ per frame; `replay_ae7_write` is given the per-frame blobs and selects the
 end-of-chunk frames itself; `replay-join --keys-prefix` and `replay-make --keys`
 drive it. Verified: for 60 frames at 25 frames/chunk the two emitted keys are
 byte-identical to the reconstructions of frames 24 and 49.
+
+## ADPCM (mono)
+
+Acorn's "adpcm" sound is standard IMA/DVI ADPCM. Because it is stateful and the
+player must be able to start each chunk's sound independently, each chunk's
+sound region is a 4-byte state header -- valprev (little-endian 16-bit), then the
+step index, then a pad byte -- followed by the chunk's samples as 4-bit codes
+(two per byte, first sample low nibble). The running encoder state carries across
+chunks; the header captures it at each chunk's first sample. This is the +4 (mono)
+that Join adds to the even/odd chunk sizes.
+
+The writer takes raw s16 PCM (track.encode_adpcm) and encodes per chunk itself,
+so sound_bytes = 4 + ceil(chunk_samples/2). Two header flavours select the same
+bytes: format 1 with precision 4 and an "ADPCM" label picks the built-in SoundA4
+decoder, while format 2 "adpcm" uses the named sound decompressor.
+replay-join/replay-make: --sound-encode adpcm (SoundA4) or adpcm2 (format 2).
+Stereo ADPCM (Join interleaves the two channels' nibbles with two states) is
+future work.

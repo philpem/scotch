@@ -99,7 +99,8 @@ Replay video compression tooling.
 - [x] Add a one-shot `replay-make` driver (ffmpeg -> encode -> join in one step).
 - [x] Generate type 19 per-chunk key frames so !ARPlayer can seek: encoder
   --keys-prefix, writer boundary selection (chunk_count-1 blocks), join --keys.
-- [ ] Add a PCM -> ADPCM (format 2) audio encoder (priority 2).
+- [x] Add a PCM -> IMA ADPCM (mono) encoder with the per-chunk state-header
+  path: replay-join/replay-make --sound-encode adpcm (SoundA4) or adpcm2.
 - [ ] Investigate the original compressor's unplayable `6YVUV` output before
   reproducing that historical colour-space path.
 

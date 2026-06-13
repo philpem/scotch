@@ -20,6 +20,8 @@
 #                      pass --no-poster to embed nothing (command-line player only)
 #   --no-poster        do not embed a poster sprite
 #   --keys             emit per-chunk key frames so !ARPlayer can seek
+#   --audio-format F   vidc-e8 (default) | signed-8 | signed-16 | adpcm | adpcm2
+#   --title TEXT       movie title metadata
 #
 set -euo pipefail
 
@@ -36,7 +38,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=
 while [ $# -gt 0 ]; do
     case $1 in
         --width)            width=$2; shift 2;;
@@ -50,6 +52,8 @@ while [ $# -gt 0 ]; do
         --poster)           poster=$2; shift 2;;
         --no-poster)        no_poster=1; shift;;
         --keys)             keys=1; shift;;
+        --audio-format)     aformat=$2; shift 2;;
+        --title)            title=$2; shift 2;;
         *) echo "replay-make: unknown option $1" >&2; exit 1;;
     esac
 done
@@ -88,7 +92,7 @@ args=(--codec 19 --size "${width}x${height}" --fps "$fps"
 if [ "$no_audio" = 0 ]; then
     ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
         -vn -ac 1 -ar "$arate" -f s16le "$work/a.pcm"
-    args+=(--sound-pcm "$work/a.pcm" --sound-encode vidc-e8
+    args+=(--sound-pcm "$work/a.pcm" --sound-encode "$aformat"
            --sound-rate "$arate" --sound-channels 1)
 fi
 
@@ -105,4 +109,5 @@ else
     args+=(--poster "$work/p.bin")
 fi
 
+[ -n "$title" ] && args+=(--title "$title")
 "$bin/replay-join" "${args[@]}" --output "$output"

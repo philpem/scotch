@@ -29,7 +29,7 @@ static void usage(FILE *stream)
             "    (16bpp poster for !ARPlayer; default = built-in Replay logo)\n"
             "  --sound-rate HZ --sound-channels N]\n"
             "  encoded audio:  --sound-pcm FILE.s16le\n"
-            "                  --sound-encode vidc-e8|signed-8|signed-16\n"
+            "                  --sound-encode vidc-e8|signed-8|signed-16|adpcm|adpcm2\n"
             "  pre-encoded:    --sound FILE --sound-format vidc-log|adpcm|gsm|..."
             "\n                  (vidc-log = format 1; other = format 2"
             " \"2 <name>\")\n");
@@ -146,7 +146,7 @@ int main(int argc, char **argv)
     const char *sound_encode = "vidc-e8";
     const char *sound_format = "vidc-log";
     ReplayAe7WriteOptions options;
-    ReplayAe7WriteTrack track;
+    ReplayAe7WriteTrack track = { 0 };
     ReplayBuffer *frame_buffers = NULL;
     const uint8_t **frame_ptrs = NULL;
     size_t *frame_sizes = NULL;
@@ -364,52 +364,83 @@ int main(int argc, char **argv)
     }
 
     if (sound_pcm_path != NULL) {
-        /* Encode canonical signed-16 little-endian PCM (from ffmpeg) into a
-         * Replay format-1 sub-format. The bits-per-sample label selects the
-         * player's decoder. */
-        ReplayBuffer pcm;
-        ReplaySoundFormat fmt;
-        size_t count;
+        int is_adpcm = strcmp(sound_encode, "adpcm") == 0;
+        int is_adpcm2 = strcmp(sound_encode, "adpcm2") == 0;
 
-        if (strcmp(sound_encode, "signed-8") == 0) {
-            fmt = REPLAY_SOUND_SIGNED_8;
-        } else if (strcmp(sound_encode, "signed-16") == 0) {
-            fmt = REPLAY_SOUND_SIGNED_16;
-        } else if (strcmp(sound_encode, "vidc-e8") == 0 ||
-                   strcmp(sound_encode, "vidc-log") == 0) {
-            fmt = REPLAY_SOUND_VIDC_E8;
+        if (is_adpcm || is_adpcm2) {
+            /* IMA ADPCM: hand the raw PCM to the writer, which encodes it per
+             * chunk. "adpcm" is the built-in SoundA4 (format 1, 4 bits);
+             * "adpcm2" is the named-decompressor form (format 2 "adpcm"). */
+            if (read_file(sound_pcm_path, &sound_buffer) != EXIT_SUCCESS) {
+                goto done;
+            }
+            track.encode_adpcm = 1;
+            track.rate_hz = sound_rate;
+            track.channels = sound_channels;
+            track.data = sound_buffer.data;
+            track.size = sound_buffer.size;
+            if (is_adpcm2) {
+                track.codec = REPLAY_AE7_SOUND_NAMED;
+                track.codec_name = "adpcm";
+                track.precision_bits = 16U;
+                track.label = NULL;
+            } else {
+                track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
+                track.codec_name = NULL;
+                track.precision_bits = 4U;
+                track.label = "bit ADPCM";
+            }
+            options.tracks = &track;
+            options.track_count = 1U;
         } else {
-            fprintf(stderr, "unknown --sound-encode: %s\n", sound_encode);
-            goto done;
-        }
-        replay_buffer_init(&pcm);
-        if (read_file(sound_pcm_path, &pcm) != EXIT_SUCCESS) {
-            replay_buffer_free(&pcm);
-            goto done;
-        }
-        count = pcm.size / 2U; /* signed 16-bit little-endian samples */
-        for (i = 0U; i < count; ++i) {
-            int16_t sample = (int16_t)((uint16_t)pcm.data[i * 2U] |
-                                       ((uint16_t)pcm.data[i * 2U + 1U] << 8));
+            /* Encode canonical signed-16 little-endian PCM (from ffmpeg) into a
+             * Replay format-1 sub-format. The bits-per-sample label selects the
+             * player's decoder. */
+            ReplayBuffer pcm;
+            ReplaySoundFormat fmt;
+            size_t count;
 
-            if (replay_sound_encode(fmt, &sample, 1U, &sound_buffer) !=
-                REPLAY_OK) {
-                fprintf(stderr, "audio encode failed\n");
+            if (strcmp(sound_encode, "signed-8") == 0) {
+                fmt = REPLAY_SOUND_SIGNED_8;
+            } else if (strcmp(sound_encode, "signed-16") == 0) {
+                fmt = REPLAY_SOUND_SIGNED_16;
+            } else if (strcmp(sound_encode, "vidc-e8") == 0 ||
+                       strcmp(sound_encode, "vidc-log") == 0) {
+                fmt = REPLAY_SOUND_VIDC_E8;
+            } else {
+                fprintf(stderr, "unknown --sound-encode: %s\n", sound_encode);
+                goto done;
+            }
+            replay_buffer_init(&pcm);
+            if (read_file(sound_pcm_path, &pcm) != EXIT_SUCCESS) {
                 replay_buffer_free(&pcm);
                 goto done;
             }
+            count = pcm.size / 2U; /* signed 16-bit little-endian samples */
+            for (i = 0U; i < count; ++i) {
+                int16_t sample =
+                    (int16_t)((uint16_t)pcm.data[i * 2U] |
+                              ((uint16_t)pcm.data[i * 2U + 1U] << 8));
+
+                if (replay_sound_encode(fmt, &sample, 1U, &sound_buffer) !=
+                    REPLAY_OK) {
+                    fprintf(stderr, "audio encode failed\n");
+                    replay_buffer_free(&pcm);
+                    goto done;
+                }
+            }
+            replay_buffer_free(&pcm);
+            track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
+            track.codec_name = NULL;
+            track.rate_hz = sound_rate;
+            track.channels = sound_channels;
+            track.precision_bits = replay_sound_format_bits(fmt);
+            track.label = replay_sound_format_label(fmt);
+            track.data = sound_buffer.data;
+            track.size = sound_buffer.size;
+            options.tracks = &track;
+            options.track_count = 1U;
         }
-        replay_buffer_free(&pcm);
-        track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
-        track.codec_name = NULL;
-        track.rate_hz = sound_rate;
-        track.channels = sound_channels;
-        track.precision_bits = replay_sound_format_bits(fmt);
-        track.label = replay_sound_format_label(fmt);
-        track.data = sound_buffer.data;
-        track.size = sound_buffer.size;
-        options.tracks = &track;
-        options.track_count = 1U;
     } else if (sound_path != NULL) {
         if (read_file(sound_path, &sound_buffer) != EXIT_SUCCESS) {
             goto done;

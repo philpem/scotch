@@ -49,19 +49,21 @@ typedef struct {
     const char *label;        /* optional annotation, e.g. "8 bits per sample
                                * (exponential)"; NULL selects a default */
     /*
-     * One contiguous, already-encoded track. The writer slices it per chunk by
-     * the chunk's time span so audio stays aligned with video. If the track is
-     * shorter than the video timeline the final chunks carry less (or no)
-     * audio, exactly as Join tolerates a short track.
+     * One contiguous track. The writer slices it per chunk by the chunk's time
+     * span so audio stays aligned with video. If the track is shorter than the
+     * video timeline the final chunks carry less (or no) audio, exactly as Join
+     * tolerates a short track.
      *
-     * Time slicing assumes a constant bytes-per-sample mapping (channels *
-     * precision_bits/8), which is correct for format 1 (VIDC 8-bit) and
-     * uncompressed linear PCM. Framed/variable-rate format-2 codecs (GSM, MPEG,
-     * G72x) encode whole sample-frames per chunk and need their chunk boundaries
-     * supplied explicitly; that path is not yet implemented.
+     * Normally `data` is already-encoded bytes and time slicing assumes a
+     * constant bytes-per-sample mapping (channels * precision_bits/8), correct
+     * for format 1 (VIDC 8-bit) and uncompressed linear PCM. When encode_adpcm
+     * is set, `data` is instead signed-16 little-endian PCM (mono) that the
+     * writer encodes to IMA ADPCM per chunk: each chunk gets a 4-byte state
+     * header then the 4-bit codes, so the player can start its sound there.
      */
     const uint8_t *data;
     size_t size;
+    int encode_adpcm;
 } ReplayAe7WriteTrack;
 
 typedef struct {

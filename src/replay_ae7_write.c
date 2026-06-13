@@ -1,4 +1,5 @@
 #include "replay/replay_ae7_write.h"
+#include "replay/replay_sound.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -20,8 +21,10 @@ typedef struct {
     size_t first_frame;
     size_t frame_count;
     uint64_t video_bytes;                          /* padded to even */
-    uint64_t sound_offset[REPLAY_AE7_MAX_TRACKS];  /* byte offset into track */
+    uint64_t sound_offset[REPLAY_AE7_MAX_TRACKS];  /* byte offset, or start
+                                                    * sample for ADPCM */
     uint64_t sound_bytes[REPLAY_AE7_MAX_TRACKS];
+    uint64_t sound_samples[REPLAY_AE7_MAX_TRACKS]; /* ADPCM sample count */
     uint64_t sound_total;
     uint64_t file_offset;
 } ChunkInfo;
@@ -235,6 +238,33 @@ static ReplayStatus build_catalogue(ChunkInfo *chunks, size_t chunk_count,
     return status;
 }
 
+/* Append one chunk's ADPCM region: a 4-byte state header for the running state
+ * at this chunk's first sample, then the chunk's samples as 4-bit codes. */
+static ReplayStatus append_adpcm_chunk(ReplayBuffer *out, const uint8_t *pcm,
+                                       uint64_t start_sample, uint64_t count,
+                                       ReplaySoundAdpcmState *state)
+{
+    ReplayStatus status = replay_sound_adpcm_write_header(state, out);
+    int16_t *samples;
+    uint64_t i;
+
+    if (status != REPLAY_OK || count == 0U) {
+        return status;
+    }
+    samples = calloc((size_t)count, sizeof(*samples));
+    if (samples == NULL) {
+        return REPLAY_OUT_OF_MEMORY;
+    }
+    for (i = 0U; i < count; ++i) {
+        size_t b = (size_t)(start_sample + i) * 2U;
+
+        samples[i] = (int16_t)((uint16_t)pcm[b] | ((uint16_t)pcm[b + 1U] << 8));
+    }
+    status = replay_sound_adpcm_encode(samples, (size_t)count, state, out);
+    free(samples);
+    return status;
+}
+
 static ReplayStatus append_zeros(ReplayBuffer *buffer, uint64_t count)
 {
     static const uint8_t zeros[256] = { 0 };
@@ -312,6 +342,10 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
 
         if (t->codec == REPLAY_AE7_SOUND_NONE) {
             set_error(error, error_size, "a sound track needs a non-zero format");
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        if (t->encode_adpcm && t->channels != 1U) {
+            set_error(error, error_size, "ADPCM encoding supports mono only");
             return REPLAY_INVALID_ARGUMENT;
         }
         if (t->codec == REPLAY_AE7_SOUND_NAMED &&
@@ -466,13 +500,32 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
 
             for (track = 0U; track < options->track_count; ++track) {
                 const ReplayAe7WriteTrack *t = &options->tracks[track];
-                uint64_t frame_bytes = track_frame_bytes(t);
                 double rate = (double)t->rate_hz;
                 uint64_t s0 = (uint64_t)(t0 * rate + 0.5);
                 uint64_t s1 = (uint64_t)(t1 * rate + 0.5);
 
-                chunk->sound_offset[track] = s0 * frame_bytes;
-                chunk->sound_bytes[track] = (s1 - s0) * frame_bytes;
+                if (t->encode_adpcm) {
+                    /* sound_offset is the start sample; the chunk carries a
+                     * 4-byte state header then one nibble per sample. */
+                    uint64_t available = (uint64_t)t->size / 2U;
+                    uint64_t samples;
+
+                    if (s0 > available) {
+                        s0 = available;
+                    }
+                    if (s1 > available) {
+                        s1 = available;
+                    }
+                    samples = s1 - s0;
+                    chunk->sound_offset[track] = s0;
+                    chunk->sound_samples[track] = samples;
+                    chunk->sound_bytes[track] = 4U + (samples + 1U) / 2U;
+                } else {
+                    uint64_t frame_bytes = track_frame_bytes(t);
+
+                    chunk->sound_offset[track] = s0 * frame_bytes;
+                    chunk->sound_bytes[track] = (s1 - s0) * frame_bytes;
+                }
                 chunk->sound_total += chunk->sound_bytes[track];
             }
         }
@@ -586,6 +639,11 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
         status = replay_buffer_append(out, catalogue.data, catalogue.size);
     }
 
+    {
+        /* ADPCM state runs continuously across chunks; each chunk records it. */
+        ReplaySoundAdpcmState adpcm_state[REPLAY_AE7_MAX_TRACKS];
+
+        memset(adpcm_state, 0, sizeof(adpcm_state));
     for (index = 0U; index < chunk_count && status == REPLAY_OK; ++index) {
         ChunkInfo *chunk = &chunks[index];
         uint64_t video_written = 0U;
@@ -605,12 +663,22 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
         for (track = 0U; track < options->track_count && status == REPLAY_OK;
              ++track) {
             const ReplayAe7WriteTrack *t = &options->tracks[track];
-            uint64_t want = chunk->sound_bytes[track];
-            uint64_t start = chunk->sound_offset[track];
-            uint64_t avail = start < (uint64_t)t->size
-                                 ? (uint64_t)t->size - start
-                                 : 0U;
-            uint64_t copy = want < avail ? want : avail;
+            uint64_t want;
+            uint64_t start;
+            uint64_t avail;
+            uint64_t copy;
+
+            if (t->encode_adpcm) {
+                status = append_adpcm_chunk(out, t->data,
+                                            chunk->sound_offset[track],
+                                            chunk->sound_samples[track],
+                                            &adpcm_state[track]);
+                continue;
+            }
+            want = chunk->sound_bytes[track];
+            start = chunk->sound_offset[track];
+            avail = start < (uint64_t)t->size ? (uint64_t)t->size - start : 0U;
+            copy = want < avail ? want : avail;
 
             if (copy != 0U) {
                 status = replay_buffer_append(out, t->data + start,
@@ -620,6 +688,7 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
                 status = append_zeros(out, want - copy); /* trailing silence */
             }
         }
+    }
     }
 
 done:
