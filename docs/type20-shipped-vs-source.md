@@ -9,13 +9,30 @@ that is what RISC OS Replay players (and emulators) actually load.
 
 | | Shipped module | ARMovie_2003 source |
 |---|---|---|
-| Artifact | `!ARMovie_compiled/Decomp20/Decompress,ffd` (12456 bytes, **20 Sep 1996**); same `BatchComp,ffb` 47469 bytes | `ARMovie_2003/Video/Decomp20/bas/{MakeDecomp,BatchComp,GenD4Table}` |
-| Version | (built from an earlier revision) | `FNversion = "Differ to format 20 Version 0.05 19th November 1996"` |
-| Status | The released module on player/emulator installs | A *later*, unreleased revision; never compiled into the shipped module |
+| Decoder | `Decompress,ffd` 12456 bytes, 20 Sep 1996 | (not compiled; built by `MakeDecomp`) |
+| Encoder | `BatchComp,ffb` 47469 bytes | `bas/BatchComp` + `GenD4Table` |
+| Version (both encoder + decoder) | **0.04, 6 Sep 1996** | **0.05, 19 Nov 1996** |
+| Chroma | **direct 6-bit** | **delta-coded** |
+| Status | The released module on player/emulator installs | A *later*, unreleased revision |
 
-The shipped binary's date (20 Sep 1996) **predates** the source revision
-(19 Nov 1996, v0.05), so the source is newer than the release. There is no
-compiled `Decompress` in the source tree — only the compressor (`crunch`).
+The version strings are decisive: the shipped `BatchComp` declares
+`"Version 0.04 6th September 1996"` and the ARMovie_2003 `BatchComp` declares
+`"Version 0.05 19th November 1996"`. So the released binary was built from an
+**earlier (0.04) revision** than the source tree carries (0.05); between the two
+the author switched chroma from direct to delta-coded, and that 0.05 revision was
+never compiled into a shipped module (there is no compiled `Decompress` in the
+source tree, only the compressor in `crunch`).
+
+This rules out two tempting explanations:
+
+* **Not an `#ifdef`/conditional.** The 0.05 `MakeDecomp` is *unconditionally*
+  delta-coded -- `ADD r0,#8+2 : BL unpackuv` with no `IF` around it and no
+  alternative direct path -- so that source cannot generate the direct-chroma
+  `Decompress`.
+* **Not an encoder/decoder mismatch.** Each version is internally consistent:
+  the shipped **0.04 encoder** (`BatchComp`) has no `unpackuv`/`deltatable`/
+  `D4tab`/`prevu` and packs chroma directly (`AND #63`), matching the shipped
+  0.04 decoder; the 0.05 source encoder and decoder are *both* delta-coded.
 
 ## The difference: chroma coding
 
