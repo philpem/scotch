@@ -39,6 +39,18 @@ ReplayStatus codec_movingblockshq_encode_data2x2(
     ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
     size_t stride, MbPredictor *predictor);
 
+/*
+ * Encode a complete type 17 frame using only 4x4 data blocks. Every block is
+ * Huffman-coded with lossless luma and 5-bit average chroma, so `reconstructed`
+ * receives exactly the YUV555 pixels Decomp17 will produce. `output` is cleared
+ * on entry and left byte-padded. `source` and `reconstructed` must share their
+ * stride (the data-block primitive predicts across one pitch). This is the
+ * key-frame-capable baseline; copy modes are added separately.
+ */
+ReplayStatus codec_movingblockshq_encode_data_frame(
+    const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
+    size_t *bits_written);
+
 /* Decode and strictly validate one complete type 17 frame payload. */
 ReplayStatus codec_movingblockshq_verify_frame(
     const uint8_t *payload, size_t payload_size,

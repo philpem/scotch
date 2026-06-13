@@ -1,6 +1,8 @@
 #include "replay/codec_movingblockshq.h"
 
 #include "replay/mb_frame_verify.h"
+#include "replay/replay_bitstream.h"
+#include "replay/replay_buffer.h"
 
 /*
  * Type 17 keeps YUV555 working pixels but replaces type 7's literal data
@@ -234,6 +236,55 @@ ReplayStatus codec_movingblockshq_encode_data2x2(
     }
     if (status == REPLAY_OK) {
         predictor->luma = (uint8_t)(sum >> 2U);
+    }
+    return status;
+}
+
+/* A frame the encoder can scan: 4x4-aligned, non-empty, stride covers width. */
+static int frame_dims_ok(const MbFrame *frame)
+{
+    return frame != NULL && frame->pixels != NULL && frame->width != 0U &&
+           frame->height != 0U && (frame->width & 3U) == 0U &&
+           (frame->height & 3U) == 0U && frame->stride >= frame->width;
+}
+
+ReplayStatus codec_movingblockshq_encode_data_frame(
+    const MbFrame *source, ReplayBuffer *output, MbFrame *reconstructed,
+    size_t *bits_written)
+{
+    ReplayBitWriter writer;
+    /* Predictor lifetime is one frame; the format clears it to zero on entry. */
+    MbPredictor predictor = { 0 };
+    unsigned y;
+    ReplayStatus status = REPLAY_OK;
+
+    if (output == NULL || !frame_dims_ok(source) ||
+        !frame_dims_ok(reconstructed) ||
+        reconstructed->width != source->width ||
+        reconstructed->height != source->height ||
+        reconstructed->stride != source->stride) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    replay_buffer_clear(output);
+    replay_bitwriter_init(&writer, output);
+    /* Raster scan of 4x4 blocks is normative for both prediction and output. */
+    for (y = 0U; status == REPLAY_OK && y < source->height; y += 4U) {
+        unsigned x;
+
+        for (x = 0U; status == REPLAY_OK && x < source->width; x += 4U) {
+            size_t offset = (size_t)y * source->stride + x;
+
+            status = codec_movingblockshq_encode_data4x4(
+                &writer, &source->pixels[offset],
+                &reconstructed->pixels[offset], source->stride, &predictor);
+        }
+    }
+    if (status == REPLAY_OK && bits_written != NULL) {
+        *bits_written = replay_bitwriter_position(&writer);
+    }
+    if (status == REPLAY_OK) {
+        /* Decomp17 reads whole bytes; pad the final partial byte with zeroes. */
+        status = replay_bitwriter_flush_zero(&writer);
     }
     return status;
 }

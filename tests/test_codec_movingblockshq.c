@@ -282,10 +282,54 @@ static int test_encode_roundtrip(void)
     return EXIT_SUCCESS;
 }
 
+static int test_data_frame_encode_roundtrip(void)
+{
+    MbPixel source_pixels[64];
+    MbPixel recon_pixels[64];
+    MbPixel decoded_pixels[64];
+    MbFrame source = { 8U, 8U, 8U, source_pixels };
+    MbFrame reconstructed = { 8U, 8U, 8U, recon_pixels };
+    MbFrame decoded = { 8U, 8U, 8U, decoded_pixels };
+    ReplayBuffer payload;
+    size_t bits_written = 0U;
+    size_t consumed = 0U;
+    unsigned index;
+
+    /* A varied 5-bit YUV555 source spanning four 4x4 blocks. */
+    for (index = 0U; index < 64U; ++index) {
+        source_pixels[index].y = (uint8_t)((index * 7U) & 31U);
+        source_pixels[index].u = (uint8_t)((index * 3U + 1U) & 31U);
+        source_pixels[index].v = (uint8_t)((index * 5U + 2U) & 31U);
+    }
+    memset(recon_pixels, 0xAA, sizeof(recon_pixels));
+    replay_buffer_init(&payload);
+
+    CHECK(codec_movingblockshq_encode_data_frame(
+              &source, &payload, &reconstructed, &bits_written) == REPLAY_OK);
+    CHECK(bits_written > 0U);
+    CHECK(bits_written <= payload.size * 8U);
+
+    /* A data-only frame is independently decodable, so previous is NULL. */
+    CHECK(codec_movingblockshq_verify_frame(
+              payload.data, payload.size, NULL, &decoded,
+              &consumed, NULL) == REPLAY_OK);
+    CHECK(consumed == bits_written);
+
+    /* The decoder must reproduce exactly what the encoder reconstructed: luma
+       is lossless and chroma is the block average both sides computed. */
+    for (index = 0U; index < 64U; ++index) {
+        CHECK(same_pixel(&decoded_pixels[index], &recon_pixels[index]));
+        CHECK(decoded_pixels[index].y == source_pixels[index].y);
+    }
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4_zero_residual() == EXIT_SUCCESS);
     CHECK(test_encode_roundtrip() == EXIT_SUCCESS);
+    CHECK(test_data_frame_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_data2x2_wrap() == EXIT_SUCCESS);
     CHECK(test_table_and_truncation() == EXIT_SUCCESS);
     CHECK(test_complete_data_frame() == EXIT_SUCCESS);
