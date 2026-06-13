@@ -44,8 +44,28 @@ Claims) and `notes/moving-blocks-decision-comparison.md`; summary:
   12 ~0.89 MB, 16 ~0.78 MB; the size is nearly flat, so a lower loss level buys
   cleaner output for little cost.
 
+### Cross-codec rate/quality (PSNR vs RGB)
+
+To compare codecs with different working colour spaces (type 19 6Y5UV vs type
+17 YUV555) on an even footing, `tools/replay_quality_curve.py` measures PSNR
+back in RGB: it encodes the same frames with `replay-encode --recon-prefix` and
+compares each codec's RGB reconstruction preview to the original RGB. It sweeps
+loss levels per codec and reports PSNR, total bytes and bytes/frame (CSV +
+optional PSNR-vs-bytes/frame chart). PSNR is the global value from summed
+squared error, not an average of per-frame PSNRs.
+
+Important: the 29-row QP table is shared by the whole Moving Blocks family in
+*absolute* luma-error units, but type 19 luma is 6-bit and type 17 luma is
+5-bit. The same loss level therefore allows the same absolute luma error over a
+half-as-wide range, so type 17 at a given loss level is roughly twice as lossy
+(and smaller) as type 19 at the same level. Compare codecs at equal PSNR, not
+equal loss level.
+
 ## Measurement tools
 
+- `tools/replay_quality_curve.py` - PSNR-vs-size rate/quality curves for any
+  codec, measured in RGB so different working colour spaces compare fairly.
+  Reusable for new codecs as they are added.
 - `tools/replay_audio_snr.py` - decode a movie's sound track and measure SNR
   against a reference, or extract it to PCM. Reusable for any movie this
   toolchain makes.
