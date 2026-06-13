@@ -44,6 +44,14 @@ unsigned mb_encode_motion_bits(const MbMotionVector *motion,
                                MbMotionBlockSize block_size);
 
 /*
+ * Type 7 variant: its move code is the case prefix (2 bits for 4x4, 1 for 2x2)
+ * plus `00` stationary / `01`+3 radius-1 / `10`+4 radius-2 / `11`+6 radius-3,4
+ * or spatial. Used as the type 7 encoder's lowest-error tie-break.
+ */
+unsigned mb_encode_motion_bits_format7(const MbMotionVector *motion,
+                                       MbMotionBlockSize block_size);
+
+/*
  * True when `candidate` should replace `best`: it must be valid, then win on
  * lowest error, then fewest bits, then lowest enumeration order.
  */
@@ -103,6 +111,15 @@ typedef struct MbEncodeCodec {
                          const MbFrame *reference, unsigned ref_x,
                          unsigned ref_y, unsigned size, uint8_t u, uint8_t v,
                          unsigned *total_error, unsigned *first_level);
+
+    /*
+     * Emitted bit cost of a copy's motion code (family + index + case prefix),
+     * used only as the lowest-error tie-break. Codecs whose motion coding
+     * matches types 17/19 pass mb_encode_motion_bits; type 7's +/-4 coding has
+     * its own widths, so it supplies mb_encode_motion_bits_format7.
+     */
+    unsigned (*motion_bits)(const MbMotionVector *motion,
+                            MbMotionBlockSize block_size);
 } MbEncodeCodec;
 
 /*

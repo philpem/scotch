@@ -100,6 +100,28 @@ unsigned mb_encode_motion_bits(const MbMotionVector *motion,
     return body_bits + (block_size == MB_MOTION_BLOCK_4X4 ? 2U : 1U);
 }
 
+unsigned mb_encode_motion_bits_format7(const MbMotionVector *motion,
+                                       MbMotionBlockSize block_size)
+{
+    unsigned magnitude;
+    unsigned body_bits;
+
+    if (motion->spatial != 0) {
+        body_bits = 8U; /* `11` family + 6-bit spatial index */
+    } else {
+        magnitude = (unsigned)(motion->dx < 0 ? -motion->dx : motion->dx);
+        if ((unsigned)(motion->dy < 0 ? -motion->dy : motion->dy) > magnitude) {
+            magnitude = (unsigned)(motion->dy < 0 ? -motion->dy : motion->dy);
+        }
+        body_bits = magnitude == 0U ? 2U  /* `00` stationary */
+                  : magnitude == 1U ? 5U  /* `01` + 3 */
+                  : magnitude == 2U ? 6U  /* `10` + 4 */
+                                    : 8U; /* `11` + 6 (radius 3 or 4) */
+    }
+    /* The move opcode is the same width as 17/19's: 2 bits 4x4, 1 bit 2x2. */
+    return body_bits + (block_size == MB_MOTION_BLOCK_4X4 ? 2U : 1U);
+}
+
 int mb_encode_candidate_better(const CopyCandidate *candidate,
                                const CopyCandidate *best)
 {
@@ -553,7 +575,7 @@ CopyCandidate mb_encode_select_copy4x4(
                                    loss_level, &candidate.motion, &error,
                                    &stats->temporal4x4_evaluations, workspace)) {
         candidate.error = error;
-        candidate.bits = mb_encode_motion_bits(&candidate.motion,
+        candidate.bits = enc->motion_bits(&candidate.motion,
                                                MB_MOTION_BLOCK_4X4);
         candidate.valid = 1;
         if (policy == MB_ENCODE_POLICY_ORDERED) {
@@ -570,7 +592,7 @@ CopyCandidate mb_encode_select_copy4x4(
                                   quality, &candidate.motion, &error,
                                   &stats->spatial4x4_evaluations)) {
         candidate.error = error;
-        candidate.bits = mb_encode_motion_bits(&candidate.motion,
+        candidate.bits = enc->motion_bits(&candidate.motion,
                                                MB_MOTION_BLOCK_4X4);
         candidate.valid = 1;
         if (mb_encode_candidate_better(&candidate, &selected)) {
@@ -616,7 +638,7 @@ CopyCandidate mb_encode_select_copy2x2(
                                     &stats->temporal2x2_evaluations,
                                     workspace)) {
         candidate.error = error;
-        candidate.bits = mb_encode_motion_bits(&candidate.motion,
+        candidate.bits = enc->motion_bits(&candidate.motion,
                                                MB_MOTION_BLOCK_2X2);
         candidate.valid = 1;
         if (policy == MB_ENCODE_POLICY_ORDERED) {
@@ -634,7 +656,7 @@ CopyCandidate mb_encode_select_copy2x2(
                                    u, v, quality, &candidate.motion, &error,
                                    &stats->spatial2x2_evaluations)) {
         candidate.error = error;
-        candidate.bits = mb_encode_motion_bits(&candidate.motion,
+        candidate.bits = enc->motion_bits(&candidate.motion,
                                                MB_MOTION_BLOCK_2X2);
         candidate.valid = 1;
         if (mb_encode_candidate_better(&candidate, &selected)) {

@@ -317,7 +317,8 @@ static const MbEncodeCodec codec19_encode = {
     codec19_temporal_vector,
     codec19_spatial_vector,
     codec19_block_match,
-    codec19_profile_match
+    codec19_profile_match,
+    mb_encode_motion_bits
 };
 
 /*

@@ -322,7 +322,8 @@ static const MbEncodeCodec codec7_encode = {
     codec7_temporal_vector,
     codec7_spatial_vector,
     codec7_block_match,
-    codec7_profile_match
+    codec7_profile_match,
+    mb_encode_motion_bits_format7
 };
 
 /*
