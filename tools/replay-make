@@ -90,7 +90,8 @@ case $codec in
     19) vsuffix=mb19; vlabel=6Y5UV;;
     17) vsuffix=mb17; vlabel=YUV;;
     7)  vsuffix=mb7;  vlabel=YUV;;
-    *) echo "replay-make: --codec must be 7, 17 or 19" >&2; exit 1;;
+    20) vsuffix=mb20; vlabel=6Y6UV;;
+    *) echo "replay-make: --codec must be 7, 17, 19 or 20" >&2; exit 1;;
 esac
 
 # Source dimensions -> output height that keeps aspect and is a multiple of 4.

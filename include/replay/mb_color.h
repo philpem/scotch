@@ -32,6 +32,16 @@ ReplayStatus mb_color_6y5uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
                                     size_t rgb_stride);
 
 /*
+ * Type 20 6Y6UV: 6-bit luma with signed six-bit U/V chroma (CompLib's WHEN
+ * "6Y6UV" path -- the same arithmetic as 6Y5UV but chroma scaled to six bits).
+ */
+ReplayStatus mb_color_rgb24_to_6y6uv(const uint8_t *rgb, size_t rgb_stride,
+                                    MbFrame *output, MbColorDither dither);
+
+ReplayStatus mb_color_6y6uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
+                                    size_t rgb_stride);
+
+/*
  * Type 17 YUV555: 5-bit luma with the same signed five-bit U/V chroma as 6Y5UV.
  * These mirror the 6Y5UV pair with luma scaled to five bits.
  */

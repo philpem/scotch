@@ -27,18 +27,20 @@ static int floor_div_pow2(int value, unsigned shift)
     return -((-value + divisor - 1) / divisor);
 }
 
-static uint8_t quantise_chroma(int value)
+/* `chroma_max` is 31 for 5-bit chroma (6Y5UV, YUV555) or 63 for 6-bit (6Y6UV);
+   CompLib's WHEN "6Y6UV" path is identical to 6Y5UV's but scales by 63 not 31. */
+static uint8_t quantise_chroma(int value, int chroma_max)
 {
-    int scaled = value * 31;
+    int scaled = value * chroma_max;
 
     /* Reproduce CompLib's sign-dependent half-step before its arithmetic ASR. */
     scaled += scaled >= 0 ? 128 : -128;
-    return (uint8_t)(floor_div_pow2(scaled, 8U) & 31);
+    return (uint8_t)(floor_div_pow2(scaled, 8U) & chroma_max);
 }
 
-static int signed_chroma(uint8_t value)
+static int signed_chroma(uint8_t value, int chroma_half)
 {
-    return value < 16U ? (int)value : (int)value - 32;
+    return (int)value < chroma_half ? (int)value : (int)value - 2 * chroma_half;
 }
 
 static int divide_nearest(int value, int divisor)
@@ -91,7 +93,7 @@ static const uint8_t bayer8x8[8][8] = {
  * the luma rounding (see MbColorDither).
  */
 static ReplayStatus rgb24_to_yuv(const uint8_t *rgb, size_t rgb_stride,
-                                 MbFrame *output, int luma_max,
+                                 MbFrame *output, int luma_max, int chroma_max,
                                  MbColorDither dither)
 {
     unsigned y;
@@ -135,8 +137,8 @@ static ReplayStatus rgb24_to_yuv(const uint8_t *rgb, size_t rgb_stride,
 
             pixel->y = (uint8_t)(((int64_t)fixed_y * luma_max + threshold)
                                  >> 24U);
-            pixel->u = quantise_chroma(u);
-            pixel->v = quantise_chroma(v);
+            pixel->u = quantise_chroma(u, chroma_max);
+            pixel->v = quantise_chroma(v, chroma_max);
         }
     }
     return REPLAY_OK;
@@ -145,8 +147,10 @@ static ReplayStatus rgb24_to_yuv(const uint8_t *rgb, size_t rgb_stride,
 /* Preview inverse of rgb24_to_yuv; the quantisation is irreversible, so this is
  * for display only, not a round trip. `luma_max` matches the forward path. */
 static ReplayStatus yuv_to_rgb24(const MbFrame *input, uint8_t *rgb,
-                                 size_t rgb_stride, int luma_max)
+                                 size_t rgb_stride, int luma_max,
+                                 int chroma_max)
 {
+    int chroma_half = (chroma_max + 1) / 2;
     unsigned y;
 
     if (input == NULL || input->pixels == NULL || rgb == NULL ||
@@ -166,12 +170,15 @@ static ReplayStatus yuv_to_rgb24(const MbFrame *input, uint8_t *rgb,
             int u;
             int v;
 
-            if ((int)pixel->y > luma_max || pixel->u > 31U || pixel->v > 31U) {
+            if ((int)pixel->y > luma_max || (int)pixel->u > chroma_max ||
+                (int)pixel->v > chroma_max) {
                 return REPLAY_INVALID_ARGUMENT;
             }
             luma = divide_nearest((int)pixel->y * 255, luma_max);
-            u = divide_nearest(signed_chroma(pixel->u) * 256, 31);
-            v = divide_nearest(signed_chroma(pixel->v) * 256, 31);
+            u = divide_nearest(signed_chroma(pixel->u, chroma_half) * 256,
+                               chroma_max);
+            v = divide_nearest(signed_chroma(pixel->v, chroma_half) * 256,
+                               chroma_max);
             destination[x * 3U] =
                 clamp_u8(luma + divide_nearest(1402 * v, 1000));
             destination[x * 3U + 1U] =
@@ -186,25 +193,37 @@ static ReplayStatus yuv_to_rgb24(const MbFrame *input, uint8_t *rgb,
 ReplayStatus mb_color_rgb24_to_6y5uv(const uint8_t *rgb, size_t rgb_stride,
                                     MbFrame *output, MbColorDither dither)
 {
-    return rgb24_to_yuv(rgb, rgb_stride, output, 63, dither);
+    return rgb24_to_yuv(rgb, rgb_stride, output, 63, 31, dither);
 }
 
 ReplayStatus mb_color_6y5uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
                                     size_t rgb_stride)
 {
-    return yuv_to_rgb24(input, rgb, rgb_stride, 63);
+    return yuv_to_rgb24(input, rgb, rgb_stride, 63, 31);
+}
+
+ReplayStatus mb_color_rgb24_to_6y6uv(const uint8_t *rgb, size_t rgb_stride,
+                                    MbFrame *output, MbColorDither dither)
+{
+    return rgb24_to_yuv(rgb, rgb_stride, output, 63, 63, dither);
+}
+
+ReplayStatus mb_color_6y6uv_to_rgb24(const MbFrame *input, uint8_t *rgb,
+                                    size_t rgb_stride)
+{
+    return yuv_to_rgb24(input, rgb, rgb_stride, 63, 63);
 }
 
 ReplayStatus mb_color_rgb24_to_yuv555(const uint8_t *rgb, size_t rgb_stride,
                                       MbFrame *output, MbColorDither dither)
 {
-    return rgb24_to_yuv(rgb, rgb_stride, output, 31, dither);
+    return rgb24_to_yuv(rgb, rgb_stride, output, 31, 31, dither);
 }
 
 ReplayStatus mb_color_yuv555_to_rgb24(const MbFrame *input, uint8_t *rgb,
                                       size_t rgb_stride)
 {
-    return yuv_to_rgb24(input, rgb, rgb_stride, 31);
+    return yuv_to_rgb24(input, rgb, rgb_stride, 31, 31);
 }
 
 #undef MB_Y_R
