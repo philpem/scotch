@@ -318,7 +318,8 @@ static const MbEncodeCodec codec19_encode = {
     codec19_spatial_vector,
     codec19_block_match,
     codec19_profile_match,
-    mb_encode_motion_bits
+    mb_encode_motion_bits,
+    16
 };
 
 /*
@@ -333,8 +334,8 @@ static ReplayStatus codec19_encode_data(ReplayBitWriter *writer,
                                         MbPixel *recon, size_t recon_stride,
                                         MbPredictor *predictor)
 {
-    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0);
-    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1);
+    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0, 16);
+    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1, 16);
     ReplayStatus status;
     unsigned row;
 

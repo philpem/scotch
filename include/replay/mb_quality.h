@@ -77,4 +77,23 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
  * separate format-17 metric is required.
  */
 
+/*
+ * Type 20 (6Y6UV) shares the metric but stores chroma as six-bit signed
+ * samples (modulo 64), so the sign extension differs. These behave exactly like
+ * the format-19 functions otherwise.
+ */
+int mb_quality_profile_6y6uv(const MbFrame *target, unsigned target_x,
+                             unsigned target_y, const MbFrame *reference,
+                             unsigned reference_x, unsigned reference_y,
+                             unsigned block_size, uint8_t target_u,
+                             uint8_t target_v, MbQualityProfile *profile);
+
+int mb_quality_match_6y6uv(const MbFrame *target, unsigned target_x,
+                           unsigned target_y, const MbFrame *reference,
+                           unsigned reference_x, unsigned reference_y,
+                           unsigned block_size, uint8_t target_u,
+                           uint8_t target_v,
+                           const MbQualityThresholds *thresholds,
+                           unsigned *total_error);
+
 #endif

@@ -105,6 +105,8 @@ add_replay_test(test_codec_movingblockshq
     tests/test_codec_movingblockshq.c)
 add_replay_test(test_codec_movingblocks
     tests/test_codec_movingblocks.c)
+add_replay_test(test_codec_movingblocksbeta
+    tests/test_codec_movingblocksbeta.c)
 add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
 add_replay_test(test_supermovingblocks_encoder
@@ -151,6 +153,14 @@ add_executable(make_fullmovie_crosscheck_fixtures
 target_link_libraries(make_fullmovie_crosscheck_fixtures PRIVATE replay)
 if(NOT MSVC)
     target_compile_options(make_fullmovie_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
+add_executable(make_decomp20_crosscheck_fixtures
+    tests/make_decomp20_crosscheck_fixtures.c)
+target_link_libraries(make_decomp20_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_decomp20_crosscheck_fixtures PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
@@ -261,5 +271,24 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP7_COMPILED} 7 yuv555)
+    endif()
+    set(DECOMP20_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn format-20 Decompress file")
+    if(EXISTS "${DECOMP20_COMPILED}")
+        add_test(NAME test_decomp20_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_decomp20_compiled.sh
+                $<TARGET_FILE:make_decomp20_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP20_COMPILED})
+        add_test(NAME test_fullmovie_decomp20
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fullmovie_crosscheck.sh
+                $<TARGET_FILE:make_fullmovie_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
+                ${DECOMP20_COMPILED} 20 6y6uv)
     endif()
 endif()

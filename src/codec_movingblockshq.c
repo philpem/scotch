@@ -96,7 +96,8 @@ static const MbEncodeCodec codec17_encode = {
     codec17_spatial_vector,
     codec17_block_match,
     codec17_profile_match,
-    mb_encode_motion_bits
+    mb_encode_motion_bits,
+    16
 };
 
 static ReplayStatus read_header(ReplayBitReader *reader, uint32_t opcode,

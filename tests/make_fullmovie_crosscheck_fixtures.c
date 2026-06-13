@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "replay/codec_movingblocks.h"
+#include "replay/codec_movingblocksbeta.h"
 #include "replay/codec_movingblockshq.h"
 #include "replay/codec_supermovingblocks.h"
 
@@ -195,6 +196,22 @@ static ReplayStatus encode_frame(unsigned codec, const MbFrame *source,
         tally->data4x4 += s.data4x4_blocks;
         return status;
     }
+    if (codec == 20U) {
+        CodecMovingBlocksBetaEncodeOptions o = {
+            allow_copy_prev, allow_copy_prev, 1, 1, 4U,
+            MB_ENCODE_POLICY_LOWEST_ERROR, NULL
+        };
+        CodecMovingBlocksBetaEncodeStats s = { 0 };
+        status = codec_movingblocksbeta_encode_frame(source, previous, &o,
+                                                     output, reconstructed, &s);
+        tally->spatial4x4 += s.spatial4x4_blocks;
+        tally->spatial2x2 += s.spatial2x2_blocks;
+        tally->temporal4x4 += s.temporal4x4_blocks;
+        tally->temporal2x2 += s.temporal2x2_blocks;
+        tally->split4x4 += s.split4x4_blocks;
+        tally->data4x4 += s.data4x4_blocks;
+        return status;
+    }
     {
         CodecSuperMovingBlocksEncodeOptions o = {
             allow_copy_prev, allow_copy_prev, 1, 1, 4U,
@@ -229,8 +246,8 @@ int main(int argc, char **argv)
 
     CHECK(argc == 3);
     codec = (unsigned)strtoul(argv[2], NULL, 10);
-    CHECK(codec == 7U || codec == 17U || codec == 19U);
-    ymax = codec == 19U ? 63U : 31U;
+    CHECK(codec == 7U || codec == 17U || codec == 19U || codec == 20U);
+    ymax = (codec == 19U || codec == 20U) ? 63U : 31U;
 
     replay_buffer_init(&payload);
     {

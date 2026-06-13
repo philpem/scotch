@@ -507,14 +507,8 @@ int mb_encode_match_spatial2x2(const MbEncodeCodec *enc, const MbFrame *source,
     return 1;
 }
 
-static int signed_chroma(uint8_t value)
-{
-    /* Five-bit chroma is stored as two's-complement modulo 32. */
-    return value < 16U ? (int)value : (int)value - 32;
-}
-
 uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
-                                 unsigned size, int use_v)
+                                 unsigned size, int use_v, int chroma_half)
 {
     int sum = 0;
     int area = (int)(size * size);
@@ -526,7 +520,10 @@ uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
             const MbPixel *pixel =
                 &source->pixels[(size_t)(y + row) * source->stride +
                                 x + column];
-            sum += signed_chroma(use_v != 0 ? pixel->v : pixel->u);
+            int value = use_v != 0 ? pixel->v : pixel->u;
+
+            /* Two's-complement modulo 2*chroma_half (16 for 5-bit, 32 6-bit). */
+            sum += value < chroma_half ? value : value - 2 * chroma_half;
         }
     }
     /* Match the source assembler's arithmetic shift, including negatives. */
@@ -535,7 +532,7 @@ uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
     } else {
         sum /= area;
     }
-    return (uint8_t)(sum & 31);
+    return (uint8_t)(sum & (2 * chroma_half - 1));
 }
 
 /*
@@ -719,8 +716,10 @@ static ReplayStatus build_split_candidate(
         unsigned block_x = x + offsets[block][0];
         unsigned block_y = y + offsets[block][1];
         unsigned local = (block_y - y) * 4U + block_x - x;
-        uint8_t u = mb_encode_average_chroma(source, block_x, block_y, 2U, 0);
-        uint8_t v = mb_encode_average_chroma(source, block_x, block_y, 2U, 1);
+        uint8_t u = mb_encode_average_chroma(source, block_x, block_y, 2U, 0,
+                                             enc->chroma_half);
+        uint8_t v = mb_encode_average_chroma(source, block_x, block_y, 2U, 1,
+                                             enc->chroma_half);
         CopyCandidate selected = mb_encode_select_copy2x2(
             enc, source, previous, reconstructed, tentative, available_mask,
             x, y, block_x, block_y, u, v, allow_stationary, allow_temporal,
@@ -852,8 +851,10 @@ ReplayStatus mb_encode_frame(const MbEncodeCodec *search,
     for (y = 0; status == REPLAY_OK && y < source->height; y += 4U) {
         unsigned x;
         for (x = 0; status == REPLAY_OK && x < source->width; x += 4U) {
-            uint8_t u = mb_encode_average_chroma(source, x, y, 4U, 0);
-            uint8_t v = mb_encode_average_chroma(source, x, y, 4U, 1);
+            uint8_t u = mb_encode_average_chroma(source, x, y, 4U, 0,
+                                                 search->chroma_half);
+            uint8_t v = mb_encode_average_chroma(source, x, y, 4U, 1,
+                                                 search->chroma_half);
             CopyCandidate copy = mb_encode_select_copy4x4(
                 search, source, previous, reconstructed, x, y, u, v,
                 allow_stationary, allow_temporal, allow_spatial, &quality,

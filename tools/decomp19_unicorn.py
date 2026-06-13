@@ -87,6 +87,28 @@ def yuv555_bytes_to_words(data: bytes) -> bytes:
     return bytes(words)
 
 
+def yuv6_bytes_to_words(data: bytes) -> bytes:
+    """Pack native type-20 six-bit Y, U and V previous pixels (6Y6UV word:
+    Y[0:5] U[6:11] V[12:17], from Decomp20 MakeDecomp lines 8130-8140)."""
+    words = bytearray()
+    for offset in range(0, len(data), 3):
+        y, u, v = data[offset : offset + 3]
+        if y > 63 or u > 63 or v > 63:
+            raise ValueError(
+                f"invalid 6Y6UV sample at pixel {offset // 3}: {y},{u},{v}"
+            )
+        words += struct.pack("<I", y | (u << 6) | (v << 12))
+    return bytes(words)
+
+
+def words_to_yuv6_bytes(data: bytes) -> bytes:
+    """Unpack type-20 6Y6UV working words to Y, U, V bytes (six bits each)."""
+    pixels = bytearray()
+    for (word,) in struct.iter_unpack("<I", data):
+        pixels += bytes((word & 0x3F, (word >> 6) & 0x3F, (word >> 12) & 0x3F))
+    return bytes(pixels)
+
+
 def words_to_yuv_bytes(data: bytes) -> bytes:
     pixels = bytearray()
     for (word,) in struct.iter_unpack("<I", data):
@@ -165,6 +187,7 @@ def install_classic_ldm_lookahead(machine: Uc, decompressor: bytes,
         7: (5, 0, 0, 0),
         17: (4, 1, 0, 3),
         19: (4, 0, 1, 1),
+        20: (4, 0, 1, 1),  # type 20 shares type 19's bitstream lookahead sites
     }
     expected = expected_by_codec[codec]
     lookaheads = {
@@ -280,11 +303,12 @@ def run(args: argparse.Namespace) -> int:
     else:
         previous_bytes = read_exact(
             args.previous, frame_bytes, "previous frame")
-        previous_words = (
-            yuv555_bytes_to_words(previous_bytes)
-            if args.previous_layout == "yuv555"
-            else yuv_bytes_to_words(previous_bytes)
-        )
+        if args.previous_layout == "yuv555":
+            previous_words = yuv555_bytes_to_words(previous_bytes)
+        elif args.previous_layout == "6y6uv":
+            previous_words = yuv6_bytes_to_words(previous_bytes)
+        else:
+            previous_words = yuv_bytes_to_words(previous_bytes)
 
     machine = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     map_and_write(machine, CODE_BASE, decompressor)
@@ -304,6 +328,30 @@ def run(args: argparse.Namespace) -> int:
     machine.reg_write(UC_ARM_REG_R3, 0)
     machine.reg_write(UC_ARM_REG_R13, STACK_BASE + PAGE_SIZE)
     machine.reg_write(UC_ARM_REG_R14, RETURN_ADDRESS)
+
+    if args.trace_bits:
+        # Debug aid: log every change of r0 (the bitstream bit pointer) while it
+        # is inside the payload, with the code offset and key registers, so the
+        # exact bit consumption of a decode can be followed.
+        trace_state = {"last": None}
+        source_bits = SOURCE_BASE * 8
+
+        def trace_hook(uc: Uc, address: int, size: int, user: object) -> None:
+            r0 = uc.reg_read(UC_ARM_REG_R0)
+            bit = r0 - source_bits
+            if bit != trace_state["last"] and 0 <= bit <= 4096:
+                trace_state["last"] = bit
+                r5 = uc.reg_read(UC_ARM_REG_R5)
+                r10 = uc.reg_read(UC_ARM_REG_R10)
+                print(
+                    f"pc={address - CODE_BASE:#06x} bit={bit:4d} "
+                    f"r5={r5:#010x} r10={r10:#010x}",
+                    file=sys.stderr,
+                )
+
+        machine.hook_add(UC_HOOK_CODE, trace_hook, None,
+                         CODE_BASE, CODE_BASE + len(decompressor))
+
     machine.emu_start(CODE_BASE + 4, RETURN_ADDRESS)
 
     source_offset = 0
@@ -335,6 +383,8 @@ def run(args: argparse.Namespace) -> int:
             output_yuv = yuv555_words_to_6y5uv_bytes(output_words)
         elif args.output_layout == "yuv555":
             output_yuv = words_to_yuv555_bytes(output_words)
+        elif args.output_layout == "6y6uv":
+            output_yuv = words_to_yuv6_bytes(output_words)
         else:
             output_yuv = words_to_yuv_bytes(output_words)
         if args.output is not None:
@@ -371,7 +421,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--decompressor", required=True, type=Path)
     parser.add_argument(
-        "--codec", type=int, choices=(7, 17, 19, 23), default=19
+        "--codec", type=int, choices=(7, 17, 19, 20, 23), default=19
     )
     parser.add_argument("--payload", required=True, type=Path)
     parser.add_argument("--size", required=True)
@@ -382,16 +432,22 @@ def parse_args() -> argparse.Namespace:
         help="native little-endian 16-bit key image expanded to ARM words",
     )
     parser.add_argument(
-        "--previous-layout", choices=("6y5uv", "yuv555"), default="6y5uv",
+        "--previous-layout", choices=("6y5uv", "yuv555", "6y6uv"),
+        default="6y5uv",
         help="component layout used by --previous (default: 6y5uv)",
     )
     output_group = parser.add_mutually_exclusive_group(required=True)
     output_group.add_argument("--output", type=Path)
     output_group.add_argument("--output-prefix", type=Path)
     parser.add_argument("--payload-prefix", type=Path)
+    parser.add_argument(
+        "--trace-bits", action="store_true",
+        help="log every change of the bitstream bit pointer (debug)",
+    )
     parser.add_argument("--output-words-prefix", type=Path)
     parser.add_argument(
-        "--output-layout", choices=("6y5uv", "yuv555", "yuv555-to-6y5uv"),
+        "--output-layout",
+        choices=("6y5uv", "yuv555", "yuv555-to-6y5uv", "6y6uv"),
         default="6y5uv",
         help="interpret output words directly or convert type-7 YUV555",
     )

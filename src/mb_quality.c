@@ -25,9 +25,11 @@ static const MbQualityThresholds quality_table[MB_QUALITY_LEVEL_COUNT] = {
     { 6U, 13U, 216U, 60U }
 };
 
-static int signed_chroma(uint8_t value)
+/* Sign-extend a chroma sample stored modulo 2*half (half=16 for 5-bit 6Y5UV,
+   half=32 for 6-bit 6Y6UV). */
+static int sign_chroma(uint8_t value, int half)
 {
-    return value < 16U ? (int)value : (int)value - 32;
+    return (int)value < half ? (int)value : (int)value - 2 * half;
 }
 
 static unsigned absolute_difference(int left, int right)
@@ -55,13 +57,14 @@ ReplayStatus mb_quality_thresholds(unsigned loss_level,
     return REPLAY_OK;
 }
 
-int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
-                                unsigned target_y,
-                                const MbFrame *reference,
-                                unsigned reference_x,
-                                unsigned reference_y, unsigned block_size,
-                                uint8_t target_u, uint8_t target_v,
-                                MbQualityProfile *profile)
+/* Core copy-quality measurement, parameterised by the chroma sign-extension
+   half-range (16 for 6Y5UV/YUV555, 32 for 6Y6UV). */
+static int profile_measure(const MbFrame *target, unsigned target_x,
+                           unsigned target_y, const MbFrame *reference,
+                           unsigned reference_x, unsigned reference_y,
+                           unsigned block_size, uint8_t target_u,
+                           uint8_t target_v, int chroma_half,
+                           MbQualityProfile *profile)
 {
     unsigned total = 0U;
     int reference_u = 0;
@@ -102,22 +105,44 @@ int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
                 ++profile->luma_over_limit[limit];
             }
             total += difference;
-            reference_u += signed_chroma(reference_pixel->u);
-            reference_v += signed_chroma(reference_pixel->v);
+            reference_u += sign_chroma(reference_pixel->u, chroma_half);
+            reference_v += sign_chroma(reference_pixel->v, chroma_half);
         }
     }
 
     {
         unsigned area = block_size * block_size;
         profile->chroma_u_error = (uint8_t)absolute_difference(
-            signed_chroma(target_u), floor_average(reference_u, area));
+            sign_chroma(target_u, chroma_half), floor_average(reference_u, area));
         profile->chroma_v_error = (uint8_t)absolute_difference(
-            signed_chroma(target_v), floor_average(reference_v, area));
+            sign_chroma(target_v, chroma_half), floor_average(reference_v, area));
         /* One block-average chroma error applies to every reconstructed pixel. */
         total += area * (profile->chroma_u_error + profile->chroma_v_error);
     }
     profile->total_error = (uint16_t)total;
     return 1;
+}
+
+int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
+                                unsigned target_y, const MbFrame *reference,
+                                unsigned reference_x, unsigned reference_y,
+                                unsigned block_size, uint8_t target_u,
+                                uint8_t target_v, MbQualityProfile *profile)
+{
+    return profile_measure(target, target_x, target_y, reference, reference_x,
+                           reference_y, block_size, target_u, target_v, 16,
+                           profile);
+}
+
+int mb_quality_profile_6y6uv(const MbFrame *target, unsigned target_x,
+                             unsigned target_y, const MbFrame *reference,
+                             unsigned reference_x, unsigned reference_y,
+                             unsigned block_size, uint8_t target_u,
+                             uint8_t target_v, MbQualityProfile *profile)
+{
+    return profile_measure(target, target_x, target_y, reference, reference_x,
+                           reference_y, block_size, target_u, target_v, 32,
+                           profile);
 }
 
 unsigned mb_quality_first_accepted_level(const MbQualityProfile *profile,
@@ -185,6 +210,23 @@ int mb_quality_match_format19(const MbFrame *target, unsigned target_x,
     MbQualityProfile profile;
 
     return mb_quality_profile_format19(
+               target, target_x, target_y, reference, reference_x,
+               reference_y, block_size, target_u, target_v, &profile) &&
+           mb_quality_profile_accept(
+               &profile, block_size, thresholds, total_error);
+}
+
+int mb_quality_match_6y6uv(const MbFrame *target, unsigned target_x,
+                           unsigned target_y, const MbFrame *reference,
+                           unsigned reference_x, unsigned reference_y,
+                           unsigned block_size, uint8_t target_u,
+                           uint8_t target_v,
+                           const MbQualityThresholds *thresholds,
+                           unsigned *total_error)
+{
+    MbQualityProfile profile;
+
+    return mb_quality_profile_6y6uv(
                target, target_x, target_y, reference, reference_x,
                reference_y, block_size, target_u, target_v, &profile) &&
            mb_quality_profile_accept(

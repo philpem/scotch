@@ -323,7 +323,8 @@ static const MbEncodeCodec codec7_encode = {
     codec7_spatial_vector,
     codec7_block_match,
     codec7_profile_match,
-    mb_encode_motion_bits_format7
+    mb_encode_motion_bits_format7,
+    16
 };
 
 /*
@@ -336,8 +337,8 @@ static ReplayStatus encode_data_literal(ReplayBitWriter *writer,
                                         unsigned y, unsigned size,
                                         MbPixel *recon, size_t recon_stride)
 {
-    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0);
-    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1);
+    uint8_t u = mb_encode_average_chroma(source, x, y, size, 0, 16);
+    uint8_t v = mb_encode_average_chroma(source, x, y, size, 1, 16);
     unsigned row;
     ReplayStatus status = REPLAY_OK;
 
@@ -431,8 +432,8 @@ static ReplayStatus build_split7(const MbFrame *source, const MbFrame *previous,
         unsigned block_x = x + offsets[block][0];
         unsigned block_y = y + offsets[block][1];
         unsigned local = (block_y - y) * 4U + block_x - x;
-        uint8_t u = mb_encode_average_chroma(source, block_x, block_y, 2U, 0);
-        uint8_t v = mb_encode_average_chroma(source, block_x, block_y, 2U, 1);
+        uint8_t u = mb_encode_average_chroma(source, block_x, block_y, 2U, 0, 16);
+        uint8_t v = mb_encode_average_chroma(source, block_x, block_y, 2U, 1, 16);
         CopyCandidate selected = mb_encode_select_copy2x2(
             &codec7_encode, source, previous, reconstructed, tentative,
             available_mask, x, y, block_x, block_y, u, v, allow_stationary,
@@ -578,8 +579,8 @@ ReplayStatus codec_movingblocks_encode_frame(
         unsigned x;
 
         for (x = 0U; status == REPLAY_OK && x < source->width; x += 4U) {
-            uint8_t u = mb_encode_average_chroma(source, x, y, 4U, 0);
-            uint8_t v = mb_encode_average_chroma(source, x, y, 4U, 1);
+            uint8_t u = mb_encode_average_chroma(source, x, y, 4U, 0, 16);
+            uint8_t v = mb_encode_average_chroma(source, x, y, 4U, 1, 16);
             CopyCandidate copy = mb_encode_select_copy4x4(
                 &codec7_encode, source, previous, reconstructed, x, y, u, v,
                 allow_stationary, allow_temporal, allow_spatial, &quality,

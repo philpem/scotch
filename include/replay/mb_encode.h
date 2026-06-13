@@ -120,6 +120,10 @@ typedef struct MbEncodeCodec {
      */
     unsigned (*motion_bits)(const MbMotionVector *motion,
                             MbMotionBlockSize block_size);
+
+    /* Chroma sign-extension half-range: 16 for 5-bit chroma (6Y5UV, YUV555),
+       32 for 6-bit chroma (6Y6UV). Used when averaging block chroma. */
+    int chroma_half;
 } MbEncodeCodec;
 
 /*
@@ -235,7 +239,7 @@ ReplayStatus mb_encode_append_candidate(ReplayBitWriter *writer,
  * family shares this signed five-bit chroma model.
  */
 uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
-                                 unsigned size, int use_v);
+                                 unsigned size, int use_v, int chroma_half);
 
 /* ------------------------------------------------------------------------- *
  * Shared frame encoder.
