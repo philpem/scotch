@@ -40,4 +40,32 @@ const char *replay_sound_format_label(ReplaySoundFormat format);
 uint8_t replay_sound_vidc_e8_from_s16(int16_t sample);
 int16_t replay_sound_vidc_e8_to_s16(uint8_t code);
 
+/*
+ * IMA/DVI ADPCM (Replay sound format "2 adpcm"), the canonical 7-Jul-92
+ * reference codec Acorn used. The state persists across calls so a track can be
+ * encoded chunk by chunk; the value of the state at a chunk's first sample is
+ * written as that chunk's 4-byte header (valprev little-endian, then index, then
+ * a pad byte) so the player can start decoding the chunk independently.
+ */
+typedef struct {
+    int16_t predicted;  /* valprev: last reconstructed sample */
+    int8_t step_index;  /* index into the step-size table, 0..88 */
+} ReplaySoundAdpcmState;
+
+/* Append `count` mono samples to `out` as 4-bit codes (two per byte, first
+ * sample in the low nibble), updating `state`. */
+ReplayStatus replay_sound_adpcm_encode(const int16_t *samples, size_t count,
+                                       ReplaySoundAdpcmState *state,
+                                       ReplayBuffer *out);
+
+/* Append the 4-byte chunk state header for `state` to `out`. */
+ReplayStatus replay_sound_adpcm_write_header(const ReplaySoundAdpcmState *state,
+                                             ReplayBuffer *out);
+
+/* Decode `count` 4-bit codes (packed as above) from `nibbles`, writing samples
+ * to `out_samples`, updating `state`. Exposed for testing and verification. */
+void replay_sound_adpcm_decode(const uint8_t *nibbles, size_t count,
+                               ReplaySoundAdpcmState *state,
+                               int16_t *out_samples);
+
 #endif

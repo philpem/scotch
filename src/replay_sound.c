@@ -117,6 +117,150 @@ ReplayStatus replay_sound_encode(ReplaySoundFormat format,
     return REPLAY_OK;
 }
 
+/*
+ * IMA/DVI ADPCM, the canonical reference codec (Jack Jansen, 7-Jul-92) Acorn's
+ * Join uses. The two tables are part of the format.
+ */
+static const int8_t adpcm_index_table[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8
+};
+static const int16_t adpcm_step_table[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41,
+    45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209,
+    230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876,
+    963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2747, 3022,
+    3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+    10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086,
+    29794, 32767
+};
+
+static uint8_t adpcm_encode_sample(int sample, ReplaySoundAdpcmState *state)
+{
+    int step = adpcm_step_table[state->step_index];
+    int diff = sample - state->predicted;
+    int code = 0;
+    int reconstructed = step >> 3;
+    int predicted;
+    int index;
+
+    if (diff < 0) {
+        code = 8;
+        diff = -diff;
+    }
+    if (diff >= step) {
+        code |= 4;
+        diff -= step;
+        reconstructed += step;
+    }
+    if (diff >= (step >> 1)) {
+        code |= 2;
+        diff -= step >> 1;
+        reconstructed += step >> 1;
+    }
+    if (diff >= (step >> 2)) {
+        code |= 1;
+        reconstructed += step >> 2;
+    }
+    predicted = state->predicted +
+                ((code & 8) ? -reconstructed : reconstructed);
+    if (predicted > 32767) {
+        predicted = 32767;
+    } else if (predicted < -32768) {
+        predicted = -32768;
+    }
+    index = state->step_index + adpcm_index_table[code & 0x0F];
+    if (index < 0) {
+        index = 0;
+    } else if (index > 88) {
+        index = 88;
+    }
+    state->predicted = (int16_t)predicted;
+    state->step_index = (int8_t)index;
+    return (uint8_t)(code & 0x0F);
+}
+
+ReplayStatus replay_sound_adpcm_encode(const int16_t *samples, size_t count,
+                                       ReplaySoundAdpcmState *state,
+                                       ReplayBuffer *out)
+{
+    size_t i;
+
+    if (out == NULL || state == NULL || (samples == NULL && count != 0U)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    for (i = 0U; i < count; i += 2U) {
+        uint8_t low = adpcm_encode_sample(samples[i], state);
+        uint8_t high = 0U;
+        ReplayStatus status;
+
+        if (i + 1U < count) {
+            high = adpcm_encode_sample(samples[i + 1U], state);
+        }
+        status = replay_buffer_append_u8(out, (uint8_t)(low | (high << 4)));
+        if (status != REPLAY_OK) {
+            return status;
+        }
+    }
+    return REPLAY_OK;
+}
+
+ReplayStatus replay_sound_adpcm_write_header(const ReplaySoundAdpcmState *state,
+                                             ReplayBuffer *out)
+{
+    uint8_t header[4] = {
+        (uint8_t)((uint16_t)state->predicted & 0xFFU),
+        (uint8_t)((uint16_t)state->predicted >> 8),
+        (uint8_t)state->step_index,
+        0U
+    };
+
+    if (out == NULL || state == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    return replay_buffer_append(out, header, sizeof(header));
+}
+
+void replay_sound_adpcm_decode(const uint8_t *nibbles, size_t count,
+                               ReplaySoundAdpcmState *state,
+                               int16_t *out_samples)
+{
+    size_t i;
+
+    for (i = 0U; i < count; ++i) {
+        unsigned code = (i & 1U) == 0U ? (nibbles[i / 2U] & 0x0FU)
+                                       : (nibbles[i / 2U] >> 4U);
+        int step = adpcm_step_table[state->step_index];
+        int diff = step >> 3;
+        int predicted;
+        int index;
+
+        if (code & 4U) {
+            diff += step;
+        }
+        if (code & 2U) {
+            diff += step >> 1;
+        }
+        if (code & 1U) {
+            diff += step >> 2;
+        }
+        predicted = state->predicted + ((code & 8U) ? -diff : diff);
+        if (predicted > 32767) {
+            predicted = 32767;
+        } else if (predicted < -32768) {
+            predicted = -32768;
+        }
+        index = state->step_index + adpcm_index_table[code & 0x0FU];
+        if (index < 0) {
+            index = 0;
+        } else if (index > 88) {
+            index = 88;
+        }
+        state->predicted = (int16_t)predicted;
+        state->step_index = (int8_t)index;
+        out_samples[i] = (int16_t)predicted;
+    }
+}
+
 unsigned replay_sound_format_bits(ReplaySoundFormat format)
 {
     return format == REPLAY_SOUND_SIGNED_16 ? 16U : 8U;

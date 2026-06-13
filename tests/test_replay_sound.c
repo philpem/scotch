@@ -1,5 +1,6 @@
 #include "test_common.h"
 
+#include <math.h>
 #include <stdint.h>
 
 #include "replay/replay_buffer.h"
@@ -79,5 +80,43 @@ int main(void)
 
     CHECK(replay_sound_format_bits(REPLAY_SOUND_SIGNED_16) == 16U);
     CHECK(replay_sound_format_bits(REPLAY_SOUND_VIDC_E8) == 8U);
+
+    /* IMA ADPCM: encode a sine, decode it back, and confirm 4-bit packing and a
+     * reasonable signal-to-noise ratio. The encoder and decoder share the same
+     * predictor, so the decoded stream matches the encoder's reconstruction. */
+    {
+        enum { N = 2048 };
+        static int16_t sine[N];
+        static int16_t back[N];
+        ReplaySoundAdpcmState enc = { 0, 0 };
+        ReplaySoundAdpcmState dec = { 0, 0 };
+        double sig = 0.0;
+        double err = 0.0;
+        int k;
+
+        for (k = 0; k < N; ++k) {
+            sine[k] = (int16_t)(12000.0 * sin((double)k * 0.10));
+        }
+        replay_buffer_init(&out);
+        CHECK(replay_sound_adpcm_encode(sine, (size_t)N, &enc, &out) ==
+              REPLAY_OK);
+        /* Two samples per byte. */
+        CHECK(out.size == (size_t)N / 2U);
+        replay_sound_adpcm_decode(out.data, (size_t)N, &dec, back);
+        for (k = 0; k < N; ++k) {
+            double e = (double)sine[k] - (double)back[k];
+
+            sig += (double)sine[k] * (double)sine[k];
+            err += e * e;
+        }
+        /* IMA ADPCM gives well over 20 dB on a smooth tone. */
+        CHECK(err > 0.0 && 10.0 * log10(sig / err) > 20.0);
+        /* The 4-byte chunk header carries the state. */
+        replay_buffer_clear(&out);
+        CHECK(replay_sound_adpcm_write_header(&enc, &out) == REPLAY_OK);
+        CHECK(out.size == 4U);
+        CHECK(out.data[3] == 0U);
+        replay_buffer_free(&out);
+    }
     return EXIT_SUCCESS;
 }
