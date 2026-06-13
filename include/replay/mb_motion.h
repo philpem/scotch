@@ -43,4 +43,17 @@ ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
                                            unsigned index,
                                            MbMotionVector *motion);
 
+/*
+ * Read the type 7 move grammar (Decomp7/Docs/Stream): a two-bit family then an
+ * index -- `00` stationary, `01`+3 temporal radius 1, `10`+4 temporal radius 2,
+ * `11`+6 temporal radius 4 (index 0..31) / radius 3 (32..55) / spatial (56..63).
+ * The caller has consumed the move prefix (`00` 4x4 or `0` 2x2). The +/-4 family
+ * differs from the 17/19 coding, but the vectors are the shared rings and
+ * spatial tables. `motion->spatial` distinguishes the previous-frame copies from
+ * the current-frame ones.
+ */
+ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
+                                    MbMotionBlockSize block_size,
+                                    MbMotionVector *motion);
+
 #endif

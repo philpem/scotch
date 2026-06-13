@@ -84,8 +84,8 @@ static int test_split_data(void)
     return EXIT_SUCCESS;
 }
 
-/* A move opcode is not yet implemented; it must fail cleanly, not misdecode. */
-static int test_move_rejected(void)
+/* A temporal copy needs a previous frame; without one it must fail cleanly. */
+static int test_temporal_needs_previous(void)
 {
     ReplayBuffer payload;
     ReplayBitWriter writer;
@@ -97,6 +97,7 @@ static int test_move_rejected(void)
     replay_bitwriter_init(&writer, &payload);
     CHECK(replay_bitwriter_write(&writer, 0U, 1U) == REPLAY_OK); /* `00` move */
     CHECK(replay_bitwriter_write(&writer, 0U, 1U) == REPLAY_OK);
+    CHECK(replay_bitwriter_write(&writer, 0U, 2U) == REPLAY_OK); /* `00` stat. */
     CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
     CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, NULL,
                                           &decoded, NULL, &error) ==
@@ -106,10 +107,83 @@ static int test_move_rejected(void)
     return EXIT_SUCCESS;
 }
 
+/* A 4x4 `00` stationary move copies the previous frame block byte-for-byte. */
+static int test_temporal_stationary(void)
+{
+    ReplayBuffer payload;
+    ReplayBitWriter writer;
+    MbPixel previous_pixels[16];
+    MbPixel pixels[16];
+    MbFrame previous = { 4U, 4U, 4U, previous_pixels };
+    MbFrame decoded = { 4U, 4U, 4U, pixels };
+    unsigned i;
+
+    for (i = 0U; i < 16U; ++i) {
+        previous_pixels[i] = (MbPixel){ (uint8_t)((i * 2U + 1U) & 31U),
+                                        (uint8_t)((i + 4U) & 31U),
+                                        (uint8_t)((i + 7U) & 31U) };
+    }
+    replay_buffer_init(&payload);
+    replay_bitwriter_init(&writer, &payload);
+    CHECK(replay_bitwriter_write(&writer, 0U, 2U) == REPLAY_OK); /* `00` move */
+    CHECK(replay_bitwriter_write(&writer, 0U, 2U) == REPLAY_OK); /* `00` stat. */
+    CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size,
+                                          &previous, &decoded, NULL, NULL) ==
+          REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        CHECK(pixels[i].y == previous_pixels[i].y);
+        CHECK(pixels[i].u == previous_pixels[i].u);
+        CHECK(pixels[i].v == previous_pixels[i].v);
+    }
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
+/* A 4x4 spatial copy reproduces an already-decoded block from the same frame:
+ * an 8x4 frame whose second block copies the first via (-4,0). */
+static int test_spatial_copy(void)
+{
+    ReplayBuffer payload;
+    ReplayBitWriter writer;
+    MbPixel pixels[32];
+    MbFrame decoded = { 8U, 4U, 8U, pixels };
+    unsigned i;
+
+    replay_buffer_init(&payload);
+    replay_bitwriter_init(&writer, &payload);
+    /* Block (0,0): literal data with per-pixel luma and shared chroma. */
+    CHECK(replay_bitwriter_write(&writer, 1U, 1U) == REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        CHECK(replay_bitwriter_write(&writer, (i + 5U) & 31U, 5U) == REPLAY_OK);
+    }
+    CHECK(replay_bitwriter_write(&writer, 6U, 5U) == REPLAY_OK);
+    CHECK(replay_bitwriter_write(&writer, 13U, 5U) == REPLAY_OK);
+    /* Block (4,0): spatial move `00`, family `11` index 56+5 = (-4,0). */
+    CHECK(replay_bitwriter_write(&writer, 0U, 2U) == REPLAY_OK);
+    CHECK(replay_bitwriter_write(&writer, 3U, 2U) == REPLAY_OK);
+    CHECK(replay_bitwriter_write(&writer, 61U, 6U) == REPLAY_OK);
+    CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, NULL,
+                                          &decoded, NULL, NULL) == REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        unsigned row = i / 4U;
+        unsigned col = i % 4U;
+        const MbPixel *src = &pixels[row * 8U + col];
+        const MbPixel *dst = &pixels[row * 8U + 4U + col];
+
+        CHECK(dst->y == src->y && dst->u == src->u && dst->v == src->v);
+    }
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4() == EXIT_SUCCESS);
     CHECK(test_split_data() == EXIT_SUCCESS);
-    CHECK(test_move_rejected() == EXIT_SUCCESS);
+    CHECK(test_temporal_needs_previous() == EXIT_SUCCESS);
+    CHECK(test_temporal_stationary() == EXIT_SUCCESS);
+    CHECK(test_spatial_copy() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

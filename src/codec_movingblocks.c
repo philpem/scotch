@@ -3,6 +3,8 @@
 #include <stddef.h>
 
 #include "replay/mb_codec.h"
+#include "replay/mb_encode.h"
+#include "replay/mb_motion.h"
 #include "replay/replay_bitstream.h"
 
 /*
@@ -119,9 +121,49 @@ ReplayStatus codec_movingblocks_decode_data2x2(
     return REPLAY_OK;
 }
 
+/*
+ * Decode a move case: read the type 7 motion code, validate the reference, and
+ * copy a size x size block. Temporal copies take the previous frame, spatial
+ * copies the reconstruction in progress (whose legal vectors point at already
+ * decoded pixels).
+ */
+static ReplayStatus apply_move(ReplayBitReader *reader, MbFrame *decoded,
+                               const MbFrame *previous, unsigned x, unsigned y,
+                               unsigned size, MbVerifyError *error)
+{
+    MbMotionVector motion;
+    const MbFrame *reference;
+    int source_x;
+    int source_y;
+    ReplayStatus status = mb_motion_read_format7(
+        reader, size == 4U ? MB_MOTION_BLOCK_4X4 : MB_MOTION_BLOCK_2X2,
+        &motion);
+
+    if (status != REPLAY_OK) {
+        set_error(error, reader, "invalid or truncated motion code");
+        return status;
+    }
+    reference = motion.spatial != 0 ? decoded : previous;
+    if (reference == NULL || reference->pixels == NULL) {
+        set_error(error, reader, "temporal copy requires a previous frame");
+        return REPLAY_MALFORMED_STREAM;
+    }
+    source_x = (int)x + motion.dx;
+    source_y = (int)y + motion.dy;
+    if (source_x < 0 || source_y < 0 ||
+        source_x + (int)size > (int)decoded->width ||
+        source_y + (int)size > (int)decoded->height) {
+        set_error(error, reader, "motion reference lies outside the frame");
+        return REPLAY_MALFORMED_STREAM;
+    }
+    mb_encode_copy_motion(reference, decoded, x, y, size, &motion);
+    return REPLAY_OK;
+}
+
 /* Verify the four 2x2 children of a split (top-level `01`) block. */
 static ReplayStatus verify_split(ReplayBitReader *reader, MbFrame *decoded,
-                                 unsigned x, unsigned y, MbVerifyError *error)
+                                 const MbFrame *previous, unsigned x,
+                                 unsigned y, MbVerifyError *error)
 {
     static const unsigned offsets[4][2] = {
         { 0U, 0U }, { 2U, 0U }, { 0U, 2U }, { 2U, 2U }
@@ -147,9 +189,12 @@ static ReplayStatus verify_split(ReplayBitReader *reader, MbFrame *decoded,
                 return status;
             }
         } else {
-            /* `0` is a 2x2 move case -- motion is the next milestone. */
-            set_error(error, reader, "type 7 motion not yet implemented");
-            return REPLAY_MALFORMED_STREAM;
+            /* `0` is a 2x2 move case. */
+            status = apply_move(reader, decoded, previous, block_x, block_y,
+                                2U, error);
+            if (status != REPLAY_OK) {
+                return status;
+            }
         }
     }
     return REPLAY_OK;
@@ -164,7 +209,6 @@ ReplayStatus codec_movingblocks_verify_frame(
     unsigned y;
     ReplayStatus status = REPLAY_OK;
 
-    (void)previous; /* Motion (the only previous-frame use) is not yet decoded. */
     if (payload == NULL || decoded == NULL || decoded->pixels == NULL ||
         decoded->width == 0U || decoded->height == 0U ||
         (decoded->width & 3U) != 0U || (decoded->height & 3U) != 0U ||
@@ -198,12 +242,12 @@ ReplayStatus codec_movingblocks_verify_frame(
                     break;
                 }
                 if (second == 0U) {
-                    /* `00` is a 4x4 move case -- the next milestone. */
-                    set_error(error, &reader,
-                              "type 7 motion not yet implemented");
-                    status = REPLAY_MALFORMED_STREAM;
+                    /* `00` is a 4x4 move case. */
+                    status = apply_move(&reader, decoded, previous, x, y, 4U,
+                                        error);
                 } else {
-                    status = verify_split(&reader, decoded, x, y, error);
+                    status = verify_split(&reader, decoded, previous, x, y,
+                                          error);
                 }
             }
         }

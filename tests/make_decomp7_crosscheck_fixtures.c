@@ -111,6 +111,23 @@ static int emit_fixture(const char *directory, const char *stem,
     return EXIT_SUCCESS;
 }
 
+/*
+ * Write a move code: the family prefix (`00` stationary, `01`+3 radius-1,
+ * `10`+4 radius-2, `11`+6 radius-4/3/spatial) least-significant bit first. The
+ * caller has already written the move opcode (`00` top-level or `0` split).
+ */
+static void put_move_code(ReplayBitWriter *writer, unsigned family,
+                          unsigned index)
+{
+    static const unsigned family_value[4] = { 0U, 2U, 1U, 3U };
+    static const unsigned index_bits[4] = { 0U, 3U, 4U, 6U };
+
+    replay_bitwriter_write(writer, family_value[family], 2U);
+    if (index_bits[family] != 0U) {
+        replay_bitwriter_write(writer, index, index_bits[family]);
+    }
+}
+
 /* An 8x8 frame of four literal 4x4 data blocks (per-block uniform chroma). Each
  * 90-bit block spans the four-word bitstream load, so this exercises the
  * unaligned multi-block read across block boundaries. */
@@ -191,10 +208,98 @@ static int make_split(const char *directory)
     return EXIT_SUCCESS;
 }
 
+/*
+ * Four 4x4 temporal copies of a gradient previous frame, one per move family:
+ * stationary `00`, radius-2 (-2,0), radius-4 (0,-4) and radius-1 (-1,-1). The
+ * gradient makes every motion vector resolve to distinct pixels, so a wrong
+ * table entry shifts the copied block and the cross-check fails.
+ */
+static int make_temporal(const char *directory)
+{
+    MbPixel previous_pixels[64];
+    MbPixel decoded_pixels[64];
+    MbFrame previous = { 8U, 8U, 8U, previous_pixels };
+    MbFrame decoded = { 8U, 8U, 8U, decoded_pixels };
+    ReplayBuffer payload;
+    unsigned i;
+
+    for (i = 0U; i < 64U; ++i) {
+        previous_pixels[i] = (MbPixel){ (uint8_t)((i * 11U + 1U) & 31U),
+                                        (uint8_t)((i * 3U + 5U) & 31U),
+                                        (uint8_t)((i * 7U + 9U) & 31U) };
+    }
+    replay_buffer_init(&payload);
+    {
+        ReplayBitWriter writer;
+        replay_bitwriter_init(&writer, &payload);
+        /* (0,0) stationary. */
+        replay_bitwriter_write(&writer, 0U, 2U);
+        put_move_code(&writer, 0U, 0U);
+        /* (4,0) radius-2 (-2,0): index 7 -> source (2,0). */
+        replay_bitwriter_write(&writer, 0U, 2U);
+        put_move_code(&writer, 2U, 7U);
+        /* (0,4) radius-4 (0,-4): index 4 -> source (0,0). */
+        replay_bitwriter_write(&writer, 0U, 2U);
+        put_move_code(&writer, 3U, 4U);
+        /* (4,4) radius-1 (-1,-1): index 0 -> source (3,3). */
+        replay_bitwriter_write(&writer, 0U, 2U);
+        put_move_code(&writer, 1U, 0U);
+        CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    }
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size,
+                                          &previous, &decoded, NULL,
+                                          NULL) == REPLAY_OK);
+    CHECK(write_frame(directory, "temporal.previous.yuv555", &previous) ==
+          EXIT_SUCCESS);
+    CHECK(emit_fixture(directory, "temporal", &payload, &decoded) ==
+          EXIT_SUCCESS);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
+/*
+ * A literal 4x4 data block followed by a 4x4 spatial copy of it: the second
+ * block uses the source-defined (-4,0) vector (4x4 spatial index 5), copying
+ * from the reconstruction in progress rather than the previous frame.
+ */
+static int make_spatial(const char *directory)
+{
+    MbPixel source_pixels[32];
+    MbPixel decoded_pixels[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame decoded = { 8U, 4U, 8U, decoded_pixels };
+    ReplayBuffer payload;
+    unsigned i;
+
+    for (i = 0U; i < 32U; ++i) {
+        source_pixels[i] = (MbPixel){ (uint8_t)((i * 5U + 2U) & 31U),
+                                      (uint8_t)((i + 6U) & 31U),
+                                      (uint8_t)((i + 11U) & 31U) };
+    }
+    replay_buffer_init(&payload);
+    {
+        ReplayBitWriter writer;
+        replay_bitwriter_init(&writer, &payload);
+        put_data4x4(&writer, &source, 0U, 0U);
+        /* (4,0) spatial (-4,0): top-level move, family 11 index 56+5. */
+        replay_bitwriter_write(&writer, 0U, 2U);
+        put_move_code(&writer, 3U, 61U);
+        CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    }
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, NULL,
+                                          &decoded, NULL, NULL) == REPLAY_OK);
+    CHECK(emit_fixture(directory, "spatial", &payload, &decoded) ==
+          EXIT_SUCCESS);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     CHECK(make_data(argv[1]) == EXIT_SUCCESS);
     CHECK(make_split(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_temporal(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_spatial(argv[1]) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

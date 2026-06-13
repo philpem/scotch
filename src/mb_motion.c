@@ -103,6 +103,76 @@ ReplayStatus mb_motion_format19_spatial_at(MbMotionBlockSize block_size,
     return REPLAY_OK;
 }
 
+/*
+ * Type 7 shares the 4x4 spatial table (spatial_4x4) but orders its 2x2 spatial
+ * vectors differently (Decomp7/Docs/Stream indices 56..63).
+ */
+static const MbMotionVector spatial_2x2_format7[8] = {
+    { -2, -2, 1 }, { -1, -2, 1 }, { -2, -1, 1 }, { 0, -2, 1 },
+    { 1, -2, 1 },  { 2, -2, 1 },  { -2, 0, 1 },  { -3, 0, 1 }
+};
+
+ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
+                                    MbMotionBlockSize block_size,
+                                    MbMotionVector *motion)
+{
+    uint32_t first;
+    uint32_t second;
+    uint32_t index;
+    ReplayStatus status;
+
+    if (reader == NULL || motion == NULL ||
+        (block_size != MB_MOTION_BLOCK_2X2 &&
+         block_size != MB_MOTION_BLOCK_4X4)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    status = replay_bitreader_read(reader, 1U, &first);
+    if (status == REPLAY_OK) {
+        status = replay_bitreader_read(reader, 1U, &second);
+    }
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    if (first == 0U) {
+        if (second == 0U) {
+            /* `00`: temporal copy from the same place. */
+            *motion = (MbMotionVector){ 0, 0, 0 };
+            return REPLAY_OK;
+        }
+        /* `01` + 3-bit index: temporal radius 1. */
+        status = replay_bitreader_read(reader, 3U, &index);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        *motion = ring_vector(1U, index);
+        return REPLAY_OK;
+    }
+    if (second == 0U) {
+        /* `10` + 4-bit index: temporal radius 2. */
+        status = replay_bitreader_read(reader, 4U, &index);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        *motion = ring_vector(2U, index);
+        return REPLAY_OK;
+    }
+    /* `11` + 6-bit index: temporal radius 4/3, then spatial. */
+    status = replay_bitreader_read(reader, 6U, &index);
+    if (status != REPLAY_OK) {
+        return status;
+    }
+    if (index < 32U) {
+        *motion = ring_vector(4U, index);
+    } else if (index < 56U) {
+        *motion = ring_vector(3U, index - 32U);
+    } else {
+        *motion = block_size == MB_MOTION_BLOCK_4X4
+                      ? spatial_4x4[index - 56U]
+                      : spatial_2x2_format7[index - 56U];
+    }
+    return REPLAY_OK;
+}
+
 static int same_vector(const MbMotionVector *left, const MbMotionVector *right)
 {
     return left->dx == right->dx && left->dy == right->dy &&

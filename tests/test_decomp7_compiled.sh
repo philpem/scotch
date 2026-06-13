@@ -24,5 +24,20 @@ check_fixture()
     cmp "$work/$stem.expected.yuv555" "$work/$stem.acorn.yuv555"
 }
 
+# As check_fixture, but supplies the previous frame for temporal copies.
+check_fixture_prev()
+{
+    stem=$1
+    size=$2
+
+    "$python" "$harness" --decompressor "$decompressor" --codec 7 \
+        --payload "$work/$stem.mb7" --size "$size" --output-layout yuv555 \
+        --previous "$work/$stem.previous.yuv555" --previous-layout yuv555 \
+        --output "$work/$stem.acorn.yuv555"
+    cmp "$work/$stem.expected.yuv555" "$work/$stem.acorn.yuv555"
+}
+
 check_fixture data 8x8
 check_fixture split 4x4
+check_fixture_prev temporal 8x8
+check_fixture spatial 8x4
