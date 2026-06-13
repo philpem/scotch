@@ -1,10 +1,12 @@
 #ifndef MB_ENCODE_H
 #define MB_ENCODE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "replay/mb_frame.h"
 #include "replay/mb_motion.h"
+#include "replay/replay_status.h"
 
 /*
  * Codec-neutral encoder primitives shared by the Moving Blocks family (types
@@ -100,5 +102,81 @@ typedef struct MbEncodeCodec {
                          unsigned ref_y, unsigned size, uint8_t u, uint8_t v,
                          unsigned *total_error, unsigned *first_level);
 } MbEncodeCodec;
+
+/*
+ * Temporal search cache. The motion search is the same regardless of codec, so
+ * the cache that lets it skip a recomputed vector across rate retries lives
+ * here. Each block position holds the best accepted vector at every quality
+ * level, filled once then reused. MB_ENCODE_MAX_LEVELS bounds the per-codec
+ * level count (a codec's MbEncodeCodec.level_count must not exceed it).
+ */
+#define MB_ENCODE_MAX_LEVELS 29U
+
+typedef struct {
+    int8_t dx;
+    int8_t dy;
+    uint16_t error;
+    uint8_t valid;
+} MbEncodeTemporalResult;
+
+typedef struct {
+    MbEncodeTemporalResult levels[MB_ENCODE_MAX_LEVELS];
+    uint8_t ready;
+} MbEncodeTemporalEntry;
+
+typedef struct {
+    unsigned width;
+    unsigned height;
+    size_t count4x4;
+    size_t count2x2;
+    MbEncodeTemporalEntry *entries4x4;
+    MbEncodeTemporalEntry *entries2x2;
+} MbEncodeWorkspace;
+
+/* Allocate the per-position caches for a width x height frame (both /4). */
+ReplayStatus mb_encode_workspace_init(MbEncodeWorkspace *workspace,
+                                      unsigned width, unsigned height);
+
+/* Drop every cached vector so the next frame pair starts cold. */
+void mb_encode_workspace_reset(MbEncodeWorkspace *workspace);
+
+/* Release the caches; safe to call on a zeroed or already-destroyed value. */
+void mb_encode_workspace_destroy(MbEncodeWorkspace *workspace);
+
+/*
+ * The shared Moving Blocks motion search. Each returns nonzero when a copy is
+ * found, setting *motion, *matched_error and incrementing *evaluations per
+ * compared candidate. The temporal searches consult `workspace` (NULL for an
+ * uncached single search); the spatial searches score against `quality`, the
+ * codec-private threshold pointer forwarded to MbEncodeCodec.block_match.
+ */
+int mb_encode_find_temporal4x4(const MbEncodeCodec *enc, const MbFrame *source,
+                               const MbFrame *previous, unsigned x, unsigned y,
+                               uint8_t u, uint8_t v, unsigned loss_level,
+                               MbMotionVector *motion, unsigned *matched_error,
+                               size_t *evaluations,
+                               MbEncodeWorkspace *workspace);
+
+int mb_encode_match_temporal2x2(const MbEncodeCodec *enc, const MbFrame *source,
+                                const MbFrame *previous, unsigned x, unsigned y,
+                                uint8_t u, uint8_t v, unsigned loss_level,
+                                MbMotionVector *motion, unsigned *matched_error,
+                                size_t *evaluations,
+                                MbEncodeWorkspace *workspace);
+
+int mb_encode_find_spatial4x4(const MbEncodeCodec *enc, const MbFrame *source,
+                              const MbFrame *reconstructed, unsigned x,
+                              unsigned y, uint8_t u, uint8_t v,
+                              const void *quality, MbMotionVector *motion,
+                              unsigned *matched_error, size_t *evaluations);
+
+int mb_encode_match_spatial2x2(const MbEncodeCodec *enc, const MbFrame *source,
+                               const MbFrame *reconstructed,
+                               const MbPixel tentative[16],
+                               unsigned available_mask, unsigned parent_x,
+                               unsigned parent_y, unsigned x, unsigned y,
+                               uint8_t u, uint8_t v, const void *quality,
+                               MbMotionVector *motion, unsigned *matched_error,
+                               size_t *evaluations);
 
 #endif
