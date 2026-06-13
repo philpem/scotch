@@ -106,6 +106,24 @@ this file describes the current portable code in `replay-tooling`.
   by types 17 and 19: stationary, temporal, spatial, split-child ordering,
   current-frame reference legality, scan completion, and strict zero padding.
   Codec callbacks retain each format's distinct data-block reconstruction.
+- Encoders for all three Moving Blocks codecs. The shared frame encoder
+  (`mb_encode_frame`, with the grammar-independent copy-family selectors
+  `mb_encode_select_copy4x4/2x2`) drives type 17 (Moving Blocks HQ) and type 19
+  (Super Moving Blocks) as thin adapters. Type 7 (Moving Blocks) has its own
+  frame encoder (`codec_movingblocks_encode_frame`) because its grammar differs
+  (`1` data / `00`/`0` move / `01` split, no distinct stationary opcode, +/-4
+  motion, literal data); it reuses the shared search and copy helpers. All are
+  exposed through `replay-encode --codec 7|17|19` and `replay-make --codec`.
+- A complete type 7 pipeline: literal-data decoder/verifier, the +/-4 motion
+  module (`mb_motion_read_format7`/`write_format7`, format7 vector enumerators),
+  and the encoder above. Type 7's spatial tables are identical to 17/19's
+  (`Docs/Stream` scrambles the 2x2 column; the running Decomp7 is the authority).
+- A standing full-movie cross-check gate (`test_fullmovie_decomp7/17/19`): a
+  multi-frame synthetic scene encoded by the real encoder, decoded frame by
+  frame on the genuine compiled Decomp module and compared byte-for-byte against
+  the encoder's reconstruction. Bands of the scene force each copy family, and
+  the generator asserts the encoder exercised them so the gate cannot silently
+  weaken. This is the coverage the focused fixtures lacked.
 
 ## Verified Claims
 
@@ -135,6 +153,17 @@ this file describes the current portable code in `replay-tooling`.
   plus a mixed split containing stationary, temporal, and same-parent spatial
   2x2 children. The harness's explicit `--previous-layout yuv555` keeps these
   native words distinct from type 19's default `6y5uv` previous-frame layout.
+- The type 7 encoder's output decodes byte-for-byte on compiled Decomp7: hand-
+  laid spatial2x2 fixtures plus encoder-produced key and inter frames, and the
+  full-movie gate. A real 1892-frame movie (`replay-make --codec 7`) plays with
+  correct colour on the RISC OS Replay player. Finding this required fixing a
+  scrambled type 7 2x2 spatial table that the encoder and verifier shared (so
+  self-checks passed) but real Decomp7 did not; see the full-movie gate.
+- Every type 17 and type 19 table entry was probed one-by-one against the
+  compiled Decomp17/19: 288 temporal vectors, 8 4x4-spatial, 8 2x2-spatial, and
+  the luma Huffman table (32 symbols for type 17, 64 for type 19) -- zero
+  mismatches in either codec. All three Moving Blocks codecs are now
+  table-complete-verified against their real Decomp modules.
 
 ## Deliberate Policy Choices
 
@@ -146,6 +175,11 @@ this file describes the current portable code in `replay-tooling`.
   is not required, but its bitrate and quality effects must be measured and
   documented.
 - A 4x4 data candidate wins a bit-cost tie with a split candidate.
+- The lowest-error policy's copy bit-cost tie-break uses `mb_encode_motion_bits`,
+  which models the 17/19 motion coding. The type 7 encoder reuses it as a proxy:
+  its +/-4 codes differ slightly (e.g. stationary is 4 bits, not the proxy's 7),
+  so an equal-error tie may pick a marginally larger type 7 copy. It never
+  affects correctness or the reported/actual size, only rare tie ordering.
 - Raw payload sequences are separate files; no undocumented temporary
   container is invented.
 - Source-matched measurement shows the current ordered policy is 0.366%
@@ -169,17 +203,18 @@ this file describes the current portable code in `replay-tooling`.
   byte-for-byte with an ARM conversion fixture.
 - Acorn's chunk-budget carry and three-level `Cut` escape are not implemented;
   they require real Replay container/chunk accounting.
-- The AE7/Replay container writer is implemented and round-trips through the
-  reader and the compiled Decomp19, but actual RISC OS Player playback is not
-  verified here (no player in this environment). The writer takes already
-  encoded sound bytes and emits the sound-format field, including the
-  `2 <name>` form for the extensible named decompressors (adpcm, GSM, G72x,
-  MPEG). No audio *encoder* is implemented, and the automatic per-chunk time
-  slicing is only correct for format 1 (8-bit VIDC) and uncompressed linear PCM;
-  framed format-2 codecs need explicit per-chunk byte boundaries. The key-frame
-  area is plumbed through
-  (`write_keys`) but no type 19 key-blob generator exists yet, so movies are
-  written with `-1 (no keys)` by default.
+- The AE7/Replay container writer round-trips through the reader and the
+  compiled Decomp modules, and complete movies (types 19, 17 and 7, with audio
+  and a poster) have been played on the RISC OS Replay player and !ARPlayer with
+  correct colour. Player testing is manual on an emulator; it is not automated in
+  this environment. The writer takes already encoded sound bytes and emits the
+  sound-format field, including the `2 <name>` form for the extensible named
+  decompressors (adpcm, GSM, G72x, MPEG). The automatic per-chunk time slicing is
+  only correct for format 1 (8-bit VIDC), IMA ADPCM and uncompressed linear PCM;
+  other framed format-2 codecs need explicit per-chunk byte boundaries. Per-chunk
+  key frames are generated for type 17/19 (`replay-encode --keys-prefix`,
+  `replay-join`/`replay-make --keys`); the default remains `-1 (no keys)`.
+  Whether the player actually *seeks* using them is not yet acceptance-tested.
 - Temporal candidate measurements are cached in an explicit per-frame
   workspace across target-byte retries. One motion scan records the best
   vector for all 29 quality rows. Spatial candidates remain live because they
@@ -204,6 +239,11 @@ this file describes the current portable code in `replay-tooling`.
   historical word interpretation when reproducing the Acorn encode.
 - `LionFishX,ae7` is the validated type 2 YUV intermediate: 16,118,852 bytes,
   SHA-256 `f6a71e4e73dda589d131146ae0de79f4e350fbdcd2fe7bed891e3a39b1b41020`.
-- Type 17 now has a complete portable verifier but no encoder. Types 7 and 20
-  still have only descriptors and notes. Moving Lines remains separate future
-  work.
+- Types 7, 17 and 19 each have a complete portable verifier and encoder, all
+  cross-checked against their compiled Decomp modules. Type 20 (Moving Blocks
+  Beta, 6Y6UV) still has only a descriptor and notes. Moving Lines remains
+  separate future work.
+- Remaining type 7 polish: the motion bit-cost proxy noted under Deliberate
+  Policy Choices (tie-break only). No correctness impact.
+- The RGB->YUV conversion constants remain the one input-chain link not yet
+  cross-checked against an ARM conversion fixture (see first gap).
