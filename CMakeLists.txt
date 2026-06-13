@@ -15,6 +15,7 @@ add_library(replay STATIC
     src/replay_type23.c
     src/replay_ae7_write.c
     src/replay_sound.c
+    src/mb_encode.c
     src/mb_color.c
     src/mb_huffman.c
     src/mb_codec.c

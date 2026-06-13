@@ -1,4 +1,5 @@
 #include "replay/codec_supermovingblocks.h"
+#include "replay/mb_encode.h"
 #include "replay/mb_frame_verify.h"
 #include "replay/mb_motion.h"
 #include "replay/mb_quality.h"
@@ -424,26 +425,10 @@ static ReplayStatus build_data4x4_candidate(
     return status;
 }
 
-typedef enum {
-    SPLIT_MODE_DATA,
-    SPLIT_MODE_STATIONARY,
-    SPLIT_MODE_TEMPORAL,
-    SPLIT_MODE_SPATIAL
-} SplitMode;
-
 typedef struct {
     SplitMode mode;
     MbMotionVector motion;
 } SplitDecision;
-
-typedef struct {
-    SplitMode mode;
-    MbMotionVector motion;
-    unsigned error;
-    unsigned bits;
-    unsigned order;
-    int valid;
-} CopyCandidate;
 
 typedef struct {
     int8_t dx;
@@ -562,38 +547,6 @@ void codec_supermovingblocks_workspace_destroy(
         free(internal);
         workspace->internal = NULL;
     }
-}
-
-static unsigned motion_bits(const MbMotionVector *motion,
-                            MbMotionBlockSize block_size)
-{
-    unsigned magnitude;
-    unsigned body_bits;
-
-    if (motion->spatial != 0) {
-        body_bits = 7U;
-    } else {
-        magnitude = (unsigned)(motion->dx < 0 ? -motion->dx : motion->dx);
-        if ((unsigned)(motion->dy < 0 ? -motion->dy : motion->dy) > magnitude) {
-            magnitude = (unsigned)(motion->dy < 0 ? -motion->dy : motion->dy);
-        }
-        body_bits = magnitude <= 1U ? 5U
-                  : magnitude == 2U ? 6U
-                  : magnitude == 3U ? 7U
-                                    : 10U;
-    }
-    return body_bits + (block_size == MB_MOTION_BLOCK_4X4 ? 2U : 1U);
-}
-
-static int candidate_better(const CopyCandidate *candidate,
-                            const CopyCandidate *best)
-{
-    return candidate->valid &&
-           (!best->valid || candidate->error < best->error ||
-            (candidate->error == best->error &&
-             (candidate->bits < best->bits ||
-              (candidate->bits == best->bits &&
-               candidate->order < best->order))));
 }
 
 /*
@@ -828,12 +781,12 @@ static CopyCandidate select_copy2x2(
             &candidate.motion, &error,
             &stats->temporal2x2_evaluations, workspace)) {
         candidate.error = error;
-        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
+        candidate.bits = mb_encode_motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
         candidate.valid = 1;
         if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
             return candidate;
         }
-        if (candidate_better(&candidate, &selected)) {
+        if (mb_encode_candidate_better(&candidate, &selected)) {
             selected = candidate;
         }
     }
@@ -847,9 +800,9 @@ static CopyCandidate select_copy2x2(
             &candidate.motion, &error,
             &stats->spatial2x2_evaluations)) {
         candidate.error = error;
-        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
+        candidate.bits = mb_encode_motion_bits(&candidate.motion, MB_MOTION_BLOCK_2X2);
         candidate.valid = 1;
-        if (candidate_better(&candidate, &selected)) {
+        if (mb_encode_candidate_better(&candidate, &selected)) {
             selected = candidate;
         }
     }
@@ -1233,12 +1186,12 @@ static CopyCandidate select_copy4x4(
             &candidate.motion, &error,
             &stats->temporal4x4_evaluations, workspace)) {
         candidate.error = error;
-        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
+        candidate.bits = mb_encode_motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
         candidate.valid = 1;
         if (policy == CODEC_SUPERMOVINGBLOCKS_POLICY_ORDERED) {
             return candidate;
         }
-        if (candidate_better(&candidate, &selected)) {
+        if (mb_encode_candidate_better(&candidate, &selected)) {
             selected = candidate;
         }
     }
@@ -1251,9 +1204,9 @@ static CopyCandidate select_copy4x4(
             &candidate.motion, &error,
             &stats->spatial4x4_evaluations)) {
         candidate.error = error;
-        candidate.bits = motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
+        candidate.bits = mb_encode_motion_bits(&candidate.motion, MB_MOTION_BLOCK_4X4);
         candidate.valid = 1;
-        if (candidate_better(&candidate, &selected)) {
+        if (mb_encode_candidate_better(&candidate, &selected)) {
             selected = candidate;
         }
     }
