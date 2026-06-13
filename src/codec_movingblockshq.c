@@ -98,6 +98,146 @@ static uint8_t add5(unsigned prediction, uint8_t residual)
     return (uint8_t)((prediction + residual) & 31U);
 }
 
+static ReplayStatus write_header(ReplayBitWriter *writer, uint32_t opcode,
+                                 uint8_t u, uint8_t v)
+{
+    uint32_t header;
+
+    if (writer == NULL || u > 31U || v > 31U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    /* opcode:2, U:5, V:5 in stream-bit order, matching read_header. */
+    header = opcode | ((uint32_t)u << 2U) | ((uint32_t)v << 7U);
+    return replay_bitwriter_write(writer, header, 12U);
+}
+
+/* Average chroma of a `size`x`size` source block, kept as a 5-bit value. */
+static uint8_t avg5(const MbPixel *pixels, size_t stride, unsigned size,
+                    int chroma_v)
+{
+    unsigned sum = 0U;
+    unsigned n = size * size;
+    unsigned row;
+
+    for (row = 0U; row < size; ++row) {
+        unsigned col;
+
+        for (col = 0U; col < size; ++col) {
+            const MbPixel *p = &pixels[(size_t)row * stride + col];
+
+            sum += chroma_v ? p->v : p->u;
+        }
+    }
+    return (uint8_t)(((sum + n / 2U) / n) & 31U);
+}
+
+/*
+ * Encode one 4x4 source block as a data-coded 4x4. Luma is lossless: the normal
+ * 32-symbol table codes every residual, so each reconstructed pixel equals the
+ * source. Predictions follow already-reconstructed neighbours exactly as the
+ * decoder does, and the carried predictor becomes the block's truncated mean.
+ */
+ReplayStatus codec_movingblockshq_encode_data4x4(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor)
+{
+    uint8_t u;
+    uint8_t v;
+    unsigned sum = 0U;
+    unsigned row;
+    ReplayStatus status;
+
+    if (writer == NULL || source == NULL || recon == NULL ||
+        predictor == NULL || stride < 4U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    u = avg5(source, stride, 4U, 0);
+    v = avg5(source, stride, 4U, 1);
+    status = write_header(writer, UINT32_C(1), u, v);
+    for (row = 0U; status == REPLAY_OK && row < 4U; ++row) {
+        unsigned column;
+
+        for (column = 0U; status == REPLAY_OK && column < 4U; ++column) {
+            MbPixel *out = &recon[(size_t)row * stride + column];
+            unsigned target = source[(size_t)row * stride + column].y;
+            unsigned prediction;
+            uint8_t residual;
+
+            if (row == 0U) {
+                prediction = column == 0U ? predictor->luma
+                                          : recon[column - 1U].y;
+            } else if (column == 0U) {
+                prediction = recon[(size_t)(row - 1U) * stride].y;
+            } else {
+                prediction =
+                    ((unsigned)recon[(size_t)row * stride + column - 1U].y +
+                     (unsigned)recon[(size_t)(row - 1U) * stride + column].y)
+                    >> 1U;
+            }
+            residual = (uint8_t)((target - prediction) & 31U);
+            status = mb_huffman_write(writer,
+                                      &codec_movingblockshq_luma_huffman,
+                                      residual);
+            out->y = (uint8_t)((prediction + residual) & 31U);
+            out->u = u;
+            out->v = v;
+            sum += out->y;
+        }
+    }
+    if (status == REPLAY_OK) {
+        predictor->luma = (uint8_t)(sum >> 4U);
+    }
+    return status;
+}
+
+/* Encode one 2x2 source block as a data-coded 2x2 (split child). */
+ReplayStatus codec_movingblockshq_encode_data2x2(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor)
+{
+    uint8_t u;
+    uint8_t v;
+    unsigned sum = 0U;
+    unsigned index;
+    ReplayStatus status;
+
+    if (writer == NULL || source == NULL || recon == NULL ||
+        predictor == NULL || stride < 2U) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    u = avg5(source, stride, 2U, 0);
+    v = avg5(source, stride, 2U, 1);
+    status = write_header(writer, UINT32_C(2), u, v);
+    for (index = 0U; status == REPLAY_OK && index < 4U; ++index) {
+        unsigned row = index >> 1U;
+        unsigned column = index & 1U;
+        MbPixel *out = &recon[(size_t)row * stride + column];
+        unsigned target = source[(size_t)row * stride + column].y;
+        unsigned prediction;
+        uint8_t residual;
+
+        if (index == 0U) {
+            prediction = predictor->luma;
+        } else if (index == 1U || index == 2U) {
+            prediction = recon[0].y;
+        } else {
+            prediction = ((unsigned)recon[1].y +
+                          (unsigned)recon[stride].y) >> 1U;
+        }
+        residual = (uint8_t)((target - prediction) & 31U);
+        status = mb_huffman_write(writer, &codec_movingblockshq_luma_huffman,
+                                  residual);
+        out->y = (uint8_t)((prediction + residual) & 31U);
+        out->u = u;
+        out->v = v;
+        sum += out->y;
+    }
+    if (status == REPLAY_OK) {
+        predictor->luma = (uint8_t)(sum >> 2U);
+    }
+    return status;
+}
+
 ReplayStatus codec_movingblockshq_decode_data4x4(
     ReplayBitReader *reader, MbPredictor *predictor,
     MbPixel *pixels, size_t stride, MbVerifyError *error)

@@ -214,9 +214,78 @@ static int test_split_copy_modes(void)
     return EXIT_SUCCESS;
 }
 
+/* Encode a source block, decode it back, and confirm lossless luma, the chosen
+ * average chroma, and that the encoder's reconstruction and predictor match the
+ * decoder's exactly. */
+static int test_encode_roundtrip(void)
+{
+    MbPixel source[16];
+    MbPixel recon[16];
+    MbPixel decoded[16];
+    MbPredictor enc = { 7U };
+    MbPredictor dec = { 7U };
+    ReplayBuffer payload;
+    ReplayBitWriter writer;
+    ReplayBitReader reader;
+    unsigned i;
+
+    for (i = 0U; i < 16U; ++i) {
+        source[i].y = (uint8_t)((i * 3U + 5U) & 31U); /* varying luma */
+        source[i].u = 10U;                            /* constant chroma */
+        source[i].v = 20U;
+    }
+    replay_buffer_init(&payload);
+    replay_bitwriter_init(&writer, &payload);
+    CHECK(codec_movingblockshq_encode_data4x4(&writer, source, recon, 4U,
+                                              &enc) == REPLAY_OK);
+    replay_bitwriter_flush_zero(&writer);
+    replay_bitreader_init(&reader, payload.data, payload.size);
+    CHECK(codec_movingblockshq_decode_data4x4(&reader, &dec, decoded, 4U,
+                                              NULL) == REPLAY_OK);
+    for (i = 0U; i < 16U; ++i) {
+        CHECK(decoded[i].y == source[i].y); /* lossless luma */
+        CHECK(decoded[i].u == 10U && decoded[i].v == 20U);
+        CHECK(same_pixel(&decoded[i], &recon[i])); /* encoder recon == decode */
+    }
+    CHECK(enc.luma == dec.luma);
+    replay_buffer_free(&payload);
+
+    /* 2x2 with non-uniform chroma exercises the average. */
+    {
+        MbPixel src2[4] = {
+            { 3U, 8U, 21U }, { 9U, 9U, 22U },
+            { 30U, 11U, 24U }, { 1U, 12U, 25U }
+        };
+        MbPixel rec2[4];
+        MbPixel dec2[4];
+        MbPredictor e2 = { 15U };
+        MbPredictor d2 = { 15U };
+        uint8_t eu = (uint8_t)((8U + 9U + 11U + 12U + 2U) / 4U);
+        uint8_t ev = (uint8_t)((21U + 22U + 24U + 25U + 2U) / 4U);
+
+        replay_buffer_init(&payload);
+        replay_bitwriter_init(&writer, &payload);
+        CHECK(codec_movingblockshq_encode_data2x2(&writer, src2, rec2, 2U,
+                                                  &e2) == REPLAY_OK);
+        replay_bitwriter_flush_zero(&writer);
+        replay_bitreader_init(&reader, payload.data, payload.size);
+        CHECK(codec_movingblockshq_decode_data2x2(&reader, &d2, dec2, 2U,
+                                                  NULL) == REPLAY_OK);
+        for (i = 0U; i < 4U; ++i) {
+            CHECK(dec2[i].y == src2[i].y);
+            CHECK(dec2[i].u == eu && dec2[i].v == ev);
+            CHECK(same_pixel(&dec2[i], &rec2[i]));
+        }
+        CHECK(e2.luma == d2.luma);
+        replay_buffer_free(&payload);
+    }
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4_zero_residual() == EXIT_SUCCESS);
+    CHECK(test_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_data2x2_wrap() == EXIT_SUCCESS);
     CHECK(test_table_and_truncation() == EXIT_SUCCESS);
     CHECK(test_complete_data_frame() == EXIT_SUCCESS);

@@ -24,6 +24,21 @@ ReplayStatus codec_movingblockshq_decode_data2x2(
     ReplayBitReader *reader, MbPredictor *predictor,
     MbPixel *pixels, size_t stride, MbVerifyError *error);
 
+/*
+ * Encode one source block (YUV555) as a data-coded 4x4 or split-child 2x2,
+ * choosing the block's 5-bit average chroma and Huffman-coding the luma
+ * prediction residuals (lossless luma). `recon` receives the reconstructed
+ * block and `predictor` is carried to the next data block, mirroring the
+ * matching decode functions so encode/decode round-trip exactly.
+ */
+ReplayStatus codec_movingblockshq_encode_data4x4(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor);
+
+ReplayStatus codec_movingblockshq_encode_data2x2(
+    ReplayBitWriter *writer, const MbPixel *source, MbPixel *recon,
+    size_t stride, MbPredictor *predictor);
+
 /* Decode and strictly validate one complete type 17 frame payload. */
 ReplayStatus codec_movingblockshq_verify_frame(
     const uint8_t *payload, size_t payload_size,
