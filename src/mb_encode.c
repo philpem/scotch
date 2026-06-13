@@ -4,6 +4,79 @@
 #include <stdlib.h>
 #include <string.h>
 
+void mb_encode_copy_motion(const MbFrame *reference, MbFrame *destination,
+                           unsigned x, unsigned y, unsigned size,
+                           const MbMotionVector *motion)
+{
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+    unsigned row;
+
+    for (row = 0U; row < size; ++row) {
+        unsigned column;
+        for (column = 0U; column < size; ++column) {
+            destination->pixels[(size_t)(y + row) * destination->stride +
+                                x + column] =
+                reference->pixels[(size_t)(source_y + row) * reference->stride +
+                                  source_x + column];
+        }
+    }
+}
+
+void mb_encode_fill_tentative_copy2x2(
+    const MbFrame *reference, const MbFrame *reconstructed,
+    MbPixel tentative[16], unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, const MbMotionVector *motion,
+    unsigned *available_mask)
+{
+    unsigned source_x = (unsigned)((int)x + motion->dx);
+    unsigned source_y = (unsigned)((int)y + motion->dy);
+    unsigned row;
+
+    for (row = 0U; row < 2U; ++row) {
+        unsigned column;
+        for (column = 0U; column < 2U; ++column) {
+            unsigned local = (y + row - parent_y) * 4U + x + column - parent_x;
+            const MbPixel *pixel;
+
+            if (motion->spatial != 0) {
+                pixel = mb_encode_split_spatial_pixel(
+                    reconstructed, tentative, *available_mask,
+                    parent_x, parent_y, source_x + column, source_y + row);
+            } else {
+                pixel = &reference->pixels[(size_t)(source_y + row) *
+                                               reference->stride +
+                                           source_x + column];
+            }
+            tentative[local] = *pixel;
+            *available_mask |= 1U << local;
+        }
+    }
+}
+
+ReplayStatus mb_encode_append_candidate(ReplayBitWriter *writer,
+                                        const ReplayBuffer *buffer, size_t bits)
+{
+    ReplayBitReader reader;
+
+    replay_bitreader_init(&reader, buffer->data, buffer->size);
+    while (bits != 0U) {
+        unsigned count = bits > 32U ? 32U : (unsigned)bits;
+        uint32_t value;
+        ReplayStatus status = replay_bitreader_read(&reader, count, &value);
+
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        status = replay_bitwriter_write(writer, value, count);
+        if (status != REPLAY_OK) {
+            return status;
+        }
+        bits -= count;
+    }
+    return REPLAY_OK;
+}
+
 unsigned mb_encode_motion_bits(const MbMotionVector *motion,
                                MbMotionBlockSize block_size)
 {

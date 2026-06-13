@@ -369,35 +369,6 @@ static void reconstruct_data2x2(const MbFrame *source, MbFrame *reconstructed,
     }
 }
 
-static ReplayStatus append_candidate(ReplayBitWriter *writer,
-                                     const ReplayBuffer *buffer, size_t bits)
-{
-    ReplayBitReader reader;
-
-    /*
-     * Candidate buffers are flushed to whole bytes for simple ownership, but
-     * only `bits` meaningful bits belong to the stream. Re-reading that exact
-     * count prevents a candidate's temporary zero padding becoming an
-     * accidental gap before the next block.
-     */
-    replay_bitreader_init(&reader, buffer->data, buffer->size);
-    while (bits != 0U) {
-        unsigned count = bits > 32U ? 32U : (unsigned)bits;
-        uint32_t value;
-        ReplayStatus status = replay_bitreader_read(&reader, count, &value);
-
-        if (status != REPLAY_OK) {
-            return status;
-        }
-        status = replay_bitwriter_write(writer, value, count);
-        if (status != REPLAY_OK) {
-            return status;
-        }
-        bits -= count;
-    }
-    return REPLAY_OK;
-}
-
 static ReplayStatus build_data4x4_candidate(
     const MbFrame *source, unsigned x, unsigned y,
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
@@ -622,37 +593,6 @@ static void fill_tentative_data2x2(const MbFrame *source,
     }
 }
 
-static void fill_tentative_copy2x2(
-    const MbFrame *reference, const MbFrame *reconstructed,
-    MbPixel tentative[16], unsigned parent_x, unsigned parent_y,
-    unsigned x, unsigned y, const MbMotionVector *motion,
-    unsigned *available_mask)
-{
-    unsigned source_x = (unsigned)((int)x + motion->dx);
-    unsigned source_y = (unsigned)((int)y + motion->dy);
-    unsigned row;
-
-    for (row = 0U; row < 2U; ++row) {
-        unsigned column;
-        for (column = 0U; column < 2U; ++column) {
-            unsigned local = (y + row - parent_y) * 4U + x + column - parent_x;
-            const MbPixel *pixel;
-
-            if (motion->spatial != 0) {
-                pixel = mb_encode_split_spatial_pixel(
-                    reconstructed, tentative, *available_mask,
-                    parent_x, parent_y, source_x + column, source_y + row);
-            } else {
-                pixel = &reference->pixels[(size_t)(source_y + row) *
-                                               reference->stride +
-                                           source_x + column];
-            }
-            tentative[local] = *pixel;
-            *available_mask |= 1U << local;
-        }
-    }
-}
-
 static ReplayStatus build_split_data_candidate(
     const MbFrame *source, unsigned x, unsigned y,
     const MbFrame *previous, const MbFrame *reconstructed,
@@ -704,7 +644,7 @@ static ReplayStatus build_split_data_candidate(
         decisions[block].motion = selected.motion;
         if (selected.mode == SPLIT_MODE_STATIONARY) {
             status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
-            fill_tentative_copy2x2(
+            mb_encode_fill_tentative_copy2x2(
                 previous, reconstructed, tentative, x, y, block_x, block_y,
                 &decisions[block].motion, &available_mask);
         } else if (selected.mode == SPLIT_MODE_TEMPORAL) {
@@ -714,7 +654,7 @@ static ReplayStatus build_split_data_candidate(
                     &writer, MB_MOTION_BLOCK_2X2,
                     &decisions[block].motion);
             }
-            fill_tentative_copy2x2(
+            mb_encode_fill_tentative_copy2x2(
                 previous, reconstructed, tentative, x, y, block_x, block_y,
                 &decisions[block].motion, &available_mask);
         } else if (selected.mode == SPLIT_MODE_SPATIAL) {
@@ -724,7 +664,7 @@ static ReplayStatus build_split_data_candidate(
                     &writer, MB_MOTION_BLOCK_2X2,
                     &decisions[block].motion);
             }
-            fill_tentative_copy2x2(
+            mb_encode_fill_tentative_copy2x2(
                 reconstructed, reconstructed, tentative, x, y,
                 block_x, block_y, &decisions[block].motion,
                 &available_mask);
@@ -757,45 +697,6 @@ static int block_matches_data_reconstruction(const MbFrame *source,
     /* `u` and `v` are the block averages a data block would actually decode. */
     return mb_quality_match_format19(
         source, x, y, previous, x, y, 4U, u, v, quality, error);
-}
-
-static void copy_temporal4x4(const MbFrame *previous, MbFrame *reconstructed,
-                             unsigned x, unsigned y,
-                             const MbMotionVector *motion)
-{
-    unsigned row;
-    unsigned source_x = (unsigned)((int)x + motion->dx);
-    unsigned source_y = (unsigned)((int)y + motion->dy);
-
-    for (row = 0; row < 4U; ++row) {
-        unsigned column;
-        for (column = 0; column < 4U; ++column) {
-            reconstructed->pixels[(size_t)(y + row) * reconstructed->stride +
-                                  x + column] =
-                previous->pixels[(size_t)(source_y + row) * previous->stride +
-                                 source_x + column];
-        }
-    }
-}
-
-static void copy_spatial4x4(MbFrame *reconstructed, unsigned x, unsigned y,
-                            const MbMotionVector *motion)
-{
-    unsigned row;
-    unsigned source_x = (unsigned)((int)x + motion->dx);
-    unsigned source_y = (unsigned)((int)y + motion->dy);
-
-    /* Legal spatial vectors point backward, so source pixels are final already. */
-    for (row = 0; row < 4U; ++row) {
-        unsigned column;
-        for (column = 0; column < 4U; ++column) {
-            reconstructed->pixels[(size_t)(y + row) * reconstructed->stride +
-                                  x + column] =
-                reconstructed->pixels[(size_t)(source_y + row) *
-                                          reconstructed->stride +
-                                      source_x + column];
-        }
-    }
 }
 
 static CopyCandidate select_copy4x4(
@@ -862,41 +763,17 @@ static CopyCandidate select_copy4x4(
     return selected;
 }
 
-static void copy_block4x4(const MbFrame *source, MbFrame *destination,
-                          unsigned x, unsigned y)
-{
-    unsigned row;
-
-    for (row = 0; row < 4U; ++row) {
-        unsigned column;
-        for (column = 0; column < 4U; ++column) {
-            destination->pixels[(size_t)(y + row) * destination->stride +
-                                x + column] =
-                source->pixels[(size_t)(y + row) * source->stride +
-                               x + column];
-        }
-    }
-}
-
 static void copy_decision2x2(const MbFrame *previous, MbFrame *reconstructed,
                              unsigned x, unsigned y,
                              const SplitDecision *decision)
 {
+    /* Spatial children reference the frame in progress; the rest the previous
+       frame. A zero vector reproduces the stationary same-position copy. */
     const MbFrame *reference =
         decision->mode == SPLIT_MODE_SPATIAL ? reconstructed : previous;
-    unsigned source_x = (unsigned)((int)x + decision->motion.dx);
-    unsigned source_y = (unsigned)((int)y + decision->motion.dy);
-    unsigned row;
 
-    for (row = 0U; row < 2U; ++row) {
-        unsigned column;
-        for (column = 0U; column < 2U; ++column) {
-            reconstructed->pixels[(size_t)(y + row) * reconstructed->stride +
-                                  x + column] =
-                reference->pixels[(size_t)(source_y + row) * reference->stride +
-                                  source_x + column];
-        }
-    }
+    mb_encode_copy_motion(reference, reconstructed, x, y, 2U,
+                          &decision->motion);
 }
 
 static int valid_frame_pair(const MbFrame *source,
@@ -1002,7 +879,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
             if (copy.mode == SPLIT_MODE_STATIONARY) {
                 status = replay_bitwriter_write(&writer, UINT32_C(0), 2U);
                 if (status == REPLAY_OK) {
-                    copy_block4x4(previous, reconstructed, x, y);
+                    mb_encode_copy_motion(previous, reconstructed, x, y, 4U, &(MbMotionVector){ 0, 0, 0 });
                     ++local_stats.stationary4x4_blocks;
                 }
             } else if (copy.mode == SPLIT_MODE_TEMPORAL) {
@@ -1012,8 +889,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                         &writer, MB_MOTION_BLOCK_4X4, &copy.motion);
                 }
                 if (status == REPLAY_OK) {
-                    copy_temporal4x4(
-                        previous, reconstructed, x, y, &copy.motion);
+                    mb_encode_copy_motion(previous, reconstructed, x, y, 4U, &copy.motion);
                     ++local_stats.temporal4x4_blocks;
                 }
             } else if (copy.mode == SPLIT_MODE_SPATIAL) {
@@ -1023,7 +899,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                         &writer, MB_MOTION_BLOCK_4X4, &copy.motion);
                 }
                 if (status == REPLAY_OK) {
-                    copy_spatial4x4(reconstructed, x, y, &copy.motion);
+                    mb_encode_copy_motion(reconstructed, reconstructed, x, y, 4U, &copy.motion);
                     ++local_stats.spatial4x4_blocks;
                 }
             } else {
@@ -1057,7 +933,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                     };
                     unsigned block;
 
-                    status = append_candidate(
+                    status = mb_encode_append_candidate(
                         &writer, &split_candidate, split_bits);
                     /* Commit both the selected bits and their resulting state. */
                     predictor = split_predictor;
@@ -1098,7 +974,7 @@ ReplayStatus codec_supermovingblocks_encode_frame(
                         ++local_stats.split4x4_blocks;
                     }
                 } else if (status == REPLAY_OK) {
-                    status = append_candidate(
+                    status = mb_encode_append_candidate(
                         &writer, &data_candidate, data_bits);
                     predictor = data_predictor;
                     if (status == REPLAY_OK) {

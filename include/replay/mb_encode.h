@@ -6,6 +6,8 @@
 
 #include "replay/mb_frame.h"
 #include "replay/mb_motion.h"
+#include "replay/replay_bitstream.h"
+#include "replay/replay_buffer.h"
 #include "replay/replay_status.h"
 
 /*
@@ -178,5 +180,36 @@ int mb_encode_match_spatial2x2(const MbEncodeCodec *enc, const MbFrame *source,
                                uint8_t u, uint8_t v, const void *quality,
                                MbMotionVector *motion, unsigned *matched_error,
                                size_t *evaluations);
+
+/*
+ * Reconstruct a size x size copy block: write `destination` at (x, y) from
+ * `reference` at the motion offset. This covers every copy family -- temporal
+ * (reference = previous frame), spatial (reference = the reconstruction in
+ * progress), and stationary (previous frame with a zero vector) -- at both 4x4
+ * and 2x2, identically for types 17 and 19.
+ */
+void mb_encode_copy_motion(const MbFrame *reference, MbFrame *destination,
+                           unsigned x, unsigned y, unsigned size,
+                           const MbMotionVector *motion);
+
+/*
+ * Record a 2x2 copy child's decoded pixels in the parent's tentative 4x4
+ * reconstruction so a later spatial child can reference them. Spatial sources
+ * inside the parent read earlier tentative pixels; temporal/stationary sources
+ * and out-of-parent spatial sources read finished frames.
+ */
+void mb_encode_fill_tentative_copy2x2(
+    const MbFrame *reference, const MbFrame *reconstructed,
+    MbPixel tentative[16], unsigned parent_x, unsigned parent_y,
+    unsigned x, unsigned y, const MbMotionVector *motion,
+    unsigned *available_mask);
+
+/*
+ * Append `bits` meaningful bits of a byte-padded candidate buffer to the live
+ * stream, dropping the candidate's own zero padding.
+ */
+ReplayStatus mb_encode_append_candidate(ReplayBitWriter *writer,
+                                        const ReplayBuffer *buffer,
+                                        size_t bits);
 
 #endif
