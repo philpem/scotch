@@ -1,6 +1,7 @@
 #include "test_common.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #include "replay/codec_movingblocks.h"
 
@@ -178,6 +179,68 @@ static int test_spatial_copy(void)
     return EXIT_SUCCESS;
 }
 
+/* Encode a frame, decode the stream the encoder produced, and confirm the
+ * decode matches the encoder's own reconstruction bit-for-bit -- the core
+ * encoder/decoder contract. Runs a key frame then an inter frame so data,
+ * split, spatial, stationary and temporal paths are all exercised. */
+static int encode_and_check(const MbFrame *source, const MbFrame *previous,
+                            const CodecMovingBlocksEncodeOptions *options,
+                            MbFrame *reconstructed, MbPixel *decoded_pixels)
+{
+    ReplayBuffer payload;
+    MbFrame decoded = { source->width, source->height, source->width,
+                        decoded_pixels };
+    size_t pixels = (size_t)source->width * source->height;
+
+    replay_buffer_init(&payload);
+    CHECK(codec_movingblocks_encode_frame(source, previous, options, &payload,
+                                          reconstructed, NULL) == REPLAY_OK);
+    CHECK(codec_movingblocks_verify_frame(payload.data, payload.size, previous,
+                                          &decoded, NULL, NULL) == REPLAY_OK);
+    CHECK(memcmp(decoded_pixels, reconstructed->pixels,
+                 pixels * sizeof(MbPixel)) == 0);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
+static int test_encode_round_trip(void)
+{
+    enum { W = 16U, H = 16U };
+    MbPixel source_pixels[W * H];
+    MbPixel recon_pixels[W * H];
+    MbPixel previous_pixels[W * H];
+    MbPixel decoded_pixels[W * H];
+    MbFrame source = { W, H, W, source_pixels };
+    MbFrame reconstructed = { W, H, W, recon_pixels };
+    MbFrame previous = { W, H, W, previous_pixels };
+    CodecMovingBlocksEncodeOptions options;
+    unsigned i;
+
+    for (i = 0U; i < W * H; ++i) {
+        source_pixels[i] = (MbPixel){ (uint8_t)((i * 3U) & 31U),
+                                      (uint8_t)((i / W) & 31U),
+                                      (uint8_t)((i % W) & 31U) };
+    }
+    /* Key frame: no previous, so only data/spatial/split are legal. */
+    options = (CodecMovingBlocksEncodeOptions){ 0, 0, 1, 1, 0U,
+                                                MB_ENCODE_POLICY_LOWEST_ERROR,
+                                                NULL };
+    CHECK(encode_and_check(&source, NULL, &options, &reconstructed,
+                           decoded_pixels) == EXIT_SUCCESS);
+
+    /* Inter frame: previous is the key reconstruction; nudge a few pixels so
+     * the encoder mixes copies with fresh data. */
+    memcpy(previous_pixels, recon_pixels, sizeof(previous_pixels));
+    for (i = 0U; i < W * H; i += 11U) {
+        source_pixels[i].y = (uint8_t)((source_pixels[i].y + 5U) & 31U);
+    }
+    options.allow_stationary = 1;
+    options.allow_temporal = 1;
+    CHECK(encode_and_check(&source, &previous, &options, &reconstructed,
+                           decoded_pixels) == EXIT_SUCCESS);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4() == EXIT_SUCCESS);
@@ -185,5 +248,6 @@ int main(void)
     CHECK(test_temporal_needs_previous() == EXIT_SUCCESS);
     CHECK(test_temporal_stationary() == EXIT_SUCCESS);
     CHECK(test_spatial_copy() == EXIT_SUCCESS);
+    CHECK(test_encode_round_trip() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

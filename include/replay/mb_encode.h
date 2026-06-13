@@ -284,6 +284,28 @@ typedef struct {
 } MbEncodeOptions;
 
 /*
+ * Choose the copy family for one 4x4 block (or 2x2 split child). The search and
+ * scoring are grammar-independent -- the returned CopyCandidate names the mode
+ * (data, stationary, temporal, spatial) and, for copies, the vector -- so the
+ * per-codec frame encoders share these regardless of how they emit the choice.
+ * `quality` is the codec-private threshold pointer forwarded to block_match.
+ */
+CopyCandidate mb_encode_select_copy4x4(
+    const MbEncodeCodec *enc, const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, unsigned x, unsigned y, uint8_t u, uint8_t v,
+    int allow_stationary, int allow_temporal, int allow_spatial,
+    const void *quality, unsigned loss_level, MbEncodePolicy policy,
+    MbEncodeStats *stats, MbEncodeWorkspace *workspace);
+
+CopyCandidate mb_encode_select_copy2x2(
+    const MbEncodeCodec *enc, const MbFrame *source, const MbFrame *previous,
+    const MbFrame *reconstructed, const MbPixel tentative[16],
+    unsigned available_mask, unsigned parent_x, unsigned parent_y, unsigned x,
+    unsigned y, uint8_t u, uint8_t v, int allow_stationary, int allow_temporal,
+    int allow_spatial, const void *quality, unsigned loss_level,
+    MbEncodePolicy policy, MbEncodeStats *stats, MbEncodeWorkspace *workspace);
+
+/*
  * Encode one frame. `search` supplies the motion tables and quality model,
  * `data` the codec's data-block coding. `source` holds quantised working pixels;
  * `reconstructed` is filled with exactly what a decoder retains and is the

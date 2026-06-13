@@ -173,6 +173,160 @@ ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
     return REPLAY_OK;
 }
 
+/* Enumerate the type 7 temporal vectors in non-decreasing code length: radius
+ * 1 (`01`, 5-bit) then 2 (`10`, 6-bit) then radii 4 and 3 (`11`, 8-bit), the
+ * shared encoder's preferred-shortest order. The (0,0) stationary code is the
+ * separate 2-bit `00` and is not enumerated here. */
+ReplayStatus mb_motion_format7_temporal_at(unsigned index,
+                                           MbMotionVector *motion)
+{
+    if (motion == NULL) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    if (index < 8U) {
+        *motion = ring_vector(1U, index);
+        return REPLAY_OK;
+    }
+    if (index < 24U) {
+        *motion = ring_vector(2U, index - 8U);
+        return REPLAY_OK;
+    }
+    if (index < 56U) {
+        *motion = ring_vector(4U, index - 24U);
+        return REPLAY_OK;
+    }
+    if (index < 80U) {
+        *motion = ring_vector(3U, index - 56U);
+        return REPLAY_OK;
+    }
+    return REPLAY_INVALID_ARGUMENT;
+}
+
+ReplayStatus mb_motion_format7_spatial_at(MbMotionBlockSize block_size,
+                                          unsigned index,
+                                          MbMotionVector *motion)
+{
+    if (motion == NULL || index >= 8U ||
+        (block_size != MB_MOTION_BLOCK_2X2 &&
+         block_size != MB_MOTION_BLOCK_4X4)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    *motion = block_size == MB_MOTION_BLOCK_4X4
+                  ? spatial_4x4[index]
+                  : spatial_2x2_format7[index];
+    return REPLAY_OK;
+}
+
+/* Reverse a ring vector to its index, mirroring ring_vector's order. */
+static int ring_index(unsigned radius, const MbMotionVector *motion,
+                      unsigned *index)
+{
+    unsigned count = radius * 8U;
+    unsigned i;
+
+    for (i = 0U; i < count; ++i) {
+        MbMotionVector candidate = ring_vector(radius, i);
+
+        if (candidate.dx == motion->dx && candidate.dy == motion->dy) {
+            *index = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Reverse a type 7 spatial vector to its table index. */
+static int spatial_index_format7(MbMotionBlockSize block_size,
+                                 const MbMotionVector *motion, unsigned *index)
+{
+    const MbMotionVector *table = block_size == MB_MOTION_BLOCK_4X4
+                                      ? spatial_4x4
+                                      : spatial_2x2_format7;
+    unsigned i;
+
+    for (i = 0U; i < 8U; ++i) {
+        if (table[i].dx == motion->dx && table[i].dy == motion->dy) {
+            *index = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Write a type 7 move code (family then index, least-significant bit first)
+ * after the caller has emitted the move opcode. The vector's radius selects the
+ * family; spatial vectors take the `11` family indices 56..63.
+ */
+ReplayStatus mb_motion_write_format7(ReplayBitWriter *writer,
+                                     MbMotionBlockSize block_size,
+                                     const MbMotionVector *motion)
+{
+    unsigned index;
+    unsigned radius;
+    int adx;
+    int ady;
+    ReplayStatus status;
+
+    if (writer == NULL || motion == NULL ||
+        (block_size != MB_MOTION_BLOCK_2X2 &&
+         block_size != MB_MOTION_BLOCK_4X4)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    if (motion->spatial != 0) {
+        if (!spatial_index_format7(block_size, motion, &index)) {
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        status = replay_bitwriter_write(writer, 3U, 2U); /* `11` */
+        return status == REPLAY_OK
+                   ? replay_bitwriter_write(writer, 56U + index, 6U)
+                   : status;
+    }
+    adx = motion->dx < 0 ? -motion->dx : motion->dx;
+    ady = motion->dy < 0 ? -motion->dy : motion->dy;
+    radius = (unsigned)(adx > ady ? adx : ady);
+    if (radius == 0U) {
+        return replay_bitwriter_write(writer, 0U, 2U); /* `00` stationary */
+    }
+    if (radius == 1U) {
+        if (!ring_index(1U, motion, &index)) {
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        status = replay_bitwriter_write(writer, 2U, 2U); /* `01` */
+        return status == REPLAY_OK
+                   ? replay_bitwriter_write(writer, index, 3U)
+                   : status;
+    }
+    if (radius == 2U) {
+        if (!ring_index(2U, motion, &index)) {
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        status = replay_bitwriter_write(writer, 1U, 2U); /* `10` */
+        return status == REPLAY_OK
+                   ? replay_bitwriter_write(writer, index, 4U)
+                   : status;
+    }
+    if (radius == 3U) {
+        if (!ring_index(3U, motion, &index)) {
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        status = replay_bitwriter_write(writer, 3U, 2U); /* `11` */
+        return status == REPLAY_OK
+                   ? replay_bitwriter_write(writer, 32U + index, 6U)
+                   : status;
+    }
+    if (radius == 4U) {
+        if (!ring_index(4U, motion, &index)) {
+            return REPLAY_INVALID_ARGUMENT;
+        }
+        status = replay_bitwriter_write(writer, 3U, 2U); /* `11` */
+        return status == REPLAY_OK
+                   ? replay_bitwriter_write(writer, index, 6U)
+                   : status;
+    }
+    return REPLAY_INVALID_ARGUMENT;
+}
+
 static int same_vector(const MbMotionVector *left, const MbMotionVector *right)
 {
     return left->dx == right->dx && left->dy == right->dy &&

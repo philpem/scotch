@@ -52,6 +52,56 @@ static int round_trip_motion(int dx, int dy, int spatial,
     return EXIT_SUCCESS;
 }
 
+/* Write a type 7 vector and read it back, checking the move code round-trips. */
+static int round_trip_format7(const MbMotionVector *expected,
+                              MbMotionBlockSize block_size)
+{
+    ReplayBuffer buffer;
+    ReplayBitWriter writer;
+    ReplayBitReader reader;
+    MbMotionVector actual;
+
+    replay_buffer_init(&buffer);
+    replay_bitwriter_init(&writer, &buffer);
+    CHECK(mb_motion_write_format7(&writer, block_size, expected) == REPLAY_OK);
+    CHECK(replay_bitwriter_flush_zero(&writer) == REPLAY_OK);
+    replay_bitreader_init(&reader, buffer.data, buffer.size);
+    CHECK(mb_motion_read_format7(&reader, block_size, &actual) == REPLAY_OK);
+    CHECK(actual.dx == expected->dx && actual.dy == expected->dy &&
+          actual.spatial == expected->spatial);
+    replay_buffer_free(&buffer);
+    return EXIT_SUCCESS;
+}
+
+/* Every enumerated type 7 vector, plus stationary, must survive write->read. */
+static int test_format7_round_trip(void)
+{
+    MbMotionVector stationary = { 0, 0, 0 };
+    MbMotionBlockSize sizes[2] = { MB_MOTION_BLOCK_4X4, MB_MOTION_BLOCK_2X2 };
+    unsigned s;
+    unsigned index;
+
+    for (s = 0U; s < 2U; ++s) {
+        CHECK(round_trip_format7(&stationary, sizes[s]) == EXIT_SUCCESS);
+        for (index = 0U; index < 80U; ++index) {
+            MbMotionVector motion;
+
+            CHECK(mb_motion_format7_temporal_at(index, &motion) == REPLAY_OK);
+            CHECK(round_trip_format7(&motion, sizes[s]) == EXIT_SUCCESS);
+        }
+        for (index = 0U; index < 8U; ++index) {
+            MbMotionVector motion;
+
+            CHECK(mb_motion_format7_spatial_at(sizes[s], index, &motion) ==
+                  REPLAY_OK);
+            CHECK(round_trip_format7(&motion, sizes[s]) == EXIT_SUCCESS);
+        }
+    }
+    CHECK(mb_motion_format7_temporal_at(80U, &stationary) ==
+          REPLAY_INVALID_ARGUMENT);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     MbMotionVector motion;
@@ -98,5 +148,7 @@ int main(void)
     CHECK(motion.dx == -4 && motion.dy == 0 && motion.spatial);
     CHECK(mb_motion_format19_spatial_at(
               MB_MOTION_BLOCK_4X4, 8U, &motion) == REPLAY_INVALID_ARGUMENT);
+
+    CHECK(test_format7_round_trip() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

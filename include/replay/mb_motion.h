@@ -56,4 +56,22 @@ ReplayStatus mb_motion_read_format7(ReplayBitReader *reader,
                                     MbMotionBlockSize block_size,
                                     MbMotionVector *motion);
 
+/* Write the type 7 move code after the caller has emitted the move opcode. */
+ReplayStatus mb_motion_write_format7(ReplayBitWriter *writer,
+                                     MbMotionBlockSize block_size,
+                                     const MbMotionVector *motion);
+
+/*
+ * Enumerate the type 7 candidate vectors for the encoder's motion search, in
+ * non-decreasing code length. Temporal covers radii 1..4 (80 vectors); spatial
+ * is the eight source-defined references. The stationary (0,0) code is tested
+ * separately and is not part of the temporal enumeration.
+ */
+ReplayStatus mb_motion_format7_temporal_at(unsigned index,
+                                           MbMotionVector *motion);
+
+ReplayStatus mb_motion_format7_spatial_at(MbMotionBlockSize block_size,
+                                          unsigned index,
+                                          MbMotionVector *motion);
+
 #endif

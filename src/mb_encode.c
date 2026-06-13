@@ -522,7 +522,7 @@ uint8_t mb_encode_average_chroma(const MbFrame *source, unsigned x, unsigned y,
  * accepted family competes by error, bits, then a stable order. The stationary
  * test reuses the codec's block_match against the data-block average (u, v).
  */
-static CopyCandidate select_copy4x4(
+CopyCandidate mb_encode_select_copy4x4(
     const MbEncodeCodec *enc, const MbFrame *source, const MbFrame *previous,
     const MbFrame *reconstructed, unsigned x, unsigned y, uint8_t u, uint8_t v,
     int allow_stationary, int allow_temporal, int allow_spatial,
@@ -582,7 +582,7 @@ static CopyCandidate select_copy4x4(
 
 /* The 2x2 split-child analogue of select_copy4x4, scoring spatial copies
  * against the parent's tentative reconstruction. */
-static CopyCandidate select_copy2x2(
+CopyCandidate mb_encode_select_copy2x2(
     const MbEncodeCodec *enc, const MbFrame *source, const MbFrame *previous,
     const MbFrame *reconstructed, const MbPixel tentative[16],
     unsigned available_mask, unsigned parent_x, unsigned parent_y,
@@ -699,7 +699,7 @@ static ReplayStatus build_split_candidate(
         unsigned local = (block_y - y) * 4U + block_x - x;
         uint8_t u = mb_encode_average_chroma(source, block_x, block_y, 2U, 0);
         uint8_t v = mb_encode_average_chroma(source, block_x, block_y, 2U, 1);
-        CopyCandidate selected = select_copy2x2(
+        CopyCandidate selected = mb_encode_select_copy2x2(
             enc, source, previous, reconstructed, tentative, available_mask,
             x, y, block_x, block_y, u, v, allow_stationary, allow_temporal,
             allow_spatial, quality, loss_level, policy, stats, workspace);
@@ -832,7 +832,7 @@ ReplayStatus mb_encode_frame(const MbEncodeCodec *search,
         for (x = 0; status == REPLAY_OK && x < source->width; x += 4U) {
             uint8_t u = mb_encode_average_chroma(source, x, y, 4U, 0);
             uint8_t v = mb_encode_average_chroma(source, x, y, 4U, 1);
-            CopyCandidate copy = select_copy4x4(
+            CopyCandidate copy = mb_encode_select_copy4x4(
                 search, source, previous, reconstructed, x, y, u, v,
                 allow_stationary, allow_temporal, allow_spatial, &quality,
                 loss_level, policy, &local_stats, workspace);

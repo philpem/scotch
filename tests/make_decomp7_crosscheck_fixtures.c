@@ -294,6 +294,56 @@ static int make_spatial(const char *directory)
     return EXIT_SUCCESS;
 }
 
+/*
+ * End-to-end: encode a synthetic key frame and a following inter frame with the
+ * real type 7 encoder, then hand both payloads to the compiled Decomp7. The
+ * encoder mixes data, split, spatial, stationary and temporal blocks, so a
+ * match confirms the whole encoder output decodes on Acorn code exactly as the
+ * encoder reconstructed it.
+ */
+static int make_encoded(const char *directory)
+{
+    enum { W = 16U, H = 16U };
+    MbPixel source_pixels[W * H];
+    MbPixel key_recon[W * H];
+    MbPixel inter_recon[W * H];
+    MbFrame source = { W, H, W, source_pixels };
+    MbFrame key = { W, H, W, key_recon };
+    MbFrame inter = { W, H, W, inter_recon };
+    MbFrame previous = { W, H, W, key_recon };
+    CodecMovingBlocksEncodeOptions options;
+    ReplayBuffer payload;
+    unsigned i;
+
+    for (i = 0U; i < W * H; ++i) {
+        source_pixels[i] = (MbPixel){ (uint8_t)((i * 3U) & 31U),
+                                      (uint8_t)((i / W) & 31U),
+                                      (uint8_t)((i % W) & 31U) };
+    }
+    options = (CodecMovingBlocksEncodeOptions){ 0, 0, 1, 1, 0U,
+                                                MB_ENCODE_POLICY_LOWEST_ERROR,
+                                                NULL };
+    replay_buffer_init(&payload);
+    CHECK(codec_movingblocks_encode_frame(&source, NULL, &options, &payload,
+                                          &key, NULL) == REPLAY_OK);
+    CHECK(emit_fixture(directory, "enc_key", &payload, &key) == EXIT_SUCCESS);
+
+    /* Inter frame: most blocks copy the key reconstruction; a few change. */
+    for (i = 0U; i < W * H; i += 7U) {
+        source_pixels[i].y = (uint8_t)((source_pixels[i].y + 9U) & 31U);
+    }
+    options.allow_stationary = 1;
+    options.allow_temporal = 1;
+    CHECK(codec_movingblocks_encode_frame(&source, &previous, &options,
+                                          &payload, &inter, NULL) == REPLAY_OK);
+    CHECK(write_frame(directory, "enc_inter.previous.yuv555", &previous) ==
+          EXIT_SUCCESS);
+    CHECK(emit_fixture(directory, "enc_inter", &payload, &inter) ==
+          EXIT_SUCCESS);
+    replay_buffer_free(&payload);
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -301,5 +351,6 @@ int main(int argc, char **argv)
     CHECK(make_split(argv[1]) == EXIT_SUCCESS);
     CHECK(make_temporal(argv[1]) == EXIT_SUCCESS);
     CHECK(make_spatial(argv[1]) == EXIT_SUCCESS);
+    CHECK(make_encoded(argv[1]) == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }
