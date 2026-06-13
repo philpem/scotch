@@ -81,9 +81,6 @@ case $codec in
     17) vsuffix=mb17; vlabel=YUV;;
     *) echo "replay-make: --codec must be 17 or 19" >&2; exit 1;;
 esac
-if [ "$codec" = 17 ]; then
-    [ -z "$datarate" ] || { echo "replay-make: --data-rate (rate control) is not supported for type 17" >&2; exit 1; }
-fi
 
 # Source dimensions -> output height that keeps aspect and is a multiple of 4.
 iw=$(ffprobe -v error -select_streams v:0 -show_entries stream=width \

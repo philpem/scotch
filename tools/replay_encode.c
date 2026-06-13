@@ -512,7 +512,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                         const char *payload_path, const char *payload_prefix,
                         size_t frame_limit, unsigned loss_level, int data_only,
                         const char *recon_prefix, const char *recon_ppm_path,
-                        const char *keys_prefix)
+                        const char *keys_prefix, size_t target_bytes)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -521,6 +521,9 @@ static int run_encode17(const char *input_path, InputFormat input_format,
     MbPixel *recon_pixels = malloc(pixel_count * sizeof(*recon_pixels));
     MbPixel *previous_pixels = malloc(pixel_count * sizeof(*previous_pixels));
     MbPixel *decoded_pixels = malloc(pixel_count * sizeof(*decoded_pixels));
+    MbEncodeWorkspace workspace = { 0U, 0U, 0U, 0U, NULL, NULL };
+    int have_workspace = 0;
+    unsigned current_loss = loss_level;
     ReplayBuffer payload;
     FILE *input = NULL;
     size_t frame_number = 0U;
@@ -531,6 +534,15 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         previous_pixels == NULL || decoded_pixels == NULL) {
         fprintf(stderr, "unable to allocate frame buffers\n");
         goto cleanup;
+    }
+    /* The temporal-search cache only earns its keep across rate-control
+       retries, so it is allocated only when a target byte budget is set. */
+    if (target_bytes != 0U) {
+        if (mb_encode_workspace_init(&workspace, width, height) != REPLAY_OK) {
+            fprintf(stderr, "unable to allocate encoder search workspace\n");
+            goto cleanup;
+        }
+        have_workspace = 1;
     }
     input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
     if (input == NULL) {
@@ -548,6 +560,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
         CodecMovingBlocksHqEncodeOptions options;
         CodecMovingBlocksHqEncodeStats stats;
+        unsigned retry = 0U;
         ReplayStatus status;
 
         if (read_result == FRAME_READ_EOF) {
@@ -570,14 +583,47 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         options.allow_temporal = !data_only && previous_arg != NULL;
         options.allow_spatial = !data_only;
         options.allow_split = !data_only;
-        options.loss_level = loss_level;
 
-        status = codec_movingblockshq_encode_frame(
-            &source, previous_arg, &options, &payload, &reconstructed, &stats);
-        if (status != REPLAY_OK) {
-            fprintf(stderr, "frame %zu: encode failed: %s\n", frame_number,
-                    replay_status_string(status));
-            goto cleanup;
+        /*
+         * Device-bandwidth rate control: retry the frame at successively looser
+         * quality rows until it fits the target byte window. The key frame is
+         * encoded at the requested level; the carried level seeds the next
+         * frame. The workspace cache makes the retries cheap.
+         */
+        {
+            int rate_enabled = target_bytes != 0U && previous_arg != NULL;
+            MbRateControl rate_control;
+
+            if (rate_enabled &&
+                mb_rate_control_init(&rate_control, target_bytes,
+                                     current_loss) != REPLAY_OK) {
+                fprintf(stderr, "frame %zu: invalid rate-control target\n",
+                        frame_number);
+                goto cleanup;
+            }
+            if (have_workspace) {
+                mb_encode_workspace_reset(&workspace);
+            }
+            options.workspace = rate_enabled ? &workspace : NULL;
+            for (;;) {
+                options.loss_level =
+                    rate_enabled ? rate_control.loss_level : current_loss;
+                status = codec_movingblockshq_encode_frame(
+                    &source, previous_arg, &options, &payload, &reconstructed,
+                    &stats);
+                if (status != REPLAY_OK) {
+                    fprintf(stderr, "frame %zu: encode failed: %s\n",
+                            frame_number, replay_status_string(status));
+                    goto cleanup;
+                }
+                if (!rate_enabled ||
+                    mb_rate_control_observe(&rate_control, payload.size) ==
+                        MB_RATE_ACCEPT) {
+                    break;
+                }
+                ++retry;
+            }
+            current_loss = options.loss_level;
         }
         /* Independent decode confirms the stream matches the reconstruction. */
         status = codec_movingblockshq_verify_frame(
@@ -589,6 +635,17 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                     frame_number);
             goto cleanup;
         }
+
+        printf("frame=%zu codec=17 name=\"Moving Blocks HQ\" retry=%u "
+               "loss_level=%u bits=%zu bytes=%zu data4x4=%zu stationary4x4=%zu "
+               "temporal4x4=%zu spatial4x4=%zu split4x4=%zu data2x2=%zu "
+               "stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu verify=ok\n",
+               frame_number, retry, options.loss_level, stats.bits_written,
+               payload.size, stats.data4x4_blocks, stats.stationary4x4_blocks,
+               stats.temporal4x4_blocks, stats.spatial4x4_blocks,
+               stats.split4x4_blocks, stats.data2x2_blocks,
+               stats.stationary2x2_blocks, stats.temporal2x2_blocks,
+               stats.spatial2x2_blocks);
 
         {
             char generated[1024];
@@ -645,6 +702,9 @@ static int run_encode17(const char *input_path, InputFormat input_format,
 cleanup:
     if (input != NULL && input != stdin) {
         fclose(input);
+    }
+    if (have_workspace) {
+        mb_encode_workspace_destroy(&workspace);
     }
     free(decoded_pixels);
     free(previous_pixels);
@@ -803,7 +863,7 @@ int main(int argc, char **argv)
         return run_encode17(input_path, input_format, width, height,
                             payload_path, payload_prefix, frame_limit,
                             loss_level, data_only, recon_prefix,
-                            recon_ppm_path, keys_prefix);
+                            recon_ppm_path, keys_prefix, target_bytes);
     }
     if (codec != 19U || input_path == NULL ||
         (payload_path == NULL) == (payload_prefix == NULL) ||
