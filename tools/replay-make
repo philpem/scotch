@@ -37,6 +37,8 @@
 #   --no-pad-last-chunk  do not pad the final chunk to frames-per-chunk with
 #                      "repeat last frame" frames (padding is on by default and
 #                      stops the player decoding garbage past the end)
+#   --keep-frames DIR  also dump each encoded frame payload to DIR/f-NNNNNN for
+#                      debugging (the movie is built directly regardless)
 #   --audio-format F   vidc-e8 (default) | signed-8 | signed-16 | adpcm | adpcm2
 #   --title TEXT       movie title metadata
 #   --data-rate KB     device-bandwidth mode: target kB/s of playback data;
@@ -60,7 +62,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=; pad=1
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=; pad=1; keepframes=
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
         --loss-level)       loss=$2; shift 2;;
         --frames-per-chunk) fpc=$2; shift 2;;
         --no-pad-last-chunk) pad=0; shift;;
+        --keep-frames)      keepframes=$2; shift 2;;
         --start)            start=$2; shift 2;;
         --duration)         duration=$2; shift 2;;
         --audio-rate)       arate=$2; shift 2;;
@@ -121,9 +124,6 @@ ih=$(ffprobe -v error -select_streams v:0 -show_entries stream=height \
     -of csv=p=0 "$input")
 height=$(python3 -c "print(max(4, round($width*$ih/$iw/4)*4))")
 
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-
 ss=(); [ "$start" != 0 ] && ss=(-ss "$start")
 tt=(); [ -n "$duration" ] && tt=(-t "$duration")
 
@@ -153,8 +153,7 @@ print(max(64, fs))")
     echo "replay-make: ${datarate}kB/s, latency ${latency}s, x${dblbuf} buffer -> ~${target} bytes/frame" >&2
 fi
 
-# Video: scale and frame-rate convert, encode each frame as a codec payload.
-keyarg=(); [ "$keys" = 1 ] && keyarg=(--keys-prefix "$work/k-")
+# Video: scale and frame-rate convert, encode straight into the container.
 ditharg=(--no-dither); [ -n "$dither" ] && ditharg=(--dither "$dither")
 polarg=(); [ -n "$policy" ] && polarg=(--policy "$policy")
 # Pad the final chunk up to frames-per-chunk with "repeat last frame" frames so
@@ -162,39 +161,50 @@ polarg=(); [ -n "$policy" ] && polarg=(--policy "$policy")
 # the end into garbage -- matches Acorn's own compressor. --no-pad-last-chunk
 # disables it.
 padarg=(); [ "$pad" = 1 ] && padarg=(--pad-to-multiple "$fpc")
-ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
-    -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo - | \
-    "$bin/replay-encode" --codec "$codec" "${variantarg[@]}" --input - \
-        --size "${width}x${height}" \
-        --payload-prefix "$work/f-" "${keyarg[@]}" "${targetarg[@]}" \
-        "${ditharg[@]}" "${polarg[@]}" "${padarg[@]}" --loss-level "$loss" >/dev/null
-frames=$(find "$work" -name "f-*.$vsuffix" | wc -l)
-[ "$frames" -gt 0 ] || { echo "replay-make: no frames encoded" >&2; exit 1; }
 
-args=(--codec "$ctype" --size "${width}x${height}" --fps "$fps"
-      --frames-prefix "$work/f-" --frames "$frames" --frame-suffix ".$vsuffix"
-      --frames-per-chunk "$fpc" --pixel-label "$vlabel")
-[ "$keys" = 1 ] && args+=(--keys-prefix "$work/k-")
+# Direct-to-container encode: ffmpeg feeds video, audio and the poster image
+# straight into replay-encode and the encoder writes the finished movie itself
+# -- no per-frame temp files, no join. Each ffmpeg stream is opened on its own
+# file descriptor with exec so all the pipes stay live at once: process
+# substitutions written across separate statements would reuse one /dev/fd entry
+# and collide. The encoder reads video, then audio, then the poster.
+encargs=(--codec "$codec" --container-type "$ctype" "${variantarg[@]}"
+         --output "$output" --size "${width}x${height}" --fps "$fps"
+         --frames-per-chunk "$fpc" --pixel-label "$vlabel"
+         "${targetarg[@]}" "${ditharg[@]}" "${polarg[@]}" "${padarg[@]}"
+         --loss-level "$loss")
+[ "$keys" = 1 ] && encargs+=(--keys)
+[ -n "$title" ] && encargs+=(--title "$title")
+
+exec 7< <(ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
+    -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo -)
+encargs+=(--input /dev/fd/7)
 
 if [ "$no_audio" = 0 ]; then
-    ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
-        -vn -ac "$achan" -ar "$arate" -f s16le "$work/a.pcm"
-    args+=(--sound-pcm "$work/a.pcm" --sound-encode "$aformat"
-           --sound-rate "$arate" --sound-channels "$achan")
+    exec 8< <(ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
+        -vn -ac "$achan" -ar "$arate" -f s16le -)
+    encargs+=(--audio-input /dev/fd/8 --sound-encode "$aformat" \
+              --sound-rate "$arate" --sound-channels "$achan")
 fi
 
 if [ "$no_poster" = 1 ]; then
-    args+=(--no-poster)
-elif [ -n "$poster" ]; then
-    ffmpeg -hide_banner -loglevel error -i "$poster" \
-        -vf "scale=$width:$height" -pix_fmt bgr555le -f rawvideo "$work/p.bin"
-    args+=(--poster "$work/p.bin")
+    encargs+=(--no-poster)
 else
-    # No image given: use the first encoded frame as the poster.
-    ffmpeg -hide_banner -loglevel error "${ss[@]}" -i "$input" \
-        -vf "scale=$width:$height" -frames:v 1 -pix_fmt bgr555le -f rawvideo "$work/p.bin"
-    args+=(--poster "$work/p.bin")
+    if [ -n "$poster" ]; then
+        exec 9< <(ffmpeg -hide_banner -loglevel error -i "$poster" \
+            -vf "scale=$width:$height" -pix_fmt bgr555le -f rawvideo -)
+    else
+        # No image given: use the first source frame as the poster.
+        exec 9< <(ffmpeg -hide_banner -loglevel error "${ss[@]}" -i "$input" \
+            -vf "scale=$width:$height" -frames:v 1 -pix_fmt bgr555le -f rawvideo -)
+    fi
+    encargs+=(--poster /dev/fd/9)
 fi
 
-[ -n "$title" ] && args+=(--title "$title")
-"$bin/replay-join" "${args[@]}" --output "$output"
+# Optional per-frame payload dump for debugging (does not affect the movie).
+if [ -n "$keepframes" ]; then
+    mkdir -p "$keepframes"
+    encargs+=(--payload-prefix "$keepframes/f-")
+fi
+
+"$bin/replay-encode" "${encargs[@]}" >/dev/null

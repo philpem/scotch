@@ -179,6 +179,12 @@ add_test(NAME test_format19_corpus
         $<TARGET_FILE:replay-verify>)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_FOUND)
+    add_test(NAME test_direct_container
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_direct_container.sh
+            $<TARGET_FILE:replay-encode>
+            $<TARGET_FILE:replay-join>)
+endif()
 find_program(FFMPEG_EXECUTABLE ffmpeg)
 if(FFMPEG_EXECUTABLE)
     add_test(NAME test_ffmpeg_pipe
