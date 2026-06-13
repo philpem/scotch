@@ -367,7 +367,7 @@ static int test_encode_frame_copy_modes(void)
     }
     replay_buffer_init(&payload);
     {
-        CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U };
+        CodecMovingBlocksHqEncodeOptions options = { 0, 0, 1, 0, 0U, NULL };
         CHECK(codec_movingblockshq_encode_frame(
                   &source, NULL, &options, &payload, &reconstructed, &stats) ==
               REPLAY_OK);
@@ -394,7 +394,7 @@ static int test_encode_frame_copy_modes(void)
     }
     replay_buffer_clear(&payload);
     {
-        CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U };
+        CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 0, 0U, NULL };
         CHECK(codec_movingblockshq_encode_frame(
                   &source, &previous, &options, &payload, &reconstructed,
                   &stats) == REPLAY_OK);
@@ -420,7 +420,7 @@ static int test_encode_frame_split(void)
     MbFrame previous = { 4U, 4U, 4U, previous_pixels };
     MbFrame reconstructed = { 4U, 4U, 4U, recon_pixels };
     MbFrame decoded = { 4U, 4U, 4U, decoded_pixels };
-    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 0, 0, 1, 0U, NULL };
     CodecMovingBlocksHqEncodeStats stats;
     ReplayBuffer payload;
     unsigned i;
@@ -454,6 +454,55 @@ static int test_encode_frame_split(void)
     return EXIT_SUCCESS;
 }
 
+static int test_workspace_equivalence(void)
+{
+    MbPixel source_pixels[32];
+    MbPixel previous_pixels[32];
+    MbPixel recon_a[32];
+    MbPixel recon_b[32];
+    MbFrame source = { 8U, 4U, 8U, source_pixels };
+    MbFrame previous = { 8U, 4U, 8U, previous_pixels };
+    MbFrame reconstructed_a = { 8U, 4U, 8U, recon_a };
+    MbFrame reconstructed_b = { 8U, 4U, 8U, recon_b };
+    CodecMovingBlocksHqEncodeOptions options = { 1, 1, 1, 1, 4U, NULL };
+    MbEncodeWorkspace workspace = { 0U, 0U, 0U, 0U, NULL, NULL };
+    ReplayBuffer payload_a;
+    ReplayBuffer payload_b;
+    unsigned i;
+
+    /* An inter frame that exercises the temporal search (some blocks change). */
+    fill_previous(previous_pixels, 32U);
+    for (i = 0U; i < 32U; ++i) {
+        source_pixels[i] = previous_pixels[i];
+    }
+    for (i = 16U; i < 24U; ++i) {
+        source_pixels[i].y = (uint8_t)((source_pixels[i].y + 5U) & 31U);
+    }
+    replay_buffer_init(&payload_a);
+    replay_buffer_init(&payload_b);
+
+    CHECK(codec_movingblockshq_encode_frame(
+              &source, &previous, &options, &payload_a, &reconstructed_a,
+              NULL) == REPLAY_OK);
+
+    CHECK(mb_encode_workspace_init(&workspace, 8U, 4U) == REPLAY_OK);
+    mb_encode_workspace_reset(&workspace);
+    options.workspace = &workspace;
+    CHECK(codec_movingblockshq_encode_frame(
+              &source, &previous, &options, &payload_b, &reconstructed_b,
+              NULL) == REPLAY_OK);
+
+    /* The cache is a pure speed-up: identical bytes and reconstruction. */
+    CHECK(payload_a.size == payload_b.size);
+    CHECK(memcmp(payload_a.data, payload_b.data, payload_a.size) == 0);
+    CHECK(frames_equal(&reconstructed_a, &reconstructed_b));
+
+    mb_encode_workspace_destroy(&workspace);
+    replay_buffer_free(&payload_b);
+    replay_buffer_free(&payload_a);
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     CHECK(test_data4x4_zero_residual() == EXIT_SUCCESS);
@@ -461,6 +510,7 @@ int main(void)
     CHECK(test_data_frame_encode_roundtrip() == EXIT_SUCCESS);
     CHECK(test_encode_frame_copy_modes() == EXIT_SUCCESS);
     CHECK(test_encode_frame_split() == EXIT_SUCCESS);
+    CHECK(test_workspace_equivalence() == EXIT_SUCCESS);
     CHECK(test_data2x2_wrap() == EXIT_SUCCESS);
     CHECK(test_table_and_truncation() == EXIT_SUCCESS);
     CHECK(test_complete_data_frame() == EXIT_SUCCESS);

@@ -2,6 +2,7 @@
 #define CODEC_MOVINGBLOCKSHQ_H
 
 #include "replay/mb_codec.h"
+#include "replay/mb_encode.h"
 #include "replay/mb_frame.h"
 
 extern const MbHuffmanTable codec_movingblockshq_luma_huffman;
@@ -58,6 +59,10 @@ ReplayStatus codec_movingblockshq_encode_data_frame(
  * legal in a key frame. `loss_level` selects the shared QP% acceptance row
  * (0 = exact). Copy families are tried stationary, then temporal, then spatial,
  * matching the original compressor's ordered policy.
+ *
+ * `workspace` is optional: when supplied (and sized to the frame) it caches the
+ * temporal motion search so repeated rate-control retries of one frame at
+ * different loss levels do not recompute it. Reset it for each new frame pair.
  */
 typedef struct {
     int allow_stationary;
@@ -65,6 +70,7 @@ typedef struct {
     int allow_spatial;
     int allow_split;
     unsigned loss_level;
+    MbEncodeWorkspace *workspace;
 } CodecMovingBlocksHqEncodeOptions;
 
 /* Block tally for the selected stream; bits_written excludes byte padding. */

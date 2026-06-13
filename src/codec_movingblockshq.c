@@ -458,7 +458,8 @@ static CopyCandidate select_copy2x2_hq(
     unsigned available_mask, unsigned parent_x, unsigned parent_y,
     unsigned x, unsigned y, uint8_t u, uint8_t v, int allow_stationary,
     int allow_temporal, int allow_spatial,
-    const MbQualityThresholds *quality, unsigned loss_level)
+    const MbQualityThresholds *quality, unsigned loss_level,
+    MbEncodeWorkspace *workspace)
 {
     CopyCandidate candidate = { SPLIT_MODE_DATA, { 0, 0, 0 }, 0U, 0U, 0U, 0 };
     unsigned error;
@@ -473,7 +474,7 @@ static CopyCandidate select_copy2x2_hq(
     if (allow_temporal && previous != NULL &&
         mb_encode_match_temporal2x2(&codec17_encode, source, previous, x, y,
                                     u, v, loss_level, &candidate.motion,
-                                    &error, &evaluations, NULL)) {
+                                    &error, &evaluations, workspace)) {
         candidate.mode = SPLIT_MODE_TEMPORAL;
         return candidate;
     }
@@ -525,7 +526,7 @@ static ReplayStatus build_split_candidate(
     const MbQualityThresholds *quality, unsigned loss_level,
     const MbPredictor *initial_predictor, ReplayBuffer *buffer,
     MbPredictor *final_predictor, MbPixel tentative[16], SplitMode modes[4],
-    size_t *bits)
+    size_t *bits, MbEncodeWorkspace *workspace)
 {
     /* Decoder order inside a split block is TL, TR, BL, BR. */
     static const unsigned offsets[4][2] = {
@@ -553,7 +554,7 @@ static ReplayStatus build_split_candidate(
         CopyCandidate selected = select_copy2x2_hq(
             source, previous, reconstructed, tentative, available_mask,
             x, y, block_x, block_y, u, v, allow_stationary, allow_temporal,
-            allow_spatial, quality, loss_level);
+            allow_spatial, quality, loss_level, workspace);
 
         modes[block] = selected.mode;
         if (selected.mode == SPLIT_MODE_STATIONARY) {
@@ -667,6 +668,7 @@ ReplayStatus codec_movingblockshq_encode_frame(
     int allow_spatial = options != NULL && options->allow_spatial != 0;
     int allow_split = options != NULL && options->allow_split != 0;
     unsigned loss_level = options != NULL ? options->loss_level : 0U;
+    MbEncodeWorkspace *workspace = options != NULL ? options->workspace : NULL;
     int need_previous = allow_stationary || allow_temporal;
     ReplayBuffer data_candidate;
     ReplayBuffer split_candidate;
@@ -682,6 +684,9 @@ ReplayStatus codec_movingblockshq_encode_frame(
         reconstructed->height != source->height ||
         reconstructed->stride != source->stride ||
         mb_quality_thresholds(loss_level, &thresholds) != REPLAY_OK ||
+        (workspace != NULL &&
+         (workspace->width != source->width ||
+          workspace->height != source->height)) ||
         (need_previous &&
          (previous == NULL || previous->pixels == NULL ||
           previous->width != source->width ||
@@ -715,7 +720,8 @@ ReplayStatus codec_movingblockshq_encode_frame(
             } else if (allow_temporal &&
                        mb_encode_find_temporal4x4(
                            &codec17_encode, source, previous, x, y, u, v,
-                           loss_level, &motion, &error, &evaluations, NULL)) {
+                           loss_level, &motion, &error, &evaluations,
+                           workspace)) {
                 status = replay_bitwriter_write(&writer, UINT32_C(2), 2U);
                 if (status == REPLAY_OK) {
                     status = mb_motion_write_format19(
@@ -754,7 +760,7 @@ ReplayStatus codec_movingblockshq_encode_frame(
                         allow_stationary, allow_temporal, allow_spatial,
                         &thresholds, loss_level, &predictor, &split_candidate,
                         &split_predictor, split_recon, split_modes,
-                        &split_bits);
+                        &split_bits, workspace);
                 }
                 if (status == REPLAY_OK && split_bits < data_bits) {
                     unsigned block;
