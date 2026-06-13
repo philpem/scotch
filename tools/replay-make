@@ -82,13 +82,15 @@ done
 
 [ -f "$input" ] || { echo "replay-make: no such file: $input" >&2; exit 1; }
 
-# Video codec selection: type 19 (Super Moving Blocks, 6Y5UV) or type 17
-# (Moving Blocks HQ, YUV 5,5,5). They differ only in payload suffix and the
-# ARMovie pixel-format label.
+# Video codec selection: type 19 (Super Moving Blocks, 6Y5UV), type 17 (Moving
+# Blocks HQ, YUV 5,5,5) or type 7 (Moving Blocks, YUV 5,5,5 -- the codec every
+# RISC PC has as standard). They differ only in payload suffix and the ARMovie
+# pixel-format label.
 case $codec in
     19) vsuffix=mb19; vlabel=6Y5UV;;
     17) vsuffix=mb17; vlabel=YUV;;
-    *) echo "replay-make: --codec must be 17 or 19" >&2; exit 1;;
+    7)  vsuffix=mb7;  vlabel=YUV;;
+    *) echo "replay-make: --codec must be 7, 17 or 19" >&2; exit 1;;
 esac
 
 # Source dimensions -> output height that keeps aspect and is a multiple of 4.
