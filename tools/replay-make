@@ -15,6 +15,7 @@
 #   --start SECONDS    start offset into the source [0]
 #   --duration SECONDS encode only this many seconds [whole file]
 #   --audio-rate HZ    sound sample rate [11025]
+#   --audio-channels N audio channels 1 or 2 [1]
 #   --no-audio         omit the sound track
 #   --poster IMAGE     poster image (any ffmpeg-readable file) [first frame];
 #                      pass --no-poster to embed nothing (command-line player only)
@@ -38,7 +39,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1
 while [ $# -gt 0 ]; do
     case $1 in
         --width)            width=$2; shift 2;;
@@ -54,6 +55,7 @@ while [ $# -gt 0 ]; do
         --keys)             keys=1; shift;;
         --audio-format)     aformat=$2; shift 2;;
         --title)            title=$2; shift 2;;
+        --audio-channels)   achan=$2; shift 2;;
         *) echo "replay-make: unknown option $1" >&2; exit 1;;
     esac
 done
@@ -91,9 +93,9 @@ args=(--codec 19 --size "${width}x${height}" --fps "$fps"
 
 if [ "$no_audio" = 0 ]; then
     ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
-        -vn -ac 1 -ar "$arate" -f s16le "$work/a.pcm"
+        -vn -ac "$achan" -ar "$arate" -f s16le "$work/a.pcm"
     args+=(--sound-pcm "$work/a.pcm" --sound-encode "$aformat"
-           --sound-rate "$arate" --sound-channels 1)
+           --sound-rate "$arate" --sound-channels "$achan")
 fi
 
 if [ "$no_poster" = 1 ]; then

@@ -238,29 +238,40 @@ static ReplayStatus build_catalogue(ChunkInfo *chunks, size_t chunk_count,
     return status;
 }
 
-/* Append one chunk's ADPCM region: a 4-byte state header for the running state
- * at this chunk's first sample, then the chunk's samples as 4-bit codes. */
+/* Append one chunk's ADPCM region: a 4-byte state header per channel (the
+ * running state at this chunk's first unit), then the chunk's `count` units
+ * (samples for mono, frames for stereo) as 4-bit codes. `state` is one entry
+ * for mono, two (left, right) for stereo. */
 static ReplayStatus append_adpcm_chunk(ReplayBuffer *out, const uint8_t *pcm,
-                                       uint64_t start_sample, uint64_t count,
+                                       unsigned channels, uint64_t start_unit,
+                                       uint64_t count,
                                        ReplaySoundAdpcmState *state)
 {
-    ReplayStatus status = replay_sound_adpcm_write_header(state, out);
+    uint64_t total = count * channels;
     int16_t *samples;
     uint64_t i;
+    ReplayStatus status = replay_sound_adpcm_write_header(&state[0], out);
 
+    if (status == REPLAY_OK && channels == 2U) {
+        status = replay_sound_adpcm_write_header(&state[1], out);
+    }
     if (status != REPLAY_OK || count == 0U) {
         return status;
     }
-    samples = calloc((size_t)count, sizeof(*samples));
+    samples = calloc((size_t)total, sizeof(*samples));
     if (samples == NULL) {
         return REPLAY_OUT_OF_MEMORY;
     }
-    for (i = 0U; i < count; ++i) {
-        size_t b = (size_t)(start_sample + i) * 2U;
+    for (i = 0U; i < total; ++i) {
+        size_t b = (size_t)(start_unit * channels + i) * 2U;
 
         samples[i] = (int16_t)((uint16_t)pcm[b] | ((uint16_t)pcm[b + 1U] << 8));
     }
-    status = replay_sound_adpcm_encode(samples, (size_t)count, state, out);
+    status = channels == 2U
+                 ? replay_sound_adpcm_encode_stereo(samples, (size_t)count,
+                                                    &state[0], &state[1], out)
+                 : replay_sound_adpcm_encode(samples, (size_t)count, &state[0],
+                                             out);
     free(samples);
     return status;
 }
@@ -344,8 +355,8 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
             set_error(error, error_size, "a sound track needs a non-zero format");
             return REPLAY_INVALID_ARGUMENT;
         }
-        if (t->encode_adpcm && t->channels != 1U) {
-            set_error(error, error_size, "ADPCM encoding supports mono only");
+        if (t->encode_adpcm && t->channels != 1U && t->channels != 2U) {
+            set_error(error, error_size, "ADPCM encoding needs 1 or 2 channels");
             return REPLAY_INVALID_ARGUMENT;
         }
         if (t->codec == REPLAY_AE7_SOUND_NAMED &&
@@ -505,10 +516,13 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
                 uint64_t s1 = (uint64_t)(t1 * rate + 0.5);
 
                 if (t->encode_adpcm) {
-                    /* sound_offset is the start sample; the chunk carries a
-                     * 4-byte state header then one nibble per sample. */
-                    uint64_t available = (uint64_t)t->size / 2U;
-                    uint64_t samples;
+                    /* sound_offset is the start unit (sample for mono, frame for
+                     * stereo). Each chunk carries a 4-byte state header per
+                     * channel, then mono: one nibble per sample (two per byte);
+                     * stereo: one byte per frame (left low nibble, right high). */
+                    uint64_t available =
+                        (uint64_t)t->size / (2U * (uint64_t)t->channels);
+                    uint64_t units;
 
                     if (s0 > available) {
                         s0 = available;
@@ -516,10 +530,12 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
                     if (s1 > available) {
                         s1 = available;
                     }
-                    samples = s1 - s0;
+                    units = s1 - s0;
                     chunk->sound_offset[track] = s0;
-                    chunk->sound_samples[track] = samples;
-                    chunk->sound_bytes[track] = 4U + (samples + 1U) / 2U;
+                    chunk->sound_samples[track] = units;
+                    chunk->sound_bytes[track] = t->channels == 2U
+                                                    ? 8U + units
+                                                    : 4U + (units + 1U) / 2U;
                 } else {
                     uint64_t frame_bytes = track_frame_bytes(t);
 
@@ -640,8 +656,8 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
     }
 
     {
-        /* ADPCM state runs continuously across chunks; each chunk records it. */
-        ReplaySoundAdpcmState adpcm_state[REPLAY_AE7_MAX_TRACKS];
+        /* ADPCM state (per channel) runs continuously across chunks. */
+        ReplaySoundAdpcmState adpcm_state[REPLAY_AE7_MAX_TRACKS][2];
 
         memset(adpcm_state, 0, sizeof(adpcm_state));
     for (index = 0U; index < chunk_count && status == REPLAY_OK; ++index) {
@@ -669,10 +685,10 @@ ReplayStatus replay_ae7_write(const ReplayAe7WriteOptions *options,
             uint64_t copy;
 
             if (t->encode_adpcm) {
-                status = append_adpcm_chunk(out, t->data,
+                status = append_adpcm_chunk(out, t->data, t->channels,
                                             chunk->sound_offset[track],
                                             chunk->sound_samples[track],
-                                            &adpcm_state[track]);
+                                            adpcm_state[track]);
                 continue;
             }
             want = chunk->sound_bytes[track];

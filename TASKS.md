@@ -129,9 +129,8 @@
   as `--sound-pcm`/`--sound-encode`, fed canonical `s16le` from ffmpeg.
 - [x] Add a PCM -> IMA ADPCM encoder and the per-chunk sound-encoding path it
   needs (4-byte state header per chunk): replay-join/replay-make --sound-encode
-  adpcm (format 1 SoundA4) or adpcm2 (format 2 "2 adpcm"). Mono; both flavours
-  emit identical bytes and differ only in the header. (Stereo ADPCM and other
-  framed format-2 codecs remain future work.)
+  adpcm (format 1 SoundA4) or adpcm2 (format 2 "2 adpcm"). Mono and stereo;
+  both flavours emit identical bytes and differ only in the header.
 - [x] Generate type 19 per-chunk key frames (reconstruction packed as 6Y5UV
   halfwords) so the player can start at any chunk: replay-encode --keys-prefix
   emits one per frame, the writer selects the chunk boundaries (chunk_count-1

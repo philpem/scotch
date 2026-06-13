@@ -58,6 +58,15 @@ ReplayStatus replay_sound_adpcm_encode(const int16_t *samples, size_t count,
                                        ReplaySoundAdpcmState *state,
                                        ReplayBuffer *out);
 
+/* Append `frames` stereo frames (interleaved L,R signed-16 PCM) to `out`: one
+ * byte per frame holding the left code in the low nibble and the right code in
+ * the high nibble, updating each channel's state. */
+ReplayStatus replay_sound_adpcm_encode_stereo(const int16_t *interleaved,
+                                              size_t frames,
+                                              ReplaySoundAdpcmState *left,
+                                              ReplaySoundAdpcmState *right,
+                                              ReplayBuffer *out);
+
 /* Append the 4-byte chunk state header for `state` to `out`. */
 ReplayStatus replay_sound_adpcm_write_header(const ReplaySoundAdpcmState *state,
                                              ReplayBuffer *out);

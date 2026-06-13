@@ -295,5 +295,25 @@ int main(void)
         replay_ae7_movie_destroy(&movie);
         replay_buffer_free(&movie_bytes);
     }
+
+    /* Stereo ADPCM: 8-byte state header (two states) then one byte per stereo
+     * frame, so chunk 0 (960 frames at 1000 Hz) is 8 + 960 bytes. */
+    {
+        static uint8_t pcm_stereo[9600]; /* 2400 stereo frames (s16le L,R) */
+
+        track.channels = 2U;
+        track.data = pcm_stereo;
+        track.size = sizeof(pcm_stereo);
+        replay_buffer_init(&movie_bytes);
+        status = replay_ae7_write(&options, &movie_bytes, error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        status = replay_ae7_parse(movie_bytes.data, movie_bytes.size, &movie,
+                                  error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        CHECK(movie.sound_channels == 2U);
+        CHECK(movie.chunks[0].sound_bytes == 8U + 960U);
+        replay_ae7_movie_destroy(&movie);
+        replay_buffer_free(&movie_bytes);
+    }
     return EXIT_SUCCESS;
 }

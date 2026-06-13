@@ -204,6 +204,31 @@ ReplayStatus replay_sound_adpcm_encode(const int16_t *samples, size_t count,
     return REPLAY_OK;
 }
 
+ReplayStatus replay_sound_adpcm_encode_stereo(const int16_t *interleaved,
+                                              size_t frames,
+                                              ReplaySoundAdpcmState *left,
+                                              ReplaySoundAdpcmState *right,
+                                              ReplayBuffer *out)
+{
+    size_t i;
+
+    if (out == NULL || left == NULL || right == NULL ||
+        (interleaved == NULL && frames != 0U)) {
+        return REPLAY_INVALID_ARGUMENT;
+    }
+    for (i = 0U; i < frames; ++i) {
+        uint8_t l = adpcm_encode_sample(interleaved[i * 2U], left);
+        uint8_t r = adpcm_encode_sample(interleaved[i * 2U + 1U], right);
+        ReplayStatus status =
+            replay_buffer_append_u8(out, (uint8_t)(l | (r << 4)));
+
+        if (status != REPLAY_OK) {
+            return status;
+        }
+    }
+    return REPLAY_OK;
+}
+
 ReplayStatus replay_sound_adpcm_write_header(const ReplaySoundAdpcmState *state,
                                              ReplayBuffer *out)
 {

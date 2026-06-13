@@ -364,13 +364,15 @@ int main(int argc, char **argv)
     }
 
     if (sound_pcm_path != NULL) {
-        int is_adpcm = strcmp(sound_encode, "adpcm") == 0;
-        int is_adpcm2 = strcmp(sound_encode, "adpcm2") == 0;
+        int is_sounda4 = strcmp(sound_encode, "adpcm-sounda4") == 0;
+        int is_adpcm = is_sounda4 || strcmp(sound_encode, "adpcm") == 0 ||
+                       strcmp(sound_encode, "adpcm2") == 0;
 
-        if (is_adpcm || is_adpcm2) {
+        if (is_adpcm) {
             /* IMA ADPCM: hand the raw PCM to the writer, which encodes it per
-             * chunk. "adpcm" is the built-in SoundA4 (format 1, 4 bits);
-             * "adpcm2" is the named-decompressor form (format 2 "adpcm"). */
+             * chunk. "adpcm" is the named-decompressor form (format 2 "adpcm",
+             * the common SoundDir module); "adpcm-sounda4" is the built-in
+             * format-1 SoundA4 (4 bits), only on systems that ship it. */
             if (read_file(sound_pcm_path, &sound_buffer) != EXIT_SUCCESS) {
                 goto done;
             }
@@ -379,16 +381,16 @@ int main(int argc, char **argv)
             track.channels = sound_channels;
             track.data = sound_buffer.data;
             track.size = sound_buffer.size;
-            if (is_adpcm2) {
-                track.codec = REPLAY_AE7_SOUND_NAMED;
-                track.codec_name = "adpcm";
-                track.precision_bits = 16U;
-                track.label = NULL;
-            } else {
+            if (is_sounda4) {
                 track.codec = REPLAY_AE7_SOUND_VIDC_LOG; /* format 1 */
                 track.codec_name = NULL;
                 track.precision_bits = 4U;
                 track.label = "bit ADPCM";
+            } else {
+                track.codec = REPLAY_AE7_SOUND_NAMED;
+                track.codec_name = "adpcm";
+                track.precision_bits = 16U;
+                track.label = NULL;
             }
             options.tracks = &track;
             options.track_count = 1U;

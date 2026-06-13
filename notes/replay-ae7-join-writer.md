@@ -287,6 +287,10 @@ The writer takes raw s16 PCM (track.encode_adpcm) and encodes per chunk itself,
 so sound_bytes = 4 + ceil(chunk_samples/2). Two header flavours select the same
 bytes: format 1 with precision 4 and an "ADPCM" label picks the built-in SoundA4
 decoder, while format 2 "adpcm" uses the named sound decompressor.
-replay-join/replay-make: --sound-encode adpcm (SoundA4) or adpcm2 (format 2).
-Stereo ADPCM (Join interleaves the two channels' nibbles with two states) is
-future work.
+Stereo carries an 8-byte header (left then right state) and one byte per stereo
+frame -- the left code in the low nibble, the right in the high -- with a
+separate running state per channel, exactly as Join's `Decodex2` expects.
+
+`--sound-encode adpcm` (and `adpcm2`) select the format-2 named decompressor
+`2 adpcm`, which is the path most systems ship (SoundA4 is often absent).
+`--sound-encode adpcm-sounda4` selects the built-in format-1 SoundA4.
