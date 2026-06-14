@@ -1,6 +1,5 @@
-/build/
-/build-sanitize/
-/build-release/
+# Any top-level CMake build tree (build/, build-release/, build-sanitize/, ...)
+/build*/
 /.cache/
 __pycache__/
 *.pyc
