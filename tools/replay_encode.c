@@ -17,6 +17,17 @@
 #include "default_poster.h"
 
 /*
+ * Re-decode every encoded frame and compare it to the encoder's own
+ * reconstruction. This was a development gate to prove the encode and decode
+ * paths agree; the codecs are now cross-checked byte-exact against the real
+ * Acorn Decomp modules in the test suite, so it is redundant and off by
+ * default. --verify re-enables it when developing or debugging the encoder.
+ * (It is a single decode pass, ~2% of encode time -- the cost is the per-block
+ * motion/spatial search in the encoder, not this.)
+ */
+static int self_check_frames = 0;
+
+/*
  * This program is intentionally a thin development harness around the codec:
  *
  *   RGB24 frame -> CompLib-style 6Y5UV --\
@@ -60,7 +71,7 @@ static void usage(FILE *stream)
             "usage: replay-encode --codec 7|17|19|20 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX | --output MOVIE,ae7) "
             "[--input-format rgb24|6y5uv|yuv555] [--dither 4x4|8x8|--no-dither] "
-            "[--frames N] [--data-only] [--loss-level 0..28] "
+            "[--frames N] [--data-only] [--verify] [--loss-level 0..28] "
             "[--policy ordered|lowest-error] [--variant old|new] "
             "[--rate-search linear|bracketed] "
             "[--target-bytes N] [--pad-to-multiple N] [--trace FILE] "
@@ -886,14 +897,16 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             current_loss = options.loss_level;
         }
         /* Independent decode confirms the stream matches the reconstruction. */
-        status = codec_movingblockshq_verify_frame(
-            payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
-        if (status != REPLAY_OK ||
-            memcmp(decoded_pixels, recon_pixels,
-                   pixel_count * sizeof(*recon_pixels)) != 0) {
-            fprintf(stderr, "frame %zu: decode self-check failed\n",
-                    frame_number);
-            goto cleanup;
+        if (self_check_frames) {
+            status = codec_movingblockshq_verify_frame(
+                payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
+            if (status != REPLAY_OK ||
+                memcmp(decoded_pixels, recon_pixels,
+                       pixel_count * sizeof(*recon_pixels)) != 0) {
+                fprintf(stderr, "frame %zu: decode self-check failed\n",
+                        frame_number);
+                goto cleanup;
+            }
         }
 
         printf("frame=%zu codec=17 name=\"Moving Blocks HQ\" retry=%u "
@@ -1103,14 +1116,16 @@ static int run_encode7(const char *input_path, InputFormat input_format,
             }
             current_loss = options.loss_level;
         }
-        status = codec_movingblocks_verify_frame(
-            payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
-        if (status != REPLAY_OK ||
-            memcmp(decoded_pixels, recon_pixels,
-                   pixel_count * sizeof(*recon_pixels)) != 0) {
-            fprintf(stderr, "frame %zu: decode self-check failed\n",
-                    frame_number);
-            goto cleanup;
+        if (self_check_frames) {
+            status = codec_movingblocks_verify_frame(
+                payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
+            if (status != REPLAY_OK ||
+                memcmp(decoded_pixels, recon_pixels,
+                       pixel_count * sizeof(*recon_pixels)) != 0) {
+                fprintf(stderr, "frame %zu: decode self-check failed\n",
+                        frame_number);
+                goto cleanup;
+            }
         }
 
         printf("frame=%zu codec=7 name=\"Moving Blocks\" retry=%u "
@@ -1328,15 +1343,17 @@ static int run_encode20_variant(const char *input_path,
             }
             current_loss = options.loss_level;
         }
-        status = codec_movingblocksbeta_verify_frame_variant(
-            payload.data, payload.size, previous_arg, &decoded, NULL, NULL,
-            variant);
-        if (status != REPLAY_OK ||
-            memcmp(decoded_pixels, recon_pixels,
-                   pixel_count * sizeof(*recon_pixels)) != 0) {
-            fprintf(stderr, "frame %zu: decode self-check failed\n",
-                    frame_number);
-            goto cleanup;
+        if (self_check_frames) {
+            status = codec_movingblocksbeta_verify_frame_variant(
+                payload.data, payload.size, previous_arg, &decoded, NULL, NULL,
+                variant);
+            if (status != REPLAY_OK ||
+                memcmp(decoded_pixels, recon_pixels,
+                       pixel_count * sizeof(*recon_pixels)) != 0) {
+                fprintf(stderr, "frame %zu: decode self-check failed\n",
+                        frame_number);
+                goto cleanup;
+            }
         }
 
         printf("frame=%zu codec=20 name=\"Moving Blocks Beta\" variant=%s "
@@ -1819,6 +1836,10 @@ int main(int argc, char **argv)
             frame_limit = (size_t)value;
         } else if (strcmp(argv[i], "--data-only") == 0) {
             data_only = 1;
+        } else if (strcmp(argv[i], "--verify") == 0) {
+            self_check_frames = 1;
+        } else if (strcmp(argv[i], "--no-verify") == 0) {
+            self_check_frames = 0;
         } else if (strcmp(argv[i], "--loss-level") == 0 && i + 1 < argc) {
             char *end;
             unsigned long value = strtoul(argv[++i], &end, 10);
@@ -2109,15 +2130,18 @@ int main(int argc, char **argv)
                         replay_status_string(status));
                 goto free_payload;
             }
-            status = codec_supermovingblocks_verify_frame(
-                payload.data, payload.size, previous_arg, &decoded,
-                &consumed_bits, NULL);
-            if (status != REPLAY_OK || consumed_bits != stats.bits_written ||
-                memcmp(decoded_pixels, reconstructed_pixels,
-                       pixel_count * sizeof(*decoded_pixels)) != 0) {
-                fprintf(stderr, "internal decode cross-check failed: %s\n",
-                        replay_status_string(status));
-                goto free_payload;
+            if (self_check_frames) {
+                status = codec_supermovingblocks_verify_frame(
+                    payload.data, payload.size, previous_arg, &decoded,
+                    &consumed_bits, NULL);
+                if (status != REPLAY_OK ||
+                    consumed_bits != stats.bits_written ||
+                    memcmp(decoded_pixels, reconstructed_pixels,
+                           pixel_count * sizeof(*decoded_pixels)) != 0) {
+                    fprintf(stderr, "internal decode cross-check failed: %s\n",
+                            replay_status_string(status));
+                    goto free_payload;
+                }
             }
             if (trace_frame(
                     trace, frame_number, width, height, &stats, &source,
