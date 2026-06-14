@@ -25,12 +25,12 @@ grep -q "chunks: 2 entries" "$work/info.txt"
 grep -q "4 frames/chunk" "$work/info.txt"
 # A poster sprite must be present (a zero-length one crashes !ARPlayer).
 grep -qE "sprite: offset=[0-9]+ bytes=[1-9]" "$work/info.txt"
-# Default RGB packing declares an RGB pixel label in the header.
-head -c 256 "$work/movie,ae7" | grep -q "RGB 5,5,5"
+# Default RGB packing declares the RGB16 colour map (label [RGB] + 16-bit depth).
+head -c 256 "$work/movie,ae7" | grep -q "16 bits per pixel \[RGB\]"
 
-# --colour yuv packs YUV555 and declares a YUV pixel label (so the player's
-# header check selects the YUV colour map).
+# --colour yuv packs YUV555 and declares the YUV16 colour map ([YUV] + depth),
+# so the player loads MovingLine.ColourMap.YUV16.
 "$encode" --codec 1 --colour yuv --input "$work/in.rgb" --size 32x16 \
     --output "$work/yuv,ae7" --fps 12.5 --frames-per-chunk 4 --pad-to-multiple 4
-head -c 256 "$work/yuv,ae7" | grep -q "YUV 5,5,5"
+head -c 256 "$work/yuv,ae7" | grep -q "16 bits per pixel \[YUV\]"
 echo "replay-encode --codec 1 --output container ok (rgb + yuv)"

@@ -1950,11 +1950,14 @@ int main(int argc, char **argv)
         container.width = width;
         container.height = height;
         container.want_keys = want_keys;
-        /* Moving Lines carries no colour in the stream; the player picks RGB
-           vs YUV from the pixel label (bas/Player: "YUV" -> YUV, else RGB), so
-           declare the model the muxer packed unless one was given explicitly. */
+        /* Moving Lines carries no colour in the stream; the player builds the
+           colour-map name from the bracketed pixel label plus the depth --
+           ColourMap.<label><depth>, e.g. RGB16 / YUV16 (bas/Player line 7450) --
+           so the label must be the bare colour-map prefix (RGB / YUV), not a
+           "5,5,5"-style description. Set it to the model the muxer packed unless
+           one was given explicitly. */
         if (codec == 1U && container.pixel_label == NULL) {
-            container.pixel_label = ml_yuv ? "YUV 5,5,5" : "RGB 5,5,5";
+            container.pixel_label = ml_yuv ? "YUV" : "RGB";
         }
         frame_sink_init(&sink, codec, want_keys);
         sinkp = &sink;
