@@ -144,7 +144,43 @@ Not bugs exactly, but the player rejects or mishandles movies that break these
   dimensions.
 - The catalogue must **always carry a sound field** — `;0` when silent — not omit
   it.
+- **Every chunk must hold exactly `frames per chunk` frames**, including the last
+  one. The player decodes a fixed `frames per chunk` from each chunk and never
+  consults a per-chunk frame count, so an under-filled final chunk is decoded
+  past its data — playback runs off the end of the real video and shows frozen or
+  stale frames. The encoder pads the final chunk up to a whole multiple of
+  `frames per chunk` with "repeat last frame" frames (a frozen tail, with silence
+  once the audio runs out) rather than ever shipping a short chunk; for the
+  direct-to-container path (`replay-encode --output`) this padding is
+  **unconditional**, not gated on `--pad-to-multiple`.
 
 Both are enforced by `src/replay_ae7_write.c`. End-to-end verified: a four-chunk
 160x96 type-19 movie with 11025 Hz VIDC-E8 audio plays with sound in the RISC OS
 Replay player.
+
+## 6. Cosmetic: an RGB movie's colour shows a stray `[` in Movie Info
+
+`!ARPlayer`'s Movie Info box builds its video line as `"%dbpp %s %gHz, %s"` with
+the colour from `arvid_colourspace(hdr->flags)`
+([`Apps/ARPlayer/c/info`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/Apps/ARPlayer/c/info),
+the `VIDEO_FIELD` `dbox_setfieldf`). The colourspace flag is parsed in
+[`Lib/ARLib/ARLib/c/arhdr`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/Lib/ARLib/ARLib/c/arhdr)
+(`arline_PixelDepth`) and it only **positively recognises non-RGB** spaces:
+`strstr(buffer,"YUV")` → YUV, `"PALETTE"` → Palette, 8bpp → Grey. There is **no
+RGB test** — RGB is the implicit default (`colourspace_RGB == 0`).
+
+The upshot, observed under emulation: a movie whose pixel label the player does
+not positively recognise falls back to echoing the *raw* `bits per pixel [...]`
+label, so an **RGB** movie shows the bracketed label (`...16bpp [RGB 12.5 Hz...`)
+while a **YUV** movie — positively matched — shows a clean `YUV`. The stray `[`
+is therefore the player echoing our own bracketed colour label for the
+unrecognised-RGB case; it is purely cosmetic (the colour-map selection in
+`bas/Player` strips the brackets correctly, so both movies still load the right
+`MovingLine.ColourMap` and play — see [moving-lines spec
+§colour](spec/type1-moving-lines.md) and the `replay-encode --codec 1` muxer).
+
+**Workaround (optional, not applied):** the muxer could omit the bracketed `RGB`
+label entirely — the player defaults to RGB when no colour is recognised and
+`bas/Player` still derives `RGB16` — which would display cleanly. We keep the
+explicit `[RGB]` label because it is self-documenting and robust across players;
+the bracket is a harmless display artefact.
