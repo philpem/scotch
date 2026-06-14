@@ -89,22 +89,33 @@ tools/rate_quality_sweep.py \
   --out-prefix docs/quality/rate_quality_long
 ```
 
-## Findings (short segments, two sources)
+## Findings
 
-- The two **Beta (type 20)** variants dominate 7/17/19 by ~2–3 dB on animation
-  and ~4–5 dB on live action.
-- **Beta old (Sep'96) ≥ Beta new (Nov'96)** at every matched loss level, by
-  ~0.1–0.4 dB on both sources — the new delta-chroma rev is a coding-efficiency
-  change, essentially fidelity-neutral, not a quality improvement.
+Measured on three runs: two short segments (animation 160×88 and live-action
+160×120, 48 frames each) and the **full animation clip** (5400 frames ≈ 7m16s,
+160×88) for full-length, varied-lighting coverage.
+
+- **Beta (type 20) leads on every run.** The margin is content- and
+  length-dependent: ~2–3 dB on the short animation segment and ~4–5 dB on the
+  short live-action segment, but only **~1–1.5 dB over the full animation clip**
+  (Beta old ~26.0–26.3 dB vs codec 7 ~25.4 and 17/19 ~24.9–25.2). Short clips
+  overstate the lead; averaged over the whole video it is real but smaller.
+- **Beta old (Sep'96) ≥ Beta new (Nov'96)** at every matched loss level on all
+  three runs, by ~0.1–0.4 dB (full clip: old 26.05–26.30 vs new 25.73–26.07).
+  This is the most stable result — the new delta-chroma rev is a
+  coding-efficiency change, essentially fidelity-neutral, not a quality
+  improvement.
 - Every codec shows a **backward bend** at the lowest loss level: loss 0 spends
-  more bytes yet scores *lower* PSNR than loss 4–16. The useful operating range
-  is roughly loss 4–20.
-- Rankings *among* 7/17/19 shuffle with content; Beta's lead and the old-vs-new
-  ordering are stable across both sources.
+  more bytes yet scores *lower* PSNR than loss 8–16. The bend is milder over the
+  full clip but still present; the useful operating range is roughly loss 4–20.
+- Rankings *among* 7/17/19 shuffle with content (codec 7 leads the mid-range on
+  the full clip); only **Beta's lead and the old-vs-new ordering are stable**
+  across all three runs.
 
 ## Caveats
 
 - PSNR ranks fidelity, not perceived quality; dithering (off here) and chroma
   handling can shift subjective preference away from the PSNR winner.
-- These are short clips unless noted; the `_long` run exists to test whether the
-  ordering holds over a full-length clip with varied lighting.
+- Absolute PSNR and the size of Beta's lead depend on clip content and length —
+  short segments exaggerate both. The full-clip run is the more representative
+  figure; per-codec *ordering* nonetheless held across every run.
