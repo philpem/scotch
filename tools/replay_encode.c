@@ -1751,6 +1751,7 @@ int main(int argc, char **argv)
     MbPixel *decoded_pixels = NULL;
     ReplayBuffer payload;
     CodecSuperMovingBlocksWorkspace workspace = { NULL };
+    int have_workspace = 0;
     FILE *input = NULL;
     FILE *trace = NULL;
     size_t pixel_count;
@@ -2052,10 +2053,15 @@ int main(int argc, char **argv)
         }
     }
     replay_buffer_init(&payload);
-    if (codec_supermovingblocks_workspace_init(
-            &workspace, width, height) != REPLAY_OK) {
-        fprintf(stderr, "unable to allocate encoder search workspace\n");
-        goto free_payload;
+    /* The temporal-search cache only earns its keep across rate-control
+       retries, so it is allocated only when a target byte budget is set. */
+    if (target_bytes != 0U) {
+        if (codec_supermovingblocks_workspace_init(
+                &workspace, width, height) != REPLAY_OK) {
+            fprintf(stderr, "unable to allocate encoder search workspace\n");
+            goto free_payload;
+        }
+        have_workspace = 1;
     }
     current_loss_level = loss_level;
 
@@ -2100,7 +2106,9 @@ int main(int argc, char **argv)
         if (read_result == FRAME_READ_ERROR) {
             goto free_payload;
         }
-        codec_supermovingblocks_workspace_reset(&workspace);
+        if (have_workspace) {
+            codec_supermovingblocks_workspace_reset(&workspace);
+        }
         status = input_format == INPUT_RGB24
                      ? mb_color_rgb24_to_6y5uv(
                            rgb, (size_t)width * 3U, &source, dither)
@@ -2251,7 +2259,9 @@ int main(int argc, char **argv)
 free_payload:
     replay_buffer_free(&payload);
 done:
-    codec_supermovingblocks_workspace_destroy(&workspace);
+    if (have_workspace) {
+        codec_supermovingblocks_workspace_destroy(&workspace);
+    }
     if (trace != NULL && fclose(trace) != 0 && result == EXIT_SUCCESS) {
         perror(trace_path);
         result = EXIT_FAILURE;
