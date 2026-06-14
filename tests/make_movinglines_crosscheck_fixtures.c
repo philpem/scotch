@@ -230,6 +230,51 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Case 7: a multi-frame "movie" from the real encoder -- a structured clip
+       that pans right, so later frames lean on temporal copies of a previously
+       *reconstructed* frame. Each frame is cross-checked against the module with
+       the prior reconstruction as its previous, validating the encoder's
+       inter-frame chain end to end. */
+    {
+        enum { MW = 24U, MH = 12U, MN = 5U };
+        uint16_t framebuf[MW * MH];
+        uint16_t recon[MW * MH];
+        uint16_t previous[MW * MH];
+        int have_previous = 0;
+        unsigned n;
+
+        for (n = 0; n < MN; ++n) {
+            unsigned x, y;
+            char stem[32];
+            const uint16_t *prev_arg = have_previous ? previous : NULL;
+
+            for (y = 0; y < MH; ++y) {
+                for (x = 0; x < MW; ++x) {
+                    unsigned band = ((x + n * 2U) / 3U) % 32U;
+
+                    framebuf[y * MW + x] = (uint16_t)(
+                        (band << 10) | (((band * 2U) & 31U) << 5) |
+                        ((MH - y) & 31U));
+                }
+            }
+            if (codec_movinglines_encode_frame(framebuf, prev_arg, MW, MH,
+                                               &payload) != REPLAY_OK) {
+                goto done;
+            }
+            snprintf(stem, sizeof(stem), "movie%u", n);
+            if (emit(manifest, dir, stem, &payload, prev_arg, MW, MH) != 0) {
+                goto done;
+            }
+            if (codec_movinglines_decode_frame(payload.data, payload.size,
+                                               prev_arg, recon, MW, MH,
+                                               NULL) != REPLAY_OK) {
+                goto done;
+            }
+            memcpy(previous, recon, sizeof(previous));
+            have_previous = 1;
+        }
+    }
+
     result = EXIT_SUCCESS;
 
 done:
