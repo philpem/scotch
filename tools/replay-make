@@ -41,6 +41,8 @@
 #                      debugging (the movie is built directly regardless)
 #   --audio-format F   vidc-e8 (default) | signed-8 | signed-16 | adpcm | adpcm2
 #   --title TEXT       movie title metadata
+#   --copyright TEXT   movie copyright metadata
+#   --author TEXT      movie author metadata
 #   --data-rate KB     device-bandwidth mode: target kB/s of playback data;
 #                      sets a per-frame byte budget (CompLib's formula)
 #   --latency SECONDS  IO latency allowance for --data-rate [0.4]
@@ -62,7 +64,7 @@ fi
 input=$1; output=$2; shift 2
 
 width=320; fps=12.5; loss=10; fpc=25; start=0; duration=
-arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=; pad=1; keepframes=
+arate=11025; no_audio=0; poster=; no_poster=0; keys=0; aformat=vidc-e8; title=; copyright=; author=; achan=1; datarate=; latency=0.4; dblbuf=1; arm2max=; codec=19; dither=8x8; policy=; variant=old; typealias=; pad=1; keepframes=
 while [ $# -gt 0 ]; do
     case $1 in
         --codec)            codec=$2; shift 2;;
@@ -86,6 +88,8 @@ while [ $# -gt 0 ]; do
         --keys)             keys=1; shift;;
         --audio-format)     aformat=$2; shift 2;;
         --title)            title=$2; shift 2;;
+        --copyright)        copyright=$2; shift 2;;
+        --author)           author=$2; shift 2;;
         --audio-channels)   achan=$2; shift 2;;
         --data-rate)        datarate=$2; shift 2;;
         --latency)          latency=$2; shift 2;;
@@ -175,6 +179,8 @@ encargs=(--codec "$codec" --container-type "$ctype" "${variantarg[@]}"
          --loss-level "$loss")
 [ "$keys" = 1 ] && encargs+=(--keys)
 [ -n "$title" ] && encargs+=(--title "$title")
+[ -n "$copyright" ] && encargs+=(--copyright "$copyright")
+[ -n "$author" ] && encargs+=(--author "$author")
 
 exec 7< <(ffmpeg -hide_banner -loglevel error "${ss[@]}" "${tt[@]}" -i "$input" \
     -vf "fps=$fps,scale=$width:$height:flags=lanczos" -pix_fmt rgb24 -f rawvideo -)
