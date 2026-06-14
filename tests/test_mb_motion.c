@@ -102,6 +102,44 @@ static int test_format7_round_trip(void)
     return EXIT_SUCCESS;
 }
 
+/*
+ * Every enumerated format-19 temporal and spatial vector must survive
+ * write->read at both block sizes. Because the reader maps each code to a
+ * unique vector, a successful round-trip over the whole enumerated space proves
+ * mb_motion_write_format19 emits the exact index the reader expects -- i.e. it
+ * exhaustively exercises the O(1) ring_index/far_index inverses.
+ */
+static int test_format19_round_trip(void)
+{
+    MbMotionBlockSize sizes[2] = { MB_MOTION_BLOCK_4X4, MB_MOTION_BLOCK_2X2 };
+    unsigned s;
+    unsigned index;
+
+    for (s = 0U; s < 2U; ++s) {
+        for (index = 0U; index < 288U; ++index) {
+            MbMotionVector v;
+
+            CHECK(mb_motion_format19_temporal_at(index, &v) == REPLAY_OK);
+            CHECK(round_trip_motion(v.dx, v.dy, 0, sizes[s]) == EXIT_SUCCESS);
+        }
+        for (index = 0U; index < 8U; ++index) {
+            MbMotionVector v;
+
+            CHECK(mb_motion_format19_spatial_at(sizes[s], index, &v) ==
+                  REPLAY_OK);
+            CHECK(round_trip_motion(v.dx, v.dy, v.spatial, sizes[s]) ==
+                  EXIT_SUCCESS);
+        }
+    }
+    {
+        MbMotionVector v;
+
+        CHECK(mb_motion_format19_temporal_at(288U, &v) ==
+              REPLAY_INVALID_ARGUMENT);
+    }
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     MbMotionVector motion;
@@ -149,6 +187,7 @@ int main(void)
     CHECK(mb_motion_format19_spatial_at(
               MB_MOTION_BLOCK_4X4, 8U, &motion) == REPLAY_INVALID_ARGUMENT);
 
+    CHECK(test_format19_round_trip() == EXIT_SUCCESS);
     CHECK(test_format7_round_trip() == EXIT_SUCCESS);
     return EXIT_SUCCESS;
 }

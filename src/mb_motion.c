@@ -214,22 +214,67 @@ ReplayStatus mb_motion_format7_spatial_at(MbMotionBlockSize block_size,
     return REPLAY_OK;
 }
 
-/* Reverse a ring vector to its index, mirroring ring_vector's order. */
+/*
+ * Reverse a ring vector to its index in O(1), mirroring ring_vector's order
+ * (top edge, then alternating left/right edges, then bottom). Returns 0 unless
+ * the vector lies exactly on the radius-r ring (Chebyshev distance r), matching
+ * the old linear search's reject-when-not-found contract.
+ */
 static int ring_index(unsigned radius, const MbMotionVector *motion,
                       unsigned *index)
 {
-    unsigned count = radius * 8U;
-    unsigned i;
+    int r = (int)radius;
+    int adx = motion->dx < 0 ? -motion->dx : motion->dx;
+    int ady = motion->dy < 0 ? -motion->dy : motion->dy;
+    unsigned side = radius * 2U + 1U;
 
-    for (i = 0U; i < count; ++i) {
-        MbMotionVector candidate = ring_vector(radius, i);
-
-        if (candidate.dx == motion->dx && candidate.dy == motion->dy) {
-            *index = i;
-            return 1;
-        }
+    if (radius == 0U || adx > r || ady > r || (adx != r && ady != r)) {
+        return 0;
     }
-    return 0;
+    if (motion->dy == -r) {
+        /* Top edge: dx runs -r..r at index 0..2r. */
+        *index = (unsigned)(motion->dx + r);
+    } else if (motion->dy == r) {
+        /* Bottom edge follows the two side edges. */
+        *index = side + (radius * 2U - 1U) * 2U + (unsigned)(motion->dx + r);
+    } else {
+        /* Side edges interleave: even index is the left column, odd the right. */
+        *index = side + (unsigned)((motion->dy + r - 1) * 2) +
+                 (motion->dx == r ? 1U : 0U);
+    }
+    return 1;
+}
+
+/*
+ * Reverse a `far` vector to its index in O(1), mirroring far_vector's raster
+ * scan of the [-8,8] square with the inner [-3,3] box removed. Returns 0 for a
+ * vector outside the square or inside the omitted box (i.e. not in the family).
+ */
+static int far_index(const MbMotionVector *motion, unsigned *index)
+{
+    int dx = motion->dx;
+    int dy = motion->dy;
+    int rows_below;
+    int inner_before;
+
+    if (dx < -8 || dx > 8 || dy < -8 || dy > 8 ||
+        (dx >= -3 && dx <= 3 && dy >= -3 && dy <= 3)) {
+        return 0;
+    }
+    /* Subtract the omitted inner cells that precede (dx, dy) in raster order. */
+    rows_below = dy + 3;
+    if (rows_below < 0) {
+        rows_below = 0;
+    } else if (rows_below > 7) {
+        rows_below = 7;
+    }
+    inner_before = rows_below * 7;
+    if (dy >= -3 && dy <= 3 && dx >= 4) {
+        /* On an inner row, all seven omitted cells sit left of dx >= 4. */
+        inner_before += 7;
+    }
+    *index = (unsigned)((dy + 8) * 17 + (dx + 8) - inner_before);
+    return 1;
 }
 
 /* Reverse a type 7 spatial vector to its table index. */
@@ -345,6 +390,9 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
                                       const MbMotionVector *motion)
 {
     unsigned index;
+    int adx;
+    int ady;
+    unsigned radius;
 
     if (writer == NULL || motion == NULL ||
         (block_size != MB_MOTION_BLOCK_2X2 &&
@@ -354,6 +402,9 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
     /*
      * Family 1 shares its five-bit index space: 0..7 are spatial and 8..31
      * are the radius-three temporal ring. The other families are temporal.
+     * Each emitted index is the exact slot the reader's tables enumerate:
+     * ring_index and far_index invert ring_vector and far_vector in O(1), so
+     * this dispatches by Chebyshev radius rather than scanning every vector.
      */
     if (motion->spatial != 0) {
         const MbMotionVector *table = block_size == MB_MOTION_BLOCK_4X4
@@ -366,30 +417,20 @@ ReplayStatus mb_motion_write_format19(ReplayBitWriter *writer,
         }
         return REPLAY_INVALID_ARGUMENT;
     }
-    for (index = 0U; index < 8U; ++index) {
-        MbMotionVector candidate = ring_vector(1U, index);
-        if (same_vector(&candidate, motion)) {
-            return write_index(writer, 0U, index, 3U);
-        }
+    adx = motion->dx < 0 ? -motion->dx : motion->dx;
+    ady = motion->dy < 0 ? -motion->dy : motion->dy;
+    radius = (unsigned)(adx > ady ? adx : ady);
+    if (radius == 1U && ring_index(1U, motion, &index)) {
+        return write_index(writer, 0U, index, 3U);
     }
-    for (index = 0U; index < 16U; ++index) {
-        MbMotionVector candidate = ring_vector(2U, index);
-        if (same_vector(&candidate, motion)) {
-            return write_index(writer, 2U, index, 4U);
-        }
+    if (radius == 2U && ring_index(2U, motion, &index)) {
+        return write_index(writer, 2U, index, 4U);
     }
-    for (index = 0U; index < 24U; ++index) {
-        MbMotionVector candidate = ring_vector(3U, index);
-        if (same_vector(&candidate, motion)) {
-            return write_index(writer, 1U, index + 8U, 5U);
-        }
+    if (radius == 3U && ring_index(3U, motion, &index)) {
+        return write_index(writer, 1U, index + 8U, 5U);
     }
-    for (index = 0U; index < 240U; ++index) {
-        MbMotionVector candidate;
-        if (far_vector(index, &candidate) == REPLAY_OK &&
-            same_vector(&candidate, motion)) {
-            return write_index(writer, 3U, index, 8U);
-        }
+    if (radius >= 4U && far_index(motion, &index)) {
+        return write_index(writer, 3U, index, 8U);
     }
     return REPLAY_INVALID_ARGUMENT;
 }
