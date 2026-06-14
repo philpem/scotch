@@ -5,6 +5,7 @@
 #include "replay/codec_movingblocks.h"
 #include "replay/codec_movingblocksbeta.h"
 #include "replay/codec_movingblockshq.h"
+#include "replay/codec_movinglines.h"
 #include "replay/codec_supermovingblocks.h"
 #include "replay/mb_color.h"
 #include "replay/mb_metrics.h"
@@ -68,7 +69,7 @@ typedef struct {
 static void usage(FILE *stream)
 {
     fprintf(stream,
-            "usage: replay-encode --codec 7|17|19|20 --input FILE|- --size WxH "
+            "usage: replay-encode --codec 1|7|17|19|20 --input FILE|- --size WxH "
             "(--payload FILE | --payload-prefix PREFIX | --output MOVIE,ae7) "
             "[--input-format rgb24|6y5uv|yuv555] [--dither 4x4|8x8|--no-dither] "
             "[--frames N] [--data-only] [--verify] [--loss-level 0..28] "
@@ -77,6 +78,8 @@ static void usage(FILE *stream)
             "[--target-bytes N] [--pad-to-multiple N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX] "
             "[--keys-prefix PREFIX]\n"
+            "  codec 1 (Moving Lines) takes only --input (RGB24), --size, "
+            "--frames, --payload[-prefix] and --recon[-ppm|-prefix].\n"
             "  direct-to-container (--output) also takes:\n"
             "    --fps F --frames-per-chunk N [--container-type N] "
             "[--pixel-label L] [--pixel-depth N] [--align MASK] [--keys]\n"
@@ -1486,6 +1489,172 @@ done:
     return result;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Type 1, Moving Lines.
+ *
+ * Moving Lines works on opaque 15-bit pixels rather than the Moving Blocks
+ * MbFrame, so it gets its own encode loop instead of the shared run_mb_encode
+ * driver. RGB24 input is packed as RGB555 (one of the format's two advertised
+ * colour models). Each frame is encoded against the previous reconstruction,
+ * round-trip self-checked, and emitted as a `.mln` payload and/or a PPM preview.
+ * ------------------------------------------------------------------------- */
+
+static uint16_t rgb24_to_rgb555(const uint8_t *rgb)
+{
+    unsigned r = rgb[0] >> 3, g = rgb[1] >> 3, b = rgb[2] >> 3;
+
+    return (uint16_t)((r << 10) | (g << 5) | b);
+}
+
+static int write_movinglines_ppm(const char *path, const uint16_t *pixels,
+                                 unsigned width, unsigned height)
+{
+    FILE *file = fopen(path, "wb");
+    size_t count = (size_t)width * height;
+    size_t i;
+
+    if (file == NULL) {
+        perror(path);
+        return EXIT_FAILURE;
+    }
+    fprintf(file, "P6\n%u %u\n255\n", width, height);
+    for (i = 0; i < count; ++i) {
+        uint8_t rgb[3] = {
+            (uint8_t)(((pixels[i] >> 10) & 0x1FU) << 3),
+            (uint8_t)(((pixels[i] >> 5) & 0x1FU) << 3),
+            (uint8_t)((pixels[i] & 0x1FU) << 3)
+        };
+
+        if (fwrite(rgb, 1, 3, file) != 3) {
+            fclose(file);
+            return EXIT_FAILURE;
+        }
+    }
+    return fclose(file) == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+static int run_movinglines(const char *input_path, InputFormat input_format,
+                           unsigned width, unsigned height,
+                           const char *payload_path,
+                           const char *payload_prefix, size_t frame_limit,
+                           const char *recon_prefix,
+                           const char *recon_ppm_path)
+{
+    size_t pixel_count = (size_t)width * height;
+    size_t rgb_size = pixel_count * 3U;
+    uint8_t *rgb = malloc(rgb_size);
+    uint16_t *source = malloc(pixel_count * sizeof(*source));
+    uint16_t *previous = malloc(pixel_count * sizeof(*previous));
+    uint16_t *decoded = malloc(pixel_count * sizeof(*decoded));
+    ReplayBuffer payload;
+    FILE *input = NULL;
+    size_t frame_number = 0U;
+    int result = EXIT_FAILURE;
+
+    replay_buffer_init(&payload);
+    if (input_format != INPUT_RGB24) {
+        fprintf(stderr, "type 1 encode supports only RGB24 input\n");
+        goto cleanup;
+    }
+    if (rgb == NULL || source == NULL || previous == NULL || decoded == NULL) {
+        fprintf(stderr, "unable to allocate frame buffers\n");
+        goto cleanup;
+    }
+    input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
+    if (input == NULL) {
+        perror(input_path);
+        goto cleanup;
+    }
+
+    for (;;) {
+        FrameReadResult read_result =
+            read_frame(input, input_path, rgb, rgb_size);
+        const uint16_t *previous_arg = frame_number == 0U ? NULL : previous;
+        size_t i;
+
+        if (read_result == FRAME_READ_EOF) {
+            break;
+        }
+        if (read_result != FRAME_READ_OK) {
+            goto cleanup;
+        }
+        for (i = 0; i < pixel_count; ++i) {
+            source[i] = rgb24_to_rgb555(&rgb[3 * i]);
+        }
+        if (codec_movinglines_encode_frame(source, previous_arg, width, height,
+                                            &payload) != REPLAY_OK) {
+            fprintf(stderr, "frame %zu: encode failed\n", frame_number);
+            goto cleanup;
+        }
+        /* Independent decode confirms the stream matches the reconstruction. */
+        if (codec_movinglines_decode_frame(payload.data, payload.size,
+                                            previous_arg, decoded, width, height,
+                                            NULL) != REPLAY_OK ||
+            memcmp(decoded, source, pixel_count * sizeof(*source)) != 0) {
+            fprintf(stderr, "frame %zu: decode self-check failed\n",
+                    frame_number);
+            goto cleanup;
+        }
+
+        if (payload_path != NULL || payload_prefix != NULL) {
+            char generated[1024];
+            const char *frame_payload = payload_path;
+
+            if (payload_prefix != NULL) {
+                if (make_frame_path(generated, sizeof(generated),
+                                    payload_prefix, frame_number, ".mln") !=
+                    EXIT_SUCCESS) {
+                    goto cleanup;
+                }
+                frame_payload = generated;
+            }
+            if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
+                goto cleanup;
+            }
+        }
+        if (recon_ppm_path != NULL || recon_prefix != NULL) {
+            char generated[1024];
+            const char *frame_ppm = recon_ppm_path;
+
+            if (recon_prefix != NULL) {
+                if (make_frame_path(generated, sizeof(generated), recon_prefix,
+                                    frame_number, ".ppm") != EXIT_SUCCESS) {
+                    goto cleanup;
+                }
+                frame_ppm = generated;
+            }
+            if (write_movinglines_ppm(frame_ppm, decoded, width, height) !=
+                EXIT_SUCCESS) {
+                goto cleanup;
+            }
+        }
+        printf("frame=%zu codec=1 name=\"Moving Lines\" bytes=%zu verify=ok\n",
+               frame_number, payload.size);
+
+        memcpy(previous, decoded, pixel_count * sizeof(*previous));
+        ++frame_number;
+        if (frame_limit != 0U && frame_number >= frame_limit) {
+            break;
+        }
+    }
+    if (frame_number == 0U) {
+        fprintf(stderr, "%s: no complete input frames\n", input_path);
+        goto cleanup;
+    }
+    result = EXIT_SUCCESS;
+
+cleanup:
+    if (input != NULL && input != stdin) {
+        fclose(input);
+    }
+    replay_buffer_free(&payload);
+    free(decoded);
+    free(previous);
+    free(source);
+    free(rgb);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL;
@@ -1742,6 +1911,31 @@ int main(int argc, char **argv)
         encode_pad = 0U;
     } else {
         encode_pad = pad_to_multiple;
+    }
+    if (codec == 1U) {
+        if (container.output_path != NULL) {
+            fprintf(stderr,
+                    "type 1 container muxing is not yet supported (--output)\n");
+            result = EXIT_FAILURE;
+            goto assemble;
+        }
+        if (input_path == NULL || width == 0U || height == 0U ||
+            (size_t)width > SIZE_MAX / (size_t)height ||
+            data_only || target_bytes != 0U || keys_prefix != NULL ||
+            (recon_ppm_path != NULL && recon_prefix != NULL) ||
+            (payload_path == NULL && payload_prefix == NULL &&
+             recon_prefix == NULL && recon_ppm_path == NULL) ||
+            (payload_path != NULL &&
+             (payload_prefix != NULL || frame_limit > 1U ||
+              recon_prefix != NULL))) {
+            usage(stderr);
+            result = EXIT_FAILURE;
+            goto assemble;
+        }
+        result = run_movinglines(input_path, input_format, width, height,
+                                 payload_path, payload_prefix, frame_limit,
+                                 recon_prefix, recon_ppm_path);
+        goto assemble;
     }
     if (codec == 7U || codec == 17U || codec == 20U) {
         MbEncodePolicy mb_policy =

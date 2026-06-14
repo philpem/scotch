@@ -37,9 +37,10 @@ container and sound is now specified and verified, with a codec behind each.
 What remains is optional polish:
 
 - **Mux Moving Lines into `.ae7` movies.** Type 1 has a codec
-  (`src/codec_movinglines.c`, cross-checked vs the compiled module) and a CLI
-  (`replay-movinglines`), but it is not yet wired into the `replay-join` /
-  direct-to-container path, so it can't be packed into a full ARMovie movie here.
+  (`src/codec_movinglines.c`, cross-checked vs the compiled module) and encodes
+  via `replay-encode --codec 1`, but that path does not yet feed the `--output` /
+  `replay-join` container writer, so it can't be packed into a full ARMovie movie
+  here.
 - **From-assembler colour rounding.** The one open numerical detail noted in
   [colour-pipeline.md](colour-pipeline.md): confirming CompLib's real-to-integer
   rounding at coefficient boundaries straight from the assembler.
