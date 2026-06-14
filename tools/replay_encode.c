@@ -1961,10 +1961,15 @@ int main(int argc, char **argv)
         }
         frame_sink_init(&sink, codec, want_keys);
         sinkp = &sink;
-        /* The direct path pads after encoding, once the real frame count and
-         * audio presence are known, so the writer gets only uniform full chunks
-         * (the per-frame padding done during encode cannot see either). */
-        pad_chunks = pad_to_multiple != 0;
+        /* The direct path always pads after encoding, once the real frame count
+         * and audio presence are known, so the writer gets only uniform, fully
+         * populated chunks (the per-frame padding done during encode cannot see
+         * either). The player decodes a fixed frames-per-chunk from EVERY chunk,
+         * so an under-filled final chunk is decoded past its data into garbage --
+         * never valid output -- which is why this is unconditional and not gated
+         * on --pad-to-multiple. (--pad-to-multiple still controls loose payload
+         * mode below.) */
+        pad_chunks = 1;
         encode_pad = 0U;
     } else {
         encode_pad = pad_to_multiple;
