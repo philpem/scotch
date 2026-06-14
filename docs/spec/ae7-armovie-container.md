@@ -174,13 +174,22 @@ each — pad as needed.)
 
 ### 6.4 `!ARPlayer` crashes on a missing poster sprite
 
-`!ARPlayer` reads the poster as `spr_ReadSprite(sprite_offset + 12,
-sprite_size − 12)` with no guard, so a movie written with no sprite
-(`size of sprite` = 0) issues a −12-byte read and crashes the front-end. (The
-command-line player does not read the sprite and is unaffected, which is why this
-is easy to miss.) **Always embed a complete poster sprite** with a non-zero
-`size of sprite` (§5); offer an explicit "no poster" mode only if you accept that
-such files will crash `!ARPlayer`.
+`!ARPlayer`'s `display__loadsprite`
+([`Apps/ARPlayer/c/display:110`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/Apps/ARPlayer/c/display#L110))
+loads the poster with `spr_ReadSprite(area, f, sprite_offset + 12,
+sprite_size − 12)` and never checks that `size of sprite` is non-zero (the `+12`
+/ `−12` skips the spritefile's 12-byte area header). `spr_ReadSprite`
+([`Lib/ARLib/Spr/c/spr:493`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/Lib/ARLib/Spr/c/spr#L493))
+guards only on `length != 0`, **not** `length > 0` (line 496), so a zero-size
+sprite passes `length = −12` to `extendby` and `file_read` (lines 498/504) — a
+negative-length read that faults instead of returning an error. Because it faults
+rather than failing cleanly, the "fall back to the default sprite" path
+([`display:120`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/Apps/ARPlayer/c/display#L120))
+is never reached and the front-end crashes. (The command-line player only
+reads-and-discards the sprite, so it is unaffected — which is why this is easy to
+miss.) **Always embed a complete poster sprite** with a non-zero `size of sprite`
+(§5); offer an explicit "no poster" mode only if you accept that such files crash
+`!ARPlayer`.
 
 ### 6.5 Sound-only movies and the sound field
 
