@@ -1,0 +1,3 @@
+# Generated rate/quality artifacts — reproducible via tools/rate_quality_sweep.py
+*.png
+*.csv
