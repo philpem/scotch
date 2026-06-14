@@ -78,8 +78,9 @@ static void usage(FILE *stream)
             "[--target-bytes N] [--pad-to-multiple N] [--trace FILE] "
             "[--recon-ppm FILE | --recon-prefix PREFIX] "
             "[--keys-prefix PREFIX]\n"
-            "  codec 1 (Moving Lines) takes only --input (RGB24), --size, "
-            "--frames, --payload[-prefix] and --recon[-ppm|-prefix].\n"
+            "  codec 1 (Moving Lines) takes --input (RGB24), --size, --frames, "
+            "--colour rgb|yuv, --payload[-prefix], --recon[-ppm|-prefix] and "
+            "--output.\n"
             "  direct-to-container (--output) also takes:\n"
             "    --fps F --frames-per-chunk N [--container-type N] "
             "[--pixel-label L] [--pixel-depth N] [--align MASK] [--keys]\n"
@@ -1541,7 +1542,7 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
                            const char *payload_prefix, size_t frame_limit,
                            const char *recon_prefix,
                            const char *recon_ppm_path, unsigned pad_to_multiple,
-                           FrameSink *sink)
+                           int yuv, MbColorDither dither, FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * height;
     size_t rgb_size = pixel_count * 3U;
@@ -1549,6 +1550,7 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
     uint16_t *source = malloc(pixel_count * sizeof(*source));
     uint16_t *previous = malloc(pixel_count * sizeof(*previous));
     uint16_t *decoded = malloc(pixel_count * sizeof(*decoded));
+    MbPixel *yuv_pixels = yuv ? malloc(pixel_count * sizeof(*yuv_pixels)) : NULL;
     ReplayBuffer payload;
     FILE *input = NULL;
     size_t frame_number = 0U;
@@ -1559,7 +1561,8 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
         fprintf(stderr, "type 1 encode supports only RGB24 input\n");
         goto cleanup;
     }
-    if (rgb == NULL || source == NULL || previous == NULL || decoded == NULL) {
+    if (rgb == NULL || source == NULL || previous == NULL || decoded == NULL ||
+        (yuv && yuv_pixels == NULL)) {
         fprintf(stderr, "unable to allocate frame buffers\n");
         goto cleanup;
     }
@@ -1581,8 +1584,26 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
         if (read_result != FRAME_READ_OK) {
             goto cleanup;
         }
-        for (i = 0; i < pixel_count; ++i) {
-            source[i] = rgb24_to_rgb555(&rgb[3 * i]);
+        if (yuv) {
+            /* RGB24 -> YUV555 (5-bit Y, signed 5-bit U/V), packed Y|U<<5|V<<10
+               -- the native type-7/17 YUV555 word layout. */
+            MbFrame frame = { width, height, width, yuv_pixels };
+
+            if (mb_color_rgb24_to_yuv555(rgb, (size_t)width * 3U, &frame,
+                                         dither) != REPLAY_OK) {
+                fprintf(stderr, "frame %zu: YUV conversion failed\n",
+                        frame_number);
+                goto cleanup;
+            }
+            for (i = 0; i < pixel_count; ++i) {
+                source[i] = (uint16_t)(yuv_pixels[i].y |
+                                       (yuv_pixels[i].u << 5) |
+                                       (yuv_pixels[i].v << 10));
+            }
+        } else {
+            for (i = 0; i < pixel_count; ++i) {
+                source[i] = rgb24_to_rgb555(&rgb[3 * i]);
+            }
         }
         if (codec_movinglines_encode_frame(source, previous_arg, width, height,
                                             &payload) != REPLAY_OK) {
@@ -1661,6 +1682,7 @@ cleanup:
         fclose(input);
     }
     replay_buffer_free(&payload);
+    free(yuv_pixels);
     free(decoded);
     free(previous);
     free(source);
@@ -1686,6 +1708,7 @@ int main(int argc, char **argv)
     size_t frame_limit = 0U;
     InputFormat input_format = INPUT_RGB24;
     MbColorDither dither = MB_COLOR_DITHER_NONE;
+    int ml_yuv = 0; /* codec 1: pack YUV555 instead of RGB555 */
     CodecMovingBlocksBetaVariant beta_variant = CODEC_MOVINGBLOCKSBETA_OLD;
     unsigned pad_to_multiple = 0U;
     unsigned encode_pad = 0U;
@@ -1770,6 +1793,17 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(argv[i], "--no-dither") == 0) {
             dither = MB_COLOR_DITHER_NONE;
+        } else if (strcmp(argv[i], "--colour") == 0 && i + 1 < argc) {
+            const char *name = argv[++i];
+
+            if (strcmp(name, "rgb") == 0) {
+                ml_yuv = 0;
+            } else if (strcmp(name, "yuv") == 0) {
+                ml_yuv = 1;
+            } else {
+                usage(stderr);
+                return EXIT_FAILURE;
+            }
         } else if (strcmp(argv[i], "--payload") == 0 && i + 1 < argc) {
             payload_path = argv[++i];
         } else if (strcmp(argv[i], "--payload-prefix") == 0 && i + 1 < argc) {
@@ -1916,6 +1950,12 @@ int main(int argc, char **argv)
         container.width = width;
         container.height = height;
         container.want_keys = want_keys;
+        /* Moving Lines carries no colour in the stream; the player picks RGB
+           vs YUV from the pixel label (bas/Player: "YUV" -> YUV, else RGB), so
+           declare the model the muxer packed unless one was given explicitly. */
+        if (codec == 1U && container.pixel_label == NULL) {
+            container.pixel_label = ml_yuv ? "YUV 5,5,5" : "RGB 5,5,5";
+        }
         frame_sink_init(&sink, codec, want_keys);
         sinkp = &sink;
         /* The direct path pads after encoding, once the real frame count and
@@ -1944,7 +1984,7 @@ int main(int argc, char **argv)
         result = run_movinglines(input_path, input_format, width, height,
                                  payload_path, payload_prefix, frame_limit,
                                  recon_prefix, recon_ppm_path, encode_pad,
-                                 sinkp);
+                                 ml_yuv, dither, sinkp);
         goto assemble;
     }
     if (codec == 7U || codec == 17U || codec == 20U) {
