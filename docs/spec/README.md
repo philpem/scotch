@@ -17,13 +17,13 @@ spec is correct and its provenance appendix explains why.
 | --- | --- | --- |
 | [methodology.md](methodology.md) | Sources, verification method, and the conventions (bit order, colour) every other spec relies on. Read this first. | stable |
 | [type19-super-moving-blocks.md](type19-super-moving-blocks.md) | Compression type 19, *Super Moving Blocks* — the flagship Moving Blocks bitstream (6Y5UV). | complete |
+| [moving-blocks-7-17-20.md](moving-blocks-7-17-20.md) | The other Moving Blocks codecs — types 7, 17 and 20 — as deltas from type 19. | complete |
 | [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
 
 ## Planned
 
 Following the same template and shared appendix:
 
-- Moving Blocks types 7, 17 and 20 (mostly deltas against type 19).
 - The ARMovie sound formats (VIDC-µ8, signed-8/16, ADPCM).
 - Types 2 and 23, and the Moving Lines family.
 
