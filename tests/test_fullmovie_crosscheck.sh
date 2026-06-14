@@ -18,6 +18,10 @@ codec=$5
 layout=$6   # working-space layout for this codec: yuv555 or 6y5uv
 frames=8
 
+if ! "$python" -c 'import unicorn' >/dev/null 2>&1; then
+    echo "SKIP: the Python Unicorn bindings are required" >&2
+    exit 77
+fi
 work=${TMPDIR:-/tmp}/fullmovie-$codec-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work"

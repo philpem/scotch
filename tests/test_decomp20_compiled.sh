@@ -9,6 +9,10 @@ python=$2
 harness=$3
 decompressor=$4
 variant=${5:-old}
+if ! "$python" -c 'import unicorn' >/dev/null 2>&1; then
+    echo "SKIP: the Python Unicorn bindings are required" >&2
+    exit 77
+fi
 work=${TMPDIR:-/tmp}/decomp20-$variant-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work"

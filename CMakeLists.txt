@@ -236,6 +236,8 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP19_COMPILED} 19 6y5uv)
+        set_tests_properties(test_decomp19_compiled test_fullmovie_decomp19
+            PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP23_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd"
@@ -247,6 +249,8 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP23_COMPILED})
+        set_tests_properties(test_decomp23_compiled
+            PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP17_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp17/Decompress,ffd"
@@ -272,6 +276,8 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP17_COMPILED} 17 yuv555)
+        set_tests_properties(test_decomp17_compiled test_decomp17_encoded
+            test_fullmovie_decomp17 PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP7_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp7/Decompress,ffd"
@@ -291,6 +297,8 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP7_COMPILED} 7 yuv555)
+        set_tests_properties(test_decomp7_compiled test_fullmovie_decomp7
+            PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP20_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20/Decompress,ffd"
@@ -310,6 +318,8 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP20_COMPILED} 20 6y6uv)
+        set_tests_properties(test_decomp20_compiled test_fullmovie_decomp20
+            PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP20NEW_COMPILED
         "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20new/Decompress,ffd"
@@ -322,5 +332,7 @@ if(Python3_Interpreter_FOUND)
                 ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP20NEW_COMPILED} new)
+        set_tests_properties(test_decomp20new_compiled
+            PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endif()

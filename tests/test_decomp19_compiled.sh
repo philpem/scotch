@@ -6,6 +6,10 @@ verify=$2
 python=$3
 harness=$4
 decompressor=$5
+if ! "$python" -c 'import unicorn' >/dev/null 2>&1; then
+    echo "SKIP: the Python Unicorn bindings are required" >&2
+    exit 77
+fi
 work=${TMPDIR:-/tmp}/decomp19-compiled-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work"

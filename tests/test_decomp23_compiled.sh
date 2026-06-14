@@ -4,6 +4,10 @@ set -eu
 python=$1
 harness=$2
 decompressor=$3
+if ! "$python" -c 'import unicorn' >/dev/null 2>&1; then
+    echo "SKIP: the Python Unicorn bindings are required" >&2
+    exit 77
+fi
 work=${TMPDIR:-/tmp}/replay-decomp23-$$
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir "$work"
