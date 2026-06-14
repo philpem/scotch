@@ -23,15 +23,19 @@ spec is correct and its provenance appendix explains why.
 | [raw-formats-2-23.md](raw-formats-2-23.md) | The uncompressed video formats — type 2 (16-bit raw) and type 23 (4:2:2 6Y6Y5U5V). | complete |
 | [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | **draft** (from Acorn BASIC + notes; not yet cross-checked) |
 
+### Shared subsystems
+
+| Spec | Covers | Status |
+| --- | --- | --- |
+| [colour-pipeline.md](colour-pipeline.md) | RGB↔6Y*n*UV: CompLib constants, ARM-ASR rounding, ordered dither, the display inverse. | complete |
+| [quality-model.md](quality-model.md) | The encoder-side 29-row QP% copy-acceptance table and test. | complete |
+
 ## Outstanding
 
 - **Verify Moving Lines.** The type-1 spec is drafted from the `MovingLine`
   BASIC source and notes but has no cross-checked reference implementation; it
   needs a portable codec and/or an emulation harness to confirm it byte-for-byte,
   as types 7/17/19/20 have.
-- The colour pipeline (RGB↔6Y*n*UV constants, ordered dither) and the encoder-
-  side QP% quality model are referenced from the bitstream specs but not yet
-  lifted into standalone specs.
 
 ## How to read a spec
 
