@@ -36,11 +36,12 @@ Every Acorn video type the project knows (1, 2, 7, 17, 19, 20, 23) plus the
 container and sound is now specified and verified, with a codec behind each.
 What remains is optional polish:
 
-- **Moving Lines colour fidelity.** `replay-encode --codec 1` muxes complete
-  `.ae7` movies (chunked, padded, postered) that decode on the compiled module,
-  but it packs pixels as RGB555 by a tool convention and declares 16-bit depth;
-  matching a specific real Moving Lines movie's exact colour model and depth
-  metadata is unconfirmed.
+- **Moving Lines colour on real hardware.** `replay-encode --codec 1` muxes
+  complete `.ae7` movies that decode on the compiled module. The colour metadata
+  is pinned from the player source: it packs RGB555 **red-in-low-bits** (the
+  `bgr555le` / Replay-poster convention) at 16-bit depth, and the shipped player
+  selects RGB when the pixel label carries no `YUV` (`bas/Player`). The only
+  residual is visual confirmation on a real player/emulator.
 - **From-assembler colour rounding.** The one open numerical detail noted in
   [colour-pipeline.md](colour-pipeline.md): confirming CompLib's real-to-integer
   rounding at coefficient boundaries straight from the assembler.

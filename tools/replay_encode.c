@@ -1503,7 +1503,9 @@ static uint16_t rgb24_to_rgb555(const uint8_t *rgb)
 {
     unsigned r = rgb[0] >> 3, g = rgb[1] >> 3, b = rgb[2] >> 3;
 
-    return (uint16_t)((r << 10) | (g << 5) | b);
+    /* RISC OS 15-bit convention: red in the low bits (ffmpeg bgr555le), the
+       same packing as the Replay poster (see docs/player-bugs.md). */
+    return (uint16_t)((b << 10) | (g << 5) | r);
 }
 
 static int write_movinglines_ppm(const char *path, const uint16_t *pixels,
@@ -1520,9 +1522,9 @@ static int write_movinglines_ppm(const char *path, const uint16_t *pixels,
     fprintf(file, "P6\n%u %u\n255\n", width, height);
     for (i = 0; i < count; ++i) {
         uint8_t rgb[3] = {
-            (uint8_t)(((pixels[i] >> 10) & 0x1FU) << 3),
+            (uint8_t)((pixels[i] & 0x1FU) << 3),         /* red in the low bits */
             (uint8_t)(((pixels[i] >> 5) & 0x1FU) << 3),
-            (uint8_t)((pixels[i] & 0x1FU) << 3)
+            (uint8_t)(((pixels[i] >> 10) & 0x1FU) << 3)
         };
 
         if (fwrite(rgb, 1, 3, file) != 3) {
