@@ -5,7 +5,10 @@
 /*
  * Spatial references must point wholly into pixels earlier in raster order.
  * The legal offsets differ for 4x4 and 2x2 blocks; these tables are part of
- * the format rather than an encoder search policy.
+ * the format rather than an encoder search policy. They are shared by types 7,
+ * 17 and 19 and were taken from the running decoder, not the docs: see the
+ * note above mb_motion_read_format7 -- the published 2x2 column is in a
+ * scrambled order, so the compiled Decomp module is the authority.
  */
 static const MbMotionVector spatial_4x4[8] = {
     { -2, -4, 1 }, { -1, -4, 1 }, { 0, -4, 1 }, { 1, -4, 1 },

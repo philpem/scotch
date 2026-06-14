@@ -65,6 +65,11 @@ int mb_encode_candidate_better(const CopyCandidate *candidate,
  * source outside the parent is valid only if its owning 4x4 block precedes the
  * parent in scan order. Returns the pixel, or NULL when the reference is not
  * yet reconstructed.
+ *
+ * `tentative[16]` holds the parent block's in-progress reconstruction in
+ * row-major order: local pixel (r, c) for 0 <= r, c < 4 lives at index r*4 + c.
+ * `available_mask` bit i is set once tentative[i] has been produced by an
+ * earlier 2x2 child, so (mask & (1 << i)) tells whether tentative[i] is usable.
  */
 const MbPixel *mb_encode_split_spatial_pixel(
     const MbFrame *reconstructed, const MbPixel tentative[16],

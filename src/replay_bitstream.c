@@ -6,6 +6,12 @@
  * Replay writes fields least-significant bit first. The accumulator therefore
  * keeps the next stream bit at bit zero; complete low bytes can be emitted or
  * consumed without reversing individual fields.
+ *
+ * Accumulator width: between calls fewer than 8 bits are buffered (the writer
+ * drains every whole byte; the reader only refills to satisfy a request). A
+ * single operation adds at most 32 bits (count <= 32), so at most 7 + 32 = 39
+ * bits are ever live at once -- comfortably inside the 64-bit accumulator, which
+ * is why no meaningful bit is ever shifted out.
  */
 
 void replay_bitwriter_init(ReplayBitWriter *writer, ReplayBuffer *buffer)

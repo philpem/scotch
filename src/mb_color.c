@@ -7,6 +7,11 @@
  * its non-dithered RGB conversion, not a generic full-range YUV transform.
  * Emulator fixtures still need to confirm the original assembler's exact
  * real-to-integer rounding at coefficient boundaries.
+ *
+ * The luma weights are the BT.601 coefficients in 16.16: 0.299, 0.587, 0.114
+ * times 65536 give 19595, 38470, 7471, which sum to exactly 65536 (so a full
+ * white pixel maps to luma_max). U and V are then derived from B-Y and R-Y
+ * (the MB_U_ and MB_V_ terms are the matching scaled partial-luma constants).
  */
 #define MB_Y_R 19595
 #define MB_Y_G 38470
@@ -179,6 +184,13 @@ static ReplayStatus yuv_to_rgb24(const MbFrame *input, uint8_t *rgb,
                                chroma_max);
             v = divide_nearest(signed_chroma(pixel->v, chroma_half) * 256,
                                chroma_max);
+            /*
+             * Textbook BT.601 inverse (1.402, 0.344, 0.714, 1.772, scaled by
+             * 1000). This is a generic display transform, deliberately NOT the
+             * algebraic inverse of CompLib's forward constants above -- the
+             * quantisation is lossy regardless, so this path exists only to
+             * preview frames, never to round-trip them.
+             */
             destination[x * 3U] =
                 clamp_u8(luma + divide_nearest(1402 * v, 1000));
             destination[x * 3U + 1U] =
