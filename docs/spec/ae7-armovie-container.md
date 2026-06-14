@@ -121,23 +121,87 @@ store samples directly. The sound formats are specified separately (planned).
 
 ## 5. Poster sprite and key-frame table
 
-- **Poster sprite** (lines 19–20): a standard RISC OS sprite shown before
-  playback. `size of sprite` is 0 when absent.
+- **Poster sprite** (lines 19–20): a standard RISC OS sprite (poster) shown
+  before playback. **A muxer must embed a real sprite and must not set
+  `size of sprite` to 0** — see §6.4: `!ARPlayer` crashes on a zero-length
+  sprite. The sprite is a complete RISC OS spritefile; the Replay poster
+  convention is 16bpp 1:5:5:5 (red in the low bits) with a new-format
+  square-pixel mode word `(5<<27)|(90<<14)|(90<<1)|1` (old numbered modes such as
+  28 are 8bpp and render the data as garbage).
 - **Key-frame table** (line 21): a byte offset to a table indexing the frames
   that are independently decodable (enabling seeking), or −1 when the movie has
   none. Its internal layout is not specified here (see Appendix A).
 
+## 6. Player constraints a conforming muxer must satisfy
+
+The container format is defined as much by what the shipped player accepts as by
+the header grammar. The ARMovie player engine (version 0.73, 27 Aug 2002; the
+BASIC playback loop [`bas/Player,ffb`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/SystemRes/ARMovie/bas/Player%2Cffb))
+and its [`!ARPlayer`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/Apps/ARPlayer)
+front-end have hard assumptions and outright bugs that are **not** recoverable
+errors — a malformed-but-legal file crashes or corrupts playback rather than
+being rejected. A muxer must produce files that avoid them.
+[`../player-bugs.md`](../player-bugs.md) gives the BASIC line numbers and the
+exact failure mechanism for each (and methodology.md gives the source-tree link
+convention).
+
+### 6.1 Every chunk must hold exactly `frames per chunk` frames
+
+The player reads line 14 (`frames per chunk`) once into a global and decodes
+exactly that many frames from **every** chunk; it never consults the catalogue's
+per-chunk frame counts during decode (`bas/Player` reloads its per-chunk
+countdown with the global unconditionally). An under-filled chunk is decoded too
+many times, reading past its video into the sound bytes and the next chunk, which
+also poisons the inter-frame predictor for what follows. **Pad every chunk to a
+full `frames per chunk`** (e.g. with repeat-last-frame frames), including the
+last.
+
+### 6.2 A one-chunk movie with audio corrupts itself
+
+The player double-buffers chunks and **aliases the two buffers when there is only
+one chunk** (`IFmaxfile=0 op1%=op0%`). With sound, the streaming look-ahead then
+prefetches the non-existent next chunk into the buffer still being played,
+corrupting video a few frames in and losing the audio. **A movie with audio must
+have at least two chunks.** (A silent single-chunk movie is fine.)
+
+### 6.3 `frames per chunk` must be at least 3
+
+The player derives its decompress-ahead buffer count from `frames per chunk` and
+requires it to stay strictly below that value; at 1 or 2 the clamps collapse the
+look-ahead margin. **`frames per chunk` must be ≥ 3.** (Combined with §6.2, a
+very short movie with audio must still be split into two chunks of ≥ 3 frames
+each — pad as needed.)
+
+### 6.4 `!ARPlayer` crashes on a missing poster sprite
+
+`!ARPlayer` reads the poster as `spr_ReadSprite(sprite_offset + 12,
+sprite_size − 12)` with no guard, so a movie written with no sprite
+(`size of sprite` = 0) issues a −12-byte read and crashes the front-end. (The
+command-line player does not read the sprite and is unaffected, which is why this
+is easy to miss.) **Always embed a complete poster sprite** with a non-zero
+`size of sprite` (§5); offer an explicit "no poster" mode only if you accept that
+such files will crash `!ARPlayer`.
+
+### 6.5 Sound-only movies and the sound field
+
+- A **sound-only** movie (video format 0, no frames) must report **0×0**
+  dimensions on lines 6–7.
+- The catalogue must **always** carry a sound field — `;0` when silent — never
+  omit it (§3).
+
 ## Appendix A. Provenance and corrections
 
-Sources: the ARMovie header as parsed and written by the reference
-`replay_ae7.c` / `replay_ae7_write.c`, cross-checked against real movies — most
-directly `LionFish19,ae7` (SHA-256
-`e4a6539b19a105e80e3171a4753870b184edafded0ee874bf2f470231b661684`): type 19,
-160×128 16-bit 6Y5UV, 12.5 fps, 25 frames/chunk, last chunk index 14 (so 15
-chunks, 375 frames), no key table, one 44,100-byte sound region per chunk. Its
-chunk 0 starts at offset 83,968 and declares 181,886 video bytes; running the
+Sources: the ARMovie container as the shipped Acorn player reads it — engine
+`RiscOS/Sources/SystemRes/ARMovie` (`bas/Player`, v0.73, 27 Aug 2002) and the
+`!ARPlayer` front-end — together with real movies, most directly `LionFish19,ae7`
+(SHA-256 `e4a6539b19a105e80e3171a4753870b184edafded0ee874bf2f470231b661684`):
+type 19, 160×128 16-bit 6Y5UV, 12.5 fps, 25 frames/chunk, last chunk index 14
+(so 15 chunks, 375 frames), no key table, one 44,100-byte sound region per chunk.
+Its chunk 0 starts at offset 83,968 and declares 181,886 video bytes; running the
 compiled Decomp19 25 times consumes 181,885 and leaves one pad byte, and all 25
-frames match the reference decoder byte-for-byte.
+frames match byte-for-byte. The header field meanings and the §6 constraints are
+read from that player source; this repository's `replay_ae7.c` /
+`replay_ae7_write.c` embody them as a cross-check and are not the authority.
 
 Corrections and clarifications:
 

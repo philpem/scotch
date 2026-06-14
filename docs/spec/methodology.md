@@ -7,41 +7,75 @@ specs do not repeat it.
 
 ## Sources
 
-Two kinds of original material exist, and they are not equally trustworthy.
+The authority for every claim is **Acorn's own code** — the programs that
+actually encoded and played the movies. This repository's reference
+implementation is a cross-check, never the source of truth.
 
-- **Shipped, compiled decoders** — `Decompress,ffd` modules from the ARMovie /
-  Replay distributions (`Decomp7`, `Decomp17`, `Decomp19`, `Decomp20`,
-  `Decomp20new`, `Decomp23`, ...). These are the programs that actually played
-  the movies, so for any disagreement **the running decoder is authoritative.**
-- **Source and documentation** — per-codec `Resources/Info` identity files,
-  occasional `Docs/Stream` notes, and Acorn's BASIC compressor/decompressor
-  listings (`BatchComp,ffb`, `MakeDecomp,ffb`, CompLib). These explain intent
-  and supply constants, but they contain transcription errors and omissions and
-  sometimes describe a *different revision* from the one that shipped.
+- **Shipped binaries and player source — authoritative for behaviour.** The
+  compiled `Decompress,ffd` codec modules (`Decomp7`, `Decomp17`, `Decomp19`,
+  `Decomp20`, `Decomp20new`, `Decomp23`, ...) and the ARMovie player itself:
+  `RiscOS/Sources/SystemRes/ARMovie` (the engine, whose `bas/Player` BBC BASIC
+  program assembles the playback loop with `[OPT`) and its `!ARPlayer` GUI
+  front-end. For any disagreement **the shipped Acorn code wins**, and the
+  container's hard constraints come from how this player behaves, bugs included
+  (see the format specs' "player constraints" sections and
+  [`../player-bugs.md`](../player-bugs.md)).
+- **Acorn source and documentation — authoritative for intent and constants.**
+  The BASIC compressor/decompressor listings (`BatchComp,ffb`, `MakeDecomp,ffb`,
+  CompLib), per-codec `Resources/Info` identity files, and the occasional
+  `Docs/Stream` note. These supply the algorithms and exact constants but contain
+  transcription errors and omissions and sometimes describe a *different revision*
+  from the one that shipped.
+- **This repository's `libreplay` — a cross-check, not an authority.** A portable
+  re-implementation built from the Acorn sources above and validated against the
+  shipped binaries byte-for-byte. The specs cite Acorn's code; where `libreplay`
+  and Acorn disagree, Acorn is correct.
 
-When a spec states a fact, it states it as verified against the compiled
-decoder. When it quotes the BASIC or the `Info` file, it says so.
+When a spec states a fact, it cites the Acorn source it came from, and "verified"
+means the behaviour was reproduced from the shipped Acorn binary (§Verification).
+
+### The Acorn source tree
+
+All Acorn citations are to the RISC OS 2003 source release at
+**[github.com/barryc-ro/RiscOS_2003](https://github.com/barryc-ro/RiscOS_2003)**
+(examined at commit `b40b11b`). Paths below are relative to that repository; a
+file `X` links as `https://github.com/barryc-ro/RiscOS_2003/blob/master/X`. The
+components the specs draw on:
+
+| Component | Path | Contents |
+| --- | --- | --- |
+| ARMovie player engine | [`RiscOS/Sources/SystemRes/ARMovie`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/SystemRes/ARMovie) | playback loop ([`bas/Player,ffb`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/SystemRes/ARMovie/bas/Player%2Cffb)), colour/format library ([`bas/CompLib,ffb`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/SystemRes/ARMovie/bas/CompLib%2Cffb)) |
+| Per-codec modules | `RiscOS/Sources/SystemRes/ARMovie/Video/Decomp`*N* | e.g. Decomp19's `Resources/Info`, `bas/BatchComp,ffb`, `bas/MakeDecomp,ffb` |
+| GUI front-end | [`RiscOS/Sources/Apps/ARPlayer`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/Apps/ARPlayer) | poster handling (the missing-sprite crash) |
+| Encoder app | [`RiscOS/Sources/Apps/AREncode`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/Apps/AREncode) | the GUI encoder |
+| Replay libraries | [`RiscOS/Sources/Lib/ARLib`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/Lib/ARLib) | shared Replay code (sprite, file, struct helpers) |
+
+The `,ffb` files are tokenised BBC BASIC; the line numbers some specs quote are
+program line numbers, visible after detokenising (see
+[`../player-bugs.md`](../player-bugs.md) for the procedure).
 
 ## Verification method
 
-Three independent checks back the specs:
+The behaviour the specs describe is read out of the **genuine Acorn decoder**,
+not assumed from the reference code:
 
-1. **A portable reference codec** (this repository's `libreplay`) encodes and
-   decodes each format.
-2. **Emulated execution of the genuine Acorn decoder.** `tools/decomp19_unicorn.py`
+1. **Emulated execution of the genuine Acorn decoder.** `tools/decomp19_unicorn.py`
    loads a real `Decompress,ffd` into a Unicorn ARM emulator, installs the
    classic-alignment LDM/STM hooks the modules rely on, and runs the codec over
    chosen payloads — initialising once and alternating reconstruction buffers so
    inter-frame dependencies are exercised exactly as in playback. See
-   [`../decomp19-arm-harness.md`](../decomp19-arm-harness.md).
-3. **Byte-for-byte cross-checks.** The reference decoder's output is compared
-   against the emulated Acorn decoder's output, frame by frame, for hand-built
-   fixtures and for multi-frame synthetic movies (`test_fullmovie_*`). The
-   corpus is described in [`../cross-check-corpus.md`](../cross-check-corpus.md).
-   These tests `SKIP` when the compiled modules or Unicorn are unavailable.
+   [`../decomp19-arm-harness.md`](../decomp19-arm-harness.md). Container and
+   playback constraints are read from the player engine's `bas/Player` BASIC
+   (detokenised) and `!ARPlayer`.
+2. **Byte-for-byte cross-checks.** The reference codec (`libreplay`) is held to
+   the Acorn decoder's output, frame by frame, for hand-built fixtures and for
+   multi-frame synthetic movies (`test_fullmovie_*`). The corpus is described in
+   [`../cross-check-corpus.md`](../cross-check-corpus.md). These tests `SKIP` when
+   the compiled modules or Unicorn are unavailable.
 
-A claim is "verified" in a spec when the reference implementation that embodies
-it reproduces the compiled Acorn decoder's output byte-for-byte.
+A claim is "verified" when it reproduces the shipped Acorn binary's behaviour
+byte-for-byte. The reference codec is how that check is run; it is not what the
+spec cites.
 
 ## Conventions
 
@@ -91,8 +125,8 @@ RGB↔YUV uses the BT.601 luma weights in 16.16 fixed point (0.299, 0.587, 0.114
 All integer rounding emulates the ARM arithmetic shift (round toward negative
 infinity), which differs from C's truncate-toward-zero for negatives; encoders
 must reproduce this to match Acorn output bit-for-bit. The exact constants and
-the optional ordered-dither luma rounding are given in the reference
-`mb_color.c`; a future colour spec will lift them here.
+the optional ordered-dither luma rounding come from the ARMovie colour library
+`bas/CompLib,ffb`; a future colour spec will lift them here.
 
 ### Terminology
 

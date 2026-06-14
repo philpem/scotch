@@ -7,7 +7,10 @@ next *N* bits, bit 0 first.
 
 ## 1. Identity
 
-`Decomp19/Resources/Info` declares:
+The type-19 module lives at `RiscOS/Sources/SystemRes/ARMovie/Video/Decomp19`
+in the Acorn source tree (see [methodology.md](methodology.md) for the repo and
+link convention). Its [`Resources/Info`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/SystemRes/ARMovie/Video/Decomp19/Resources/Info)
+declares:
 
 ```text
 Super Moving Blocks
@@ -251,10 +254,11 @@ last frame (see the container spec).
 A decoder needs nothing in this section; an encoder does.
 
 - **Copy acceptance.** Whether a copy may stand in for a block is governed by the
-  shared 29-row "QP%" quality table: row 0 demands exact decoder-visible pixels,
-  higher rows permit bounded per-component and total error (luma absolute error
-  plus the block-average chroma error). The table and the exact acceptance test
-  live in the reference `mb_quality.c`; a future encoder spec will lift them.
+  shared 29-row "QP%" quality table from Decomp19's compressor source
+  (`Video/Decomp19/bas/BatchComp,ffb`, `bas/MakeDecomp,ffb`): row 0 demands exact
+  decoder-visible pixels, higher rows permit bounded per-component and total
+  error (luma absolute error plus the block-average chroma error). A future
+  encoder spec will lift the table and the exact acceptance test.
 - **Family choice.** Because index width grows with code length, an encoder that
   wants the original compressor's output prefers, among equally good copies, the
   shortest family and then the lowest index.
@@ -266,13 +270,17 @@ A decoder needs nothing in this section; an encoder does.
 
 ## Appendix A. Provenance and corrections
 
-Sources: `Decomp19/Resources/Info`, `Decomp19/bas/BatchComp,ffb.txt`,
-`Decomp19/bas/MakeDecomp,ffb.txt`, and the compiled `Decomp19/Decompress,ffd`.
-There is **no `Docs/Stream` file** for Decomp19 in the reference tree, so the
-wire format was recovered from the compressor source and confirmed against the
-compiled decoder under emulation (methodology §Verification). Every frame of the
-`LionFish19` sample and of the synthetic full-movie fixtures decodes identically
-on the compiled module and the reference decoder.
+Sources, all under
+[`RiscOS/Sources/SystemRes/ARMovie/Video/Decomp19`](https://github.com/barryc-ro/RiscOS_2003/tree/master/RiscOS/Sources/SystemRes/ARMovie/Video/Decomp19)
+(see [methodology.md](methodology.md) for the repo and link convention):
+[`Resources/Info`](https://github.com/barryc-ro/RiscOS_2003/blob/master/RiscOS/Sources/SystemRes/ARMovie/Video/Decomp19/Resources/Info),
+the tokenised-BASIC compressor `bas/BatchComp,ffb` and `bas/MakeDecomp,ffb`, and
+the colour library `ARMovie/bas/CompLib,ffb`; plus the compiled
+`Decompress,ffd`. There is **no `Docs/Stream` file** for Decomp19 in this tree,
+so the wire format was recovered from the compressor source and confirmed
+against the compiled decoder under emulation (methodology §Verification). Every
+frame of the `LionFish19` sample and of the synthetic full-movie fixtures
+decodes identically on the compiled module and the reference decoder.
 
 Corrections and clarifications to the original material:
 
