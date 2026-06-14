@@ -769,20 +769,219 @@ static int write_6y6uv_ppm(const char *path, const MbFrame *frame,
     return EXIT_SUCCESS;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Unified Moving Blocks encode driver (types 7, 17, 20).
+ *
+ * These three codecs share one encode loop: read a frame, convert it to the
+ * codec's working colour space, run the device-bandwidth rate-control retry
+ * loop, optionally self-check by independent decode, then emit the payload and
+ * any requested reconstruction/key side outputs. Only a handful of per-codec
+ * details vary, captured in MbToolCodec below. (Type 19 keeps its own loop in
+ * main(): it additionally supports --trace and the bracketed rate search.)
+ * ------------------------------------------------------------------------- */
+
+/* The per-frame block tally the stats line prints, shared by all three codecs. */
+typedef struct {
+    size_t data4x4_blocks;
+    size_t stationary4x4_blocks;
+    size_t temporal4x4_blocks;
+    size_t spatial4x4_blocks;
+    size_t split4x4_blocks;
+    size_t data2x2_blocks;
+    size_t stationary2x2_blocks;
+    size_t temporal2x2_blocks;
+    size_t spatial2x2_blocks;
+    size_t bits_written;
+} MbToolStats;
+
+#define MB_TOOL_COPY_STATS(dst, src)                                      \
+    do {                                                                  \
+        (dst).data4x4_blocks = (src).data4x4_blocks;                      \
+        (dst).stationary4x4_blocks = (src).stationary4x4_blocks;          \
+        (dst).temporal4x4_blocks = (src).temporal4x4_blocks;              \
+        (dst).spatial4x4_blocks = (src).spatial4x4_blocks;                \
+        (dst).split4x4_blocks = (src).split4x4_blocks;                    \
+        (dst).data2x2_blocks = (src).data2x2_blocks;                      \
+        (dst).stationary2x2_blocks = (src).stationary2x2_blocks;          \
+        (dst).temporal2x2_blocks = (src).temporal2x2_blocks;              \
+        (dst).spatial2x2_blocks = (src).spatial2x2_blocks;                \
+        (dst).bits_written = (src).bits_written;                          \
+    } while (0)
+
 /*
- * Self-contained type 17 (Moving Blocks HQ) encode loop. RGB input is converted
- * to YUV555; copy modes are enabled for inter frames (stationary/temporal need
- * the previous reconstruction) with spatial and split also legal in the key
- * frame. Each frame is independently decoded as a self-check.
+ * Per-codec hooks for the shared driver. The encode/verify wrappers translate
+ * the codec-neutral MbEncodeOptions and block tally to and from each codec's
+ * own option/stats structs; `variant` is used only by type 20.
  */
-static int run_encode17(const char *input_path, InputFormat input_format,
-                        unsigned width, unsigned height,
-                        const char *payload_path, const char *payload_prefix,
-                        size_t frame_limit, unsigned loss_level, int data_only,
-                        const char *recon_prefix, const char *recon_ppm_path,
-                        const char *keys_prefix, size_t target_bytes,
-                        MbColorDither dither, MbEncodePolicy policy,
-                        unsigned pad_to_multiple, FrameSink *sink)
+typedef ReplayStatus (*MbToolEncodeFn)(
+    const MbFrame *source, const MbFrame *previous,
+    const MbEncodeOptions *options, int variant, ReplayBuffer *output,
+    MbFrame *reconstructed, MbToolStats *stats);
+
+typedef ReplayStatus (*MbToolVerifyFn)(const uint8_t *payload,
+                                       size_t payload_size,
+                                       const MbFrame *previous,
+                                       MbFrame *decoded, int variant);
+
+typedef struct {
+    unsigned number;         /* compression type number, for messages/stats */
+    const char *name;        /* display name in the stats line */
+    const char *payload_ext; /* per-frame payload file extension */
+    int rgb_only;            /* reject non-RGB24 input (type 20) */
+    int supports_keys;       /* allow --keys-prefix (not type 20) */
+    ReplayStatus (*from_rgb24)(const uint8_t *rgb, size_t rgb_stride,
+                               MbFrame *output, MbColorDither dither);
+    ReplayStatus (*unpack)(const uint8_t *packed, MbFrame *frame);
+    int (*write_ppm)(const char *path, const MbFrame *frame, uint8_t *scratch,
+                     size_t scratch_stride);
+    int (*write_key)(const char *path, const MbFrame *frame);
+    MbToolEncodeFn encode;
+    MbToolVerifyFn verify;
+} MbToolCodec;
+
+static ReplayStatus mb_tool_encode7(const MbFrame *source,
+                                    const MbFrame *previous,
+                                    const MbEncodeOptions *options, int variant,
+                                    ReplayBuffer *output, MbFrame *reconstructed,
+                                    MbToolStats *stats)
+{
+    CodecMovingBlocksEncodeOptions o;
+    CodecMovingBlocksEncodeStats s;
+    ReplayStatus status;
+
+    (void)variant;
+    o.allow_stationary = options->allow_stationary;
+    o.allow_temporal = options->allow_temporal;
+    o.allow_spatial = options->allow_spatial;
+    o.allow_split = options->allow_split;
+    o.loss_level = options->loss_level;
+    o.policy = options->policy;
+    o.workspace = options->workspace;
+    status = codec_movingblocks_encode_frame(source, previous, &o, output,
+                                             reconstructed, &s);
+    if (status == REPLAY_OK) {
+        MB_TOOL_COPY_STATS(*stats, s);
+    }
+    return status;
+}
+
+static ReplayStatus mb_tool_encode17(const MbFrame *source,
+                                     const MbFrame *previous,
+                                     const MbEncodeOptions *options, int variant,
+                                     ReplayBuffer *output,
+                                     MbFrame *reconstructed, MbToolStats *stats)
+{
+    CodecMovingBlocksHqEncodeOptions o;
+    CodecMovingBlocksHqEncodeStats s;
+    ReplayStatus status;
+
+    (void)variant;
+    o.allow_stationary = options->allow_stationary;
+    o.allow_temporal = options->allow_temporal;
+    o.allow_spatial = options->allow_spatial;
+    o.allow_split = options->allow_split;
+    o.loss_level = options->loss_level;
+    o.policy = options->policy;
+    o.workspace = options->workspace;
+    status = codec_movingblockshq_encode_frame(source, previous, &o, output,
+                                               reconstructed, &s);
+    if (status == REPLAY_OK) {
+        MB_TOOL_COPY_STATS(*stats, s);
+    }
+    return status;
+}
+
+static ReplayStatus mb_tool_encode20(const MbFrame *source,
+                                     const MbFrame *previous,
+                                     const MbEncodeOptions *options, int variant,
+                                     ReplayBuffer *output,
+                                     MbFrame *reconstructed, MbToolStats *stats)
+{
+    CodecMovingBlocksBetaEncodeOptions o;
+    CodecMovingBlocksBetaEncodeStats s;
+    ReplayStatus status;
+
+    o.allow_stationary = options->allow_stationary;
+    o.allow_temporal = options->allow_temporal;
+    o.allow_spatial = options->allow_spatial;
+    o.allow_split = options->allow_split;
+    o.loss_level = options->loss_level;
+    o.policy = options->policy;
+    o.workspace = options->workspace;
+    o.variant = (CodecMovingBlocksBetaVariant)variant;
+    status = codec_movingblocksbeta_encode_frame(source, previous, &o, output,
+                                                 reconstructed, &s);
+    if (status == REPLAY_OK) {
+        MB_TOOL_COPY_STATS(*stats, s);
+    }
+    return status;
+}
+
+static ReplayStatus mb_tool_verify7(const uint8_t *payload, size_t payload_size,
+                                    const MbFrame *previous, MbFrame *decoded,
+                                    int variant)
+{
+    (void)variant;
+    return codec_movingblocks_verify_frame(payload, payload_size, previous,
+                                           decoded, NULL, NULL);
+}
+
+static ReplayStatus mb_tool_verify17(const uint8_t *payload,
+                                     size_t payload_size,
+                                     const MbFrame *previous, MbFrame *decoded,
+                                     int variant)
+{
+    (void)variant;
+    return codec_movingblockshq_verify_frame(payload, payload_size, previous,
+                                             decoded, NULL, NULL);
+}
+
+static ReplayStatus mb_tool_verify20(const uint8_t *payload,
+                                     size_t payload_size,
+                                     const MbFrame *previous, MbFrame *decoded,
+                                     int variant)
+{
+    return codec_movingblocksbeta_verify_frame_variant(
+        payload, payload_size, previous, decoded, NULL, NULL,
+        (CodecMovingBlocksBetaVariant)variant);
+}
+
+static const MbToolCodec mb_tool_codec7 = {
+    7U, "Moving Blocks", ".mb7", 0, 1,
+    mb_color_rgb24_to_yuv555, unpack_yuv555,
+    write_yuv555_ppm, write_key_frame_yuv555,
+    mb_tool_encode7, mb_tool_verify7
+};
+
+static const MbToolCodec mb_tool_codec17 = {
+    17U, "Moving Blocks HQ", ".mb17", 0, 1,
+    mb_color_rgb24_to_yuv555, unpack_yuv555,
+    write_yuv555_ppm, write_key_frame_yuv555,
+    mb_tool_encode17, mb_tool_verify17
+};
+
+static const MbToolCodec mb_tool_codec20 = {
+    20U, "Moving Blocks Beta", ".mb20", 1, 0,
+    mb_color_rgb24_to_6y6uv, NULL,
+    write_6y6uv_ppm, NULL,
+    mb_tool_encode20, mb_tool_verify20
+};
+
+/*
+ * The shared encode loop for types 7, 17 and 20. Behaviour matches the former
+ * per-codec run_encodeN functions exactly; only the per-codec specifics come
+ * from `codec`. `variant` is forwarded to the type-20 hooks and ignored by the
+ * others.
+ */
+static int run_mb_encode(const MbToolCodec *codec, int variant,
+                         const char *input_path, InputFormat input_format,
+                         unsigned width, unsigned height,
+                         const char *payload_path, const char *payload_prefix,
+                         size_t frame_limit, unsigned loss_level, int data_only,
+                         const char *recon_prefix, const char *recon_ppm_path,
+                         const char *keys_prefix, size_t target_bytes,
+                         MbColorDither dither, MbEncodePolicy policy,
+                         unsigned pad_to_multiple, FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * (size_t)height;
     size_t rgb_size = pixel_count * 3U;
@@ -799,6 +998,16 @@ static int run_encode17(const char *input_path, InputFormat input_format,
     size_t frame_number = 0U;
     int result = EXIT_FAILURE;
 
+    if (keys_prefix != NULL && !codec->supports_keys) {
+        fprintf(stderr, "type %u key frames are not supported (--keys)\n",
+                codec->number);
+        return EXIT_FAILURE;
+    }
+    if (codec->rgb_only && input_format != INPUT_RGB24) {
+        fprintf(stderr, "type %u encode supports only RGB24 input\n",
+                codec->number);
+        return EXIT_FAILURE;
+    }
     replay_buffer_init(&payload);
     if (rgb == NULL || source_pixels == NULL || recon_pixels == NULL ||
         previous_pixels == NULL || decoded_pixels == NULL) {
@@ -828,8 +1037,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         MbFrame previous = { width, height, width, previous_pixels };
         MbFrame decoded = { width, height, width, decoded_pixels };
         const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
-        CodecMovingBlocksHqEncodeOptions options;
-        CodecMovingBlocksHqEncodeStats stats;
+        MbEncodeOptions options;
+        MbToolStats stats;
         unsigned retry = 0U;
         ReplayStatus status;
 
@@ -840,9 +1049,9 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             goto cleanup;
         }
         status = input_format == INPUT_RGB24
-                     ? mb_color_rgb24_to_yuv555(rgb, (size_t)width * 3U,
-                                                &source, dither)
-                     : unpack_yuv555(rgb, &source);
+                     ? codec->from_rgb24(rgb, (size_t)width * 3U, &source,
+                                         dither)
+                     : codec->unpack(rgb, &source);
         if (status != REPLAY_OK) {
             fprintf(stderr, "frame %zu: input conversion failed: %s\n",
                     frame_number, replay_status_string(status));
@@ -879,9 +1088,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             for (;;) {
                 options.loss_level =
                     rate_enabled ? rate_control.loss_level : current_loss;
-                status = codec_movingblockshq_encode_frame(
-                    &source, previous_arg, &options, &payload, &reconstructed,
-                    &stats);
+                status = codec->encode(&source, previous_arg, &options, variant,
+                                       &payload, &reconstructed, &stats);
                 if (status != REPLAY_OK) {
                     fprintf(stderr, "frame %zu: encode failed: %s\n",
                             frame_number, replay_status_string(status));
@@ -898,8 +1106,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
         }
         /* Independent decode confirms the stream matches the reconstruction. */
         if (self_check_frames) {
-            status = codec_movingblockshq_verify_frame(
-                payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
+            status = codec->verify(payload.data, payload.size, previous_arg,
+                                   &decoded, variant);
             if (status != REPLAY_OK ||
                 memcmp(decoded_pixels, recon_pixels,
                        pixel_count * sizeof(*recon_pixels)) != 0) {
@@ -909,12 +1117,18 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             }
         }
 
-        printf("frame=%zu codec=17 name=\"Moving Blocks HQ\" retry=%u "
-               "loss_level=%u bits=%zu bytes=%zu data4x4=%zu stationary4x4=%zu "
-               "temporal4x4=%zu spatial4x4=%zu split4x4=%zu data2x2=%zu "
-               "stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu verify=ok\n",
-               frame_number, retry, options.loss_level, stats.bits_written,
-               payload.size, stats.data4x4_blocks, stats.stationary4x4_blocks,
+        printf("frame=%zu codec=%u name=\"%s\" ", frame_number, codec->number,
+               codec->name);
+        if (codec->number == 20U) {
+            printf("variant=%s ",
+                   variant == CODEC_MOVINGBLOCKSBETA_NEW ? "new" : "old");
+        }
+        printf("retry=%u loss_level=%u bits=%zu bytes=%zu data4x4=%zu "
+               "stationary4x4=%zu temporal4x4=%zu spatial4x4=%zu split4x4=%zu "
+               "data2x2=%zu stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu "
+               "verify=ok\n",
+               retry, options.loss_level, stats.bits_written, payload.size,
+               stats.data4x4_blocks, stats.stationary4x4_blocks,
                stats.temporal4x4_blocks, stats.spatial4x4_blocks,
                stats.split4x4_blocks, stats.data2x2_blocks,
                stats.stationary2x2_blocks, stats.temporal2x2_blocks,
@@ -926,8 +1140,8 @@ static int run_encode17(const char *input_path, InputFormat input_format,
 
             if (payload_prefix != NULL) {
                 if (make_frame_path(generated, sizeof(generated),
-                                    payload_prefix, frame_number, ".mb17") !=
-                    EXIT_SUCCESS) {
+                                    payload_prefix, frame_number,
+                                    codec->payload_ext) != EXIT_SUCCESS) {
                     goto cleanup;
                 }
                 frame_payload = generated;
@@ -951,7 +1165,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
                 }
                 frame_ppm = generated;
             }
-            if (write_yuv555_ppm(frame_ppm, &reconstructed, rgb,
+            if (codec->write_ppm(frame_ppm, &reconstructed, rgb,
                                  (size_t)width * 3U) != EXIT_SUCCESS) {
                 goto cleanup;
             }
@@ -961,8 +1175,7 @@ static int run_encode17(const char *input_path, InputFormat input_format,
 
             if (make_frame_path(generated, sizeof(generated), keys_prefix,
                                 frame_number, ".key") != EXIT_SUCCESS ||
-                write_key_frame_yuv555(generated, &reconstructed) !=
-                    EXIT_SUCCESS) {
+                codec->write_key(generated, &reconstructed) != EXIT_SUCCESS) {
                 goto cleanup;
             }
         }
@@ -974,449 +1187,9 @@ static int run_encode17(const char *input_path, InputFormat input_format,
             break;
         }
     }
-    if (write_pad_frames(17U, width, height, payload_prefix, ".mb17",
-                         keys_prefix, pad_to_multiple, &frame_number,
-                         sink) != EXIT_SUCCESS) {
-        goto cleanup;
-    }
-    result = EXIT_SUCCESS;
-
-cleanup:
-    if (input != NULL && input != stdin) {
-        fclose(input);
-    }
-    if (have_workspace) {
-        mb_encode_workspace_destroy(&workspace);
-    }
-    free(decoded_pixels);
-    free(previous_pixels);
-    free(recon_pixels);
-    free(source_pixels);
-    free(rgb);
-    replay_buffer_free(&payload);
-    return result;
-}
-
-/*
- * Self-contained type 7 (Moving Blocks) encode loop -- the literal-data,
- * standard-on-every-RISC-PC codec. Structurally identical to run_encode17: RGB
- * input becomes YUV555, copy modes are enabled for inter frames, and each frame
- * is independently decoded as a self-check.
- */
-static int run_encode7(const char *input_path, InputFormat input_format,
-                       unsigned width, unsigned height,
-                       const char *payload_path, const char *payload_prefix,
-                       size_t frame_limit, unsigned loss_level, int data_only,
-                       const char *recon_prefix, const char *recon_ppm_path,
-                       const char *keys_prefix, size_t target_bytes,
-                       MbColorDither dither, MbEncodePolicy policy,
-                       unsigned pad_to_multiple, FrameSink *sink)
-{
-    size_t pixel_count = (size_t)width * (size_t)height;
-    size_t rgb_size = pixel_count * 3U;
-    uint8_t *rgb = malloc(rgb_size);
-    MbPixel *source_pixels = malloc(pixel_count * sizeof(*source_pixels));
-    MbPixel *recon_pixels = malloc(pixel_count * sizeof(*recon_pixels));
-    MbPixel *previous_pixels = malloc(pixel_count * sizeof(*previous_pixels));
-    MbPixel *decoded_pixels = malloc(pixel_count * sizeof(*decoded_pixels));
-    MbEncodeWorkspace workspace = { 0U, 0U, 0U, 0U, NULL, NULL };
-    int have_workspace = 0;
-    unsigned current_loss = loss_level;
-    ReplayBuffer payload;
-    FILE *input = NULL;
-    size_t frame_number = 0U;
-    int result = EXIT_FAILURE;
-
-    replay_buffer_init(&payload);
-    if (rgb == NULL || source_pixels == NULL || recon_pixels == NULL ||
-        previous_pixels == NULL || decoded_pixels == NULL) {
-        fprintf(stderr, "unable to allocate frame buffers\n");
-        goto cleanup;
-    }
-    if (target_bytes != 0U) {
-        if (mb_encode_workspace_init(&workspace, width, height) != REPLAY_OK) {
-            fprintf(stderr, "unable to allocate encoder search workspace\n");
-            goto cleanup;
-        }
-        have_workspace = 1;
-    }
-    input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
-    if (input == NULL) {
-        perror(input_path);
-        goto cleanup;
-    }
-
-    for (;;) {
-        FrameReadResult read_result =
-            read_frame(input, input_path, rgb, rgb_size);
-        MbFrame source = { width, height, width, source_pixels };
-        MbFrame reconstructed = { width, height, width, recon_pixels };
-        MbFrame previous = { width, height, width, previous_pixels };
-        MbFrame decoded = { width, height, width, decoded_pixels };
-        const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
-        CodecMovingBlocksEncodeOptions options;
-        CodecMovingBlocksEncodeStats stats;
-        unsigned retry = 0U;
-        ReplayStatus status;
-
-        if (read_result == FRAME_READ_EOF) {
-            break;
-        }
-        if (read_result != FRAME_READ_OK) {
-            goto cleanup;
-        }
-        status = input_format == INPUT_RGB24
-                     ? mb_color_rgb24_to_yuv555(rgb, (size_t)width * 3U,
-                                                &source, dither)
-                     : unpack_yuv555(rgb, &source);
-        if (status != REPLAY_OK) {
-            fprintf(stderr, "frame %zu: input conversion failed: %s\n",
-                    frame_number, replay_status_string(status));
-            goto cleanup;
-        }
-
-        options.allow_stationary = !data_only && previous_arg != NULL;
-        options.allow_temporal = !data_only && previous_arg != NULL;
-        options.allow_spatial = !data_only;
-        options.allow_split = !data_only;
-        options.policy = policy;
-
-        {
-            int rate_enabled = target_bytes != 0U && previous_arg != NULL;
-            MbRateControl rate_control;
-
-            if (rate_enabled &&
-                mb_rate_control_init(&rate_control, target_bytes,
-                                     current_loss) != REPLAY_OK) {
-                fprintf(stderr, "frame %zu: invalid rate-control target\n",
-                        frame_number);
-                goto cleanup;
-            }
-            if (have_workspace) {
-                mb_encode_workspace_reset(&workspace);
-            }
-            options.workspace = rate_enabled ? &workspace : NULL;
-            for (;;) {
-                options.loss_level =
-                    rate_enabled ? rate_control.loss_level : current_loss;
-                status = codec_movingblocks_encode_frame(
-                    &source, previous_arg, &options, &payload, &reconstructed,
-                    &stats);
-                if (status != REPLAY_OK) {
-                    fprintf(stderr, "frame %zu: encode failed: %s\n",
-                            frame_number, replay_status_string(status));
-                    goto cleanup;
-                }
-                if (!rate_enabled ||
-                    mb_rate_control_observe(&rate_control, payload.size) ==
-                        MB_RATE_ACCEPT) {
-                    break;
-                }
-                ++retry;
-            }
-            current_loss = options.loss_level;
-        }
-        if (self_check_frames) {
-            status = codec_movingblocks_verify_frame(
-                payload.data, payload.size, previous_arg, &decoded, NULL, NULL);
-            if (status != REPLAY_OK ||
-                memcmp(decoded_pixels, recon_pixels,
-                       pixel_count * sizeof(*recon_pixels)) != 0) {
-                fprintf(stderr, "frame %zu: decode self-check failed\n",
-                        frame_number);
-                goto cleanup;
-            }
-        }
-
-        printf("frame=%zu codec=7 name=\"Moving Blocks\" retry=%u "
-               "loss_level=%u bits=%zu bytes=%zu data4x4=%zu stationary4x4=%zu "
-               "temporal4x4=%zu spatial4x4=%zu split4x4=%zu data2x2=%zu "
-               "stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu verify=ok\n",
-               frame_number, retry, options.loss_level, stats.bits_written,
-               payload.size, stats.data4x4_blocks, stats.stationary4x4_blocks,
-               stats.temporal4x4_blocks, stats.spatial4x4_blocks,
-               stats.split4x4_blocks, stats.data2x2_blocks,
-               stats.stationary2x2_blocks, stats.temporal2x2_blocks,
-               stats.spatial2x2_blocks);
-
-        if (payload_path != NULL || payload_prefix != NULL) {
-            char generated[1024];
-            const char *frame_payload = payload_path;
-
-            if (payload_prefix != NULL) {
-                if (make_frame_path(generated, sizeof(generated),
-                                    payload_prefix, frame_number, ".mb7") !=
-                    EXIT_SUCCESS) {
-                    goto cleanup;
-                }
-                frame_payload = generated;
-            }
-            if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
-                goto cleanup;
-            }
-        }
-        if (sink != NULL &&
-            frame_sink_add(sink, &payload, &reconstructed) != EXIT_SUCCESS) {
-            goto cleanup;
-        }
-        if (recon_ppm_path != NULL || recon_prefix != NULL) {
-            char generated[1024];
-            const char *frame_ppm = recon_ppm_path;
-
-            if (recon_prefix != NULL) {
-                if (make_frame_path(generated, sizeof(generated), recon_prefix,
-                                    frame_number, ".ppm") != EXIT_SUCCESS) {
-                    goto cleanup;
-                }
-                frame_ppm = generated;
-            }
-            if (write_yuv555_ppm(frame_ppm, &reconstructed, rgb,
-                                 (size_t)width * 3U) != EXIT_SUCCESS) {
-                goto cleanup;
-            }
-        }
-        if (keys_prefix != NULL) {
-            char generated[1024];
-
-            if (make_frame_path(generated, sizeof(generated), keys_prefix,
-                                frame_number, ".key") != EXIT_SUCCESS ||
-                write_key_frame_yuv555(generated, &reconstructed) !=
-                    EXIT_SUCCESS) {
-                goto cleanup;
-            }
-        }
-
-        memcpy(previous_pixels, recon_pixels,
-               pixel_count * sizeof(*recon_pixels));
-        ++frame_number;
-        if (frame_limit != 0U && frame_number >= frame_limit) {
-            break;
-        }
-    }
-    if (write_pad_frames(7U, width, height, payload_prefix, ".mb7",
-                         keys_prefix, pad_to_multiple, &frame_number,
-                         sink) != EXIT_SUCCESS) {
-        goto cleanup;
-    }
-    result = EXIT_SUCCESS;
-
-cleanup:
-    if (input != NULL && input != stdin) {
-        fclose(input);
-    }
-    if (have_workspace) {
-        mb_encode_workspace_destroy(&workspace);
-    }
-    free(decoded_pixels);
-    free(previous_pixels);
-    free(recon_pixels);
-    free(source_pixels);
-    free(rgb);
-    replay_buffer_free(&payload);
-    return result;
-}
-
-/*
- * Self-contained type 20 (Moving Blocks Beta) encode loop. Identical in shape to
- * run_encode7/17 but converts RGB to 6Y6UV and uses the type-20 codec. Type 20
- * key frames are 18-bit and not yet emitted, so --keys is rejected.
- */
-static int run_encode20_variant(const char *input_path,
-                                InputFormat input_format,
-                        unsigned width, unsigned height,
-                        const char *payload_path, const char *payload_prefix,
-                        size_t frame_limit, unsigned loss_level, int data_only,
-                        const char *recon_prefix, const char *recon_ppm_path,
-                        const char *keys_prefix, size_t target_bytes,
-                        MbColorDither dither, MbEncodePolicy policy,
-                        CodecMovingBlocksBetaVariant variant,
-                        unsigned pad_to_multiple, FrameSink *sink)
-{
-    size_t pixel_count = (size_t)width * (size_t)height;
-    size_t rgb_size = pixel_count * 3U;
-    uint8_t *rgb = malloc(rgb_size);
-    MbPixel *source_pixels = malloc(pixel_count * sizeof(*source_pixels));
-    MbPixel *recon_pixels = malloc(pixel_count * sizeof(*recon_pixels));
-    MbPixel *previous_pixels = malloc(pixel_count * sizeof(*previous_pixels));
-    MbPixel *decoded_pixels = malloc(pixel_count * sizeof(*decoded_pixels));
-    MbEncodeWorkspace workspace = { 0U, 0U, 0U, 0U, NULL, NULL };
-    int have_workspace = 0;
-    unsigned current_loss = loss_level;
-    ReplayBuffer payload;
-    FILE *input = NULL;
-    size_t frame_number = 0U;
-    int result = EXIT_FAILURE;
-
-    if (keys_prefix != NULL) {
-        fprintf(stderr, "type 20 key frames are not supported (--keys)\n");
-        return EXIT_FAILURE;
-    }
-    if (input_format != INPUT_RGB24) {
-        fprintf(stderr, "type 20 encode supports only RGB24 input\n");
-        return EXIT_FAILURE;
-    }
-    replay_buffer_init(&payload);
-    if (rgb == NULL || source_pixels == NULL || recon_pixels == NULL ||
-        previous_pixels == NULL || decoded_pixels == NULL) {
-        fprintf(stderr, "unable to allocate frame buffers\n");
-        goto cleanup;
-    }
-    if (target_bytes != 0U) {
-        if (mb_encode_workspace_init(&workspace, width, height) != REPLAY_OK) {
-            fprintf(stderr, "unable to allocate encoder search workspace\n");
-            goto cleanup;
-        }
-        have_workspace = 1;
-    }
-    input = strcmp(input_path, "-") == 0 ? stdin : fopen(input_path, "rb");
-    if (input == NULL) {
-        perror(input_path);
-        goto cleanup;
-    }
-
-    for (;;) {
-        FrameReadResult read_result =
-            read_frame(input, input_path, rgb, rgb_size);
-        MbFrame source = { width, height, width, source_pixels };
-        MbFrame reconstructed = { width, height, width, recon_pixels };
-        MbFrame previous = { width, height, width, previous_pixels };
-        MbFrame decoded = { width, height, width, decoded_pixels };
-        const MbFrame *previous_arg = frame_number == 0U ? NULL : &previous;
-        CodecMovingBlocksBetaEncodeOptions options;
-        CodecMovingBlocksBetaEncodeStats stats;
-        unsigned retry = 0U;
-        ReplayStatus status;
-
-        if (read_result == FRAME_READ_EOF) {
-            break;
-        }
-        if (read_result != FRAME_READ_OK) {
-            goto cleanup;
-        }
-        status = mb_color_rgb24_to_6y6uv(rgb, (size_t)width * 3U, &source,
-                                         dither);
-        if (status != REPLAY_OK) {
-            fprintf(stderr, "frame %zu: input conversion failed: %s\n",
-                    frame_number, replay_status_string(status));
-            goto cleanup;
-        }
-
-        options.allow_stationary = !data_only && previous_arg != NULL;
-        options.allow_temporal = !data_only && previous_arg != NULL;
-        options.allow_spatial = !data_only;
-        options.allow_split = !data_only;
-        options.policy = policy;
-        options.variant = variant;
-
-        {
-            int rate_enabled = target_bytes != 0U && previous_arg != NULL;
-            MbRateControl rate_control;
-
-            if (rate_enabled &&
-                mb_rate_control_init(&rate_control, target_bytes,
-                                     current_loss) != REPLAY_OK) {
-                fprintf(stderr, "frame %zu: invalid rate-control target\n",
-                        frame_number);
-                goto cleanup;
-            }
-            if (have_workspace) {
-                mb_encode_workspace_reset(&workspace);
-            }
-            options.workspace = rate_enabled ? &workspace : NULL;
-            for (;;) {
-                options.loss_level =
-                    rate_enabled ? rate_control.loss_level : current_loss;
-                status = codec_movingblocksbeta_encode_frame(
-                    &source, previous_arg, &options, &payload, &reconstructed,
-                    &stats);
-                if (status != REPLAY_OK) {
-                    fprintf(stderr, "frame %zu: encode failed: %s\n",
-                            frame_number, replay_status_string(status));
-                    goto cleanup;
-                }
-                if (!rate_enabled ||
-                    mb_rate_control_observe(&rate_control, payload.size) ==
-                        MB_RATE_ACCEPT) {
-                    break;
-                }
-                ++retry;
-            }
-            current_loss = options.loss_level;
-        }
-        if (self_check_frames) {
-            status = codec_movingblocksbeta_verify_frame_variant(
-                payload.data, payload.size, previous_arg, &decoded, NULL, NULL,
-                variant);
-            if (status != REPLAY_OK ||
-                memcmp(decoded_pixels, recon_pixels,
-                       pixel_count * sizeof(*recon_pixels)) != 0) {
-                fprintf(stderr, "frame %zu: decode self-check failed\n",
-                        frame_number);
-                goto cleanup;
-            }
-        }
-
-        printf("frame=%zu codec=20 name=\"Moving Blocks Beta\" variant=%s "
-               "retry=%u "
-               "loss_level=%u bits=%zu bytes=%zu data4x4=%zu stationary4x4=%zu "
-               "temporal4x4=%zu spatial4x4=%zu split4x4=%zu data2x2=%zu "
-               "stationary2x2=%zu temporal2x2=%zu spatial2x2=%zu verify=ok\n",
-               frame_number,
-               variant == CODEC_MOVINGBLOCKSBETA_NEW ? "new" : "old", retry,
-               options.loss_level, stats.bits_written,
-               payload.size, stats.data4x4_blocks, stats.stationary4x4_blocks,
-               stats.temporal4x4_blocks, stats.spatial4x4_blocks,
-               stats.split4x4_blocks, stats.data2x2_blocks,
-               stats.stationary2x2_blocks, stats.temporal2x2_blocks,
-               stats.spatial2x2_blocks);
-
-        if (payload_path != NULL || payload_prefix != NULL) {
-            char generated[1024];
-            const char *frame_payload = payload_path;
-
-            if (payload_prefix != NULL) {
-                if (make_frame_path(generated, sizeof(generated),
-                                    payload_prefix, frame_number, ".mb20") !=
-                    EXIT_SUCCESS) {
-                    goto cleanup;
-                }
-                frame_payload = generated;
-            }
-            if (write_payload(frame_payload, &payload) != EXIT_SUCCESS) {
-                goto cleanup;
-            }
-        }
-        if (sink != NULL &&
-            frame_sink_add(sink, &payload, &reconstructed) != EXIT_SUCCESS) {
-            goto cleanup;
-        }
-        if (recon_ppm_path != NULL || recon_prefix != NULL) {
-            char generated[1024];
-            const char *frame_ppm = recon_ppm_path;
-
-            if (recon_prefix != NULL) {
-                if (make_frame_path(generated, sizeof(generated), recon_prefix,
-                                    frame_number, ".ppm") != EXIT_SUCCESS) {
-                    goto cleanup;
-                }
-                frame_ppm = generated;
-            }
-            if (write_6y6uv_ppm(frame_ppm, &reconstructed, rgb,
-                                (size_t)width * 3U) != EXIT_SUCCESS) {
-                goto cleanup;
-            }
-        }
-
-        memcpy(previous_pixels, recon_pixels,
-               pixel_count * sizeof(*recon_pixels));
-        ++frame_number;
-        if (frame_limit != 0U && frame_number >= frame_limit) {
-            break;
-        }
-    }
-    if (write_pad_frames(20U, width, height, payload_prefix, ".mb20",
-                         keys_prefix, pad_to_multiple, &frame_number,
-                         sink) != EXIT_SUCCESS) {
+    if (write_pad_frames(codec->number, width, height, payload_prefix,
+                         codec->payload_ext, keys_prefix, pad_to_multiple,
+                         &frame_number, sink) != EXIT_SUCCESS) {
         goto cleanup;
     }
     result = EXIT_SUCCESS;
@@ -1975,6 +1748,9 @@ int main(int argc, char **argv)
             policy == CODEC_SUPERMOVINGBLOCKS_POLICY_LOWEST_ERROR
                 ? MB_ENCODE_POLICY_LOWEST_ERROR
                 : MB_ENCODE_POLICY_ORDERED;
+        const MbToolCodec *tool_codec = codec == 7U    ? &mb_tool_codec7
+                                        : codec == 20U ? &mb_tool_codec20
+                                                       : &mb_tool_codec17;
 
         if (input_path == NULL ||
             (sinkp == NULL &&
@@ -1989,25 +1765,11 @@ int main(int argc, char **argv)
             usage(stderr);
             return EXIT_FAILURE;
         }
-        if (codec == 7U) {
-            result = run_encode7(
-                input_path, input_format, width, height, payload_path,
-                payload_prefix, frame_limit, loss_level, data_only,
-                recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, encode_pad, sinkp);
-        } else if (codec == 20U) {
-            result = run_encode20_variant(
-                input_path, input_format, width, height, payload_path,
-                payload_prefix, frame_limit, loss_level, data_only,
-                recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, beta_variant, encode_pad, sinkp);
-        } else {
-            result = run_encode17(
-                input_path, input_format, width, height, payload_path,
-                payload_prefix, frame_limit, loss_level, data_only,
-                recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
-                dither, mb_policy, encode_pad, sinkp);
-        }
+        result = run_mb_encode(
+            tool_codec, (int)beta_variant, input_path, input_format, width,
+            height, payload_path, payload_prefix, frame_limit, loss_level,
+            data_only, recon_prefix, recon_ppm_path, keys_prefix, target_bytes,
+            dither, mb_policy, encode_pad, sinkp);
         goto assemble;
     }
     if (codec != 19U || input_path == NULL ||
