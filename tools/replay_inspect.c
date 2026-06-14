@@ -70,6 +70,8 @@ int main(int argc, char **argv)
     printf("author: %s\n", movie.author);
     if (codec != NULL) {
         printf("video codec: %u (%s)\n", movie.video_codec, codec->name);
+    } else if (movie.video_codec == 1U) {
+        printf("video codec: %u (Moving Lines)\n", movie.video_codec);
     } else {
         printf("video codec: %u (unknown)\n", movie.video_codec);
     }

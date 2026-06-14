@@ -36,11 +36,11 @@ Every Acorn video type the project knows (1, 2, 7, 17, 19, 20, 23) plus the
 container and sound is now specified and verified, with a codec behind each.
 What remains is optional polish:
 
-- **Mux Moving Lines into `.ae7` movies.** Type 1 has a codec
-  (`src/codec_movinglines.c`, cross-checked vs the compiled module) and encodes
-  via `replay-encode --codec 1`, but that path does not yet feed the `--output` /
-  `replay-join` container writer, so it can't be packed into a full ARMovie movie
-  here.
+- **Moving Lines colour fidelity.** `replay-encode --codec 1` muxes complete
+  `.ae7` movies (chunked, padded, postered) that decode on the compiled module,
+  but it packs pixels as RGB555 by a tool convention and declares 16-bit depth;
+  matching a specific real Moving Lines movie's exact colour model and depth
+  metadata is unconfirmed.
 - **From-assembler colour rounding.** The one open numerical detail noted in
   [colour-pipeline.md](colour-pipeline.md): confirming CompLib's real-to-integer
   rounding at coefficient boundaries straight from the assembler.

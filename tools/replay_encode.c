@@ -1538,7 +1538,8 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
                            const char *payload_path,
                            const char *payload_prefix, size_t frame_limit,
                            const char *recon_prefix,
-                           const char *recon_ppm_path)
+                           const char *recon_ppm_path, unsigned pad_to_multiple,
+                           FrameSink *sink)
 {
     size_t pixel_count = (size_t)width * height;
     size_t rgb_size = pixel_count * 3U;
@@ -1628,6 +1629,10 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
                 goto cleanup;
             }
         }
+        if (sink != NULL &&
+            frame_sink_add(sink, &payload, NULL) != EXIT_SUCCESS) {
+            goto cleanup;
+        }
         printf("frame=%zu codec=1 name=\"Moving Lines\" bytes=%zu verify=ok\n",
                frame_number, payload.size);
 
@@ -1639,6 +1644,12 @@ static int run_movinglines(const char *input_path, InputFormat input_format,
     }
     if (frame_number == 0U) {
         fprintf(stderr, "%s: no complete input frames\n", input_path);
+        goto cleanup;
+    }
+    /* Loose-mode chunk padding; the direct-to-container path pads the sink at
+       assembly instead (pad_to_multiple is 0 there). */
+    if (write_pad_frames(1U, width, height, payload_prefix, ".mln", NULL,
+                         pad_to_multiple, &frame_number, sink) != EXIT_SUCCESS) {
         goto cleanup;
     }
     result = EXIT_SUCCESS;
@@ -1892,8 +1903,9 @@ int main(int argc, char **argv)
                     "--output needs --fps and is incompatible with --payload\n");
             return EXIT_FAILURE;
         }
-        if (want_keys && codec == 20U) {
-            fprintf(stderr, "type 20 key frames are not supported (--keys)\n");
+        if (want_keys && (codec == 20U || codec == 1U)) {
+            fprintf(stderr, "type %u key frames are not supported (--keys)\n",
+                    codec);
             return EXIT_FAILURE;
         }
         container.codec = codec;
@@ -1913,17 +1925,12 @@ int main(int argc, char **argv)
         encode_pad = pad_to_multiple;
     }
     if (codec == 1U) {
-        if (container.output_path != NULL) {
-            fprintf(stderr,
-                    "type 1 container muxing is not yet supported (--output)\n");
-            result = EXIT_FAILURE;
-            goto assemble;
-        }
         if (input_path == NULL || width == 0U || height == 0U ||
             (size_t)width > SIZE_MAX / (size_t)height ||
             data_only || target_bytes != 0U || keys_prefix != NULL ||
+            want_keys ||
             (recon_ppm_path != NULL && recon_prefix != NULL) ||
-            (payload_path == NULL && payload_prefix == NULL &&
+            (sinkp == NULL && payload_path == NULL && payload_prefix == NULL &&
              recon_prefix == NULL && recon_ppm_path == NULL) ||
             (payload_path != NULL &&
              (payload_prefix != NULL || frame_limit > 1U ||
@@ -1934,7 +1941,8 @@ int main(int argc, char **argv)
         }
         result = run_movinglines(input_path, input_format, width, height,
                                  payload_path, payload_prefix, frame_limit,
-                                 recon_prefix, recon_ppm_path);
+                                 recon_prefix, recon_ppm_path, encode_pad,
+                                 sinkp);
         goto assemble;
     }
     if (codec == 7U || codec == 17U || codec == 20U) {

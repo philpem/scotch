@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "replay/codec_movinglines.h"
+#include "replay/mb_repeat.h"
 #include "replay/replay_buffer.h"
 
 static int write_pixels(const char *dir, const char *stem, const char *ext,
@@ -272,6 +273,22 @@ int main(int argc, char **argv)
             }
             memcpy(previous, recon, sizeof(previous));
             have_previous = 1;
+        }
+    }
+
+    /* Case 8: the "repeat last frame" pad payload (mb_repeat_payload, codec 1)
+       the muxer appends to fill a final chunk -- it must reproduce the previous
+       frame unchanged on the module. */
+    {
+        uint16_t previous[128];
+        unsigned k;
+
+        for (k = 0; k < 128U; ++k) {
+            previous[k] = (uint16_t)((k * 13U) & 0x7FFFU);
+        }
+        if (mb_repeat_payload(1U, 16U, 8U, &payload) != REPLAY_OK ||
+            emit(manifest, dir, "padrepeat", &payload, previous, 16U, 8U) != 0) {
+            goto done;
         }
     }
 

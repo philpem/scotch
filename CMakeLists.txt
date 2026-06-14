@@ -198,6 +198,10 @@ add_test(NAME test_replay_encode_cli
 add_test(NAME test_movinglines_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_movinglines_cli.sh
         $<TARGET_FILE:replay-encode>)
+add_test(NAME test_movinglines_container
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_movinglines_container.sh
+        $<TARGET_FILE:replay-encode>
+        $<TARGET_FILE:replay-inspect>)
 add_test(NAME test_format19_corpus
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_format19_corpus.sh
         $<TARGET_FILE:replay-verify>)
