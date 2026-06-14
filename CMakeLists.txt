@@ -71,6 +71,9 @@ target_link_libraries(replay-extract PRIVATE replay)
 add_executable(replay-join tools/replay_join.c)
 target_link_libraries(replay-join PRIVATE replay)
 
+add_executable(replay-movinglines tools/replay_movinglines.c)
+target_link_libraries(replay-movinglines PRIVATE replay)
+
 if(NOT MSVC)
     target_compile_options(replay-verify PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
@@ -81,6 +84,8 @@ if(NOT MSVC)
     target_compile_options(replay-extract PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
     target_compile_options(replay-join PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+    target_compile_options(replay-movinglines PRIVATE
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
@@ -195,6 +200,9 @@ add_test(NAME test_replay_encode_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_encode_cli.sh
         $<TARGET_FILE:replay-encode>
         $<TARGET_FILE:replay-verify>)
+add_test(NAME test_movinglines_cli
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_movinglines_cli.sh
+        $<TARGET_FILE:replay-movinglines>)
 add_test(NAME test_format19_corpus
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_format19_corpus.sh
         $<TARGET_FILE:replay-verify>)

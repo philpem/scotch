@@ -32,12 +32,17 @@ spec is correct and its provenance appendix explains why.
 
 ## Outstanding
 
-- **Cross-check Moving Lines against the compiled module.** Type 1 now has a
-  portable codec (`src/codec_movinglines.c`) with round-trip and per-command-
-  family tests, but no emulation harness drives the real `MovingLine`
-  decompressor yet, so its agreement with Acorn's exact stream is not
-  machine-proven the way types 7/17/19/20 are. Wiring it into `replay-encode` /
-  `replay-verify` (it works on raw 15-bit pixels, not `MbFrame`) is also pending.
+Every Acorn video type the project knows (1, 2, 7, 17, 19, 20, 23) plus the
+container and sound is now specified and verified, with a codec behind each.
+What remains is optional polish:
+
+- **Mux Moving Lines into `.ae7` movies.** Type 1 has a codec
+  (`src/codec_movinglines.c`, cross-checked vs the compiled module) and a CLI
+  (`replay-movinglines`), but it is not yet wired into the `replay-join` /
+  direct-to-container path, so it can't be packed into a full ARMovie movie here.
+- **From-assembler colour rounding.** The one open numerical detail noted in
+  [colour-pipeline.md](colour-pipeline.md): confirming CompLib's real-to-integer
+  rounding at coefficient boundaries straight from the assembler.
 
 ## How to read a spec
 
