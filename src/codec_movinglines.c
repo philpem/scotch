@@ -215,6 +215,34 @@ static ReplayStatus put_word(ReplayBuffer *out, unsigned word)
     return status;
 }
 
+/* Length of the run where source[p+i] == reference[p+i+offset], capped at `cap`,
+   with both ends staying inside [0, total). Used for every copy family. */
+static unsigned match_run(const uint16_t *source, const uint16_t *reference,
+                          size_t p, long offset, size_t total, unsigned cap)
+{
+    unsigned len = 0U;
+
+    while (len < cap && p + len < total) {
+        long ref = (long)(p + len) + offset;
+
+        if (ref < 0 || (size_t)ref >= total ||
+            source[p + len] != reference[(size_t)ref]) {
+            break;
+        }
+        ++len;
+    }
+    return len;
+}
+
+/*
+ * Greedy offset-search encoder. At each position it takes the longest available
+ * copy -- the same-position previous-frame copy (up to 1024), or the best
+ * temporal (previous frame) or spatial (earlier rows of this frame) copy from
+ * the offset tables (up to 65) -- and otherwise a repeated-pixel run or a
+ * literal. This actually compresses (unlike a literal-only encoder) while
+ * staying byte-exact; it is greedy, not rate-optimal, so it does not reproduce
+ * Acorn's exact bitrate.
+ */
 ReplayStatus codec_movinglines_encode_frame(const uint16_t *source,
                                             const uint16_t *previous,
                                             unsigned width, unsigned height,
@@ -238,54 +266,89 @@ ReplayStatus codec_movinglines_encode_frame(const uint16_t *source,
     replay_buffer_clear(out);
 
     while (status == REPLAY_OK && p < total) {
-        if (previous != NULL && source[p] == previous[p]) {
-            /* Same-position previous-frame copy, in spans of up to 1024. */
-            size_t run = 1U;
+        unsigned best_len = 0U;  /* best copy length found */
+        unsigned best_code = 0U; /* temporal/spatial code when !best_same */
+        int best_same = 0;       /* the best copy is the same-position family */
+        unsigned code;
 
-            while (p + run < total && source[p + run] == previous[p + run]) {
-                ++run;
-            }
-            while (status == REPLAY_OK && run != 0U) {
-                unsigned chunk = run > 1024U ? 1024U : (unsigned)run;
+        /* Same-position copy from the previous frame (up to 1024 pixels). */
+        if (previous != NULL) {
+            unsigned len = match_run(source, previous, p, 0L, total, 1024U);
 
-                status = put_word(out, 1U + (0x1EU << 11U) +
-                                           ((chunk - 1U) << 1U));
-                p += chunk;
-                run -= chunk;
+            if (len > best_len) {
+                best_len = len;
+                best_same = 1;
             }
+        }
+        /* Temporal copies: every -8..+8 offset, capped at 65. A same-position
+           run of >= 65 already beats any of these, so skip the search then. */
+        if (previous != NULL && best_len < 65U) {
+            for (code = 0U; code < 288U; ++code) {
+                unsigned len = match_run(source, previous, p,
+                                         temporal_offset(code, width), total,
+                                         65U);
+
+                if (len > best_len) {
+                    best_len = len;
+                    best_code = code;
+                    best_same = 0;
+                }
+                if (best_len >= 65U) {
+                    break;
+                }
+            }
+        }
+        /* Spatial copies: earlier rows of the current frame (offset < 0, so the
+           source is always already reconstructed). */
+        if (best_len < 65U) {
+            for (code = 0x120U; code <= 0x1CAU; ++code) {
+                long offset = spatial_offset(code, width);
+                unsigned len;
+
+                if (offset >= 0) {
+                    continue;
+                }
+                len = match_run(source, source, p, offset, total, 65U);
+                if (len > best_len) {
+                    best_len = len;
+                    best_code = code;
+                    best_same = 0;
+                }
+                if (best_len >= 65U) {
+                    break;
+                }
+            }
+        }
+
+        if (best_len >= 2U) {
+            status = best_same
+                         ? put_word(out, 1U + (0x1EU << 11U) +
+                                             ((best_len - 1U) << 1U))
+                         : put_word(out, 1U + (best_code << 7U) +
+                                             ((best_len - 2U) << 1U));
+            p += best_len;
             continue;
         }
 
         {
-            /* Run of identical pixels, stopping where a same-position copy
-               would take over. */
-            uint16_t pixel = source[p];
-            size_t run = 1U;
+            /* No copy of length >= 2: a repeated-pixel run, else a literal. */
+            unsigned rep = 1U;
 
-            while (p + run < total && source[p + run] == pixel &&
-                   !(previous != NULL && source[p + run] == previous[p + run])) {
-                ++run;
+            while (rep < 65U && p + rep < total && source[p + rep] == source[p]) {
+                ++rep;
             }
-            if (run >= 3U) {
-                unsigned chunk = run > 65U ? 65U : (unsigned)run;
-
-                /* Never leave an un-repeatable tail of 1 or 2 pixels. */
-                if (run - chunk == 1U || run - chunk == 2U) {
-                    chunk = (unsigned)(run - 3U);
-                }
+            if (rep >= 3U) {
                 status = put_word(out, 1U + (0x1CCU << 7U) +
-                                           ((chunk - 2U) << 1U));
+                                           ((rep - 2U) << 1U));
                 if (status == REPLAY_OK) {
-                    status = put_word(out, pixel);
+                    status = put_word(out, source[p]);
                 }
-                p += chunk;
-                continue;
+                p += rep;
+            } else {
+                status = put_word(out, (unsigned)(source[p] & 0x7FFFU) << 1U);
+                ++p;
             }
         }
-
-        /* Otherwise one literal pixel. */
-        status = put_word(out, (unsigned)(source[p] & 0x7FFFU) << 1U);
-        ++p;
     }
 
     if (status == REPLAY_OK) {
