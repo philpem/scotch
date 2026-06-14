@@ -23,6 +23,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+Builds default to `Release` (`-O3`) when no build type is given; the encoder
+(rate control + motion search) is roughly 5x slower without it. Use
+`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug` if you need an unoptimised,
+debuggable build.
+
 The C implementation has no third-party runtime dependency. The optional ARM
 cross-check tests require Python 3 with Unicorn bindings. CMake automatically
 uses `../!ARMovie_compiled/Decomp19/Decompress,ffd` when present; another copy

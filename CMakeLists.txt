@@ -6,6 +6,16 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Default to an optimised build. Without this a plain `cmake -S . -B build`
+# configures with no build type and thus no -O flag, which makes the encoder
+# (rate control + motion search) roughly 5x slower. A single-config generator
+# only; override with -DCMAKE_BUILD_TYPE=Debug when you need it.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
+    message(STATUS "No CMAKE_BUILD_TYPE specified; defaulting to Release (-O3)")
+endif()
+
 add_library(replay STATIC
     src/replay_status.c
     src/replay_buffer.c

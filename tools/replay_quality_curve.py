@@ -111,7 +111,7 @@ def main():
     parser.add_argument("--policy", default="lowest-error",
                         choices=("ordered", "lowest-error"),
                         help="copy selection policy passed to replay-encode")
-    parser.add_argument("--encode-bin", default="./build/replay-encode")
+    parser.add_argument("--encode-bin", default="./build-release/replay-encode")
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--csv", help="write results as CSV to this path")
     parser.add_argument("--plot", help="write a PSNR-vs-bytes/frame chart (PNG)")
