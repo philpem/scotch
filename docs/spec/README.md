@@ -20,12 +20,16 @@ spec is correct and its provenance appendix explains why.
 | [moving-blocks-7-17-20.md](moving-blocks-7-17-20.md) | The other Moving Blocks codecs — types 7, 17 and 20 — as deltas from type 19. | complete |
 | [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
 | [armovie-sound.md](armovie-sound.md) | The ARMovie sound formats: VIDC exponential / signed linear (format 1) and IMA/DVI ADPCM (format 2). | complete |
+| [raw-formats-2-23.md](raw-formats-2-23.md) | The uncompressed video formats — type 2 (16-bit raw) and type 23 (4:2:2 6Y6Y5U5V). | complete |
 
 ## Planned
 
 Following the same template and shared appendix:
 
-- Types 2 and 23, and the Moving Lines family.
+- **Moving Lines** (compression type for the `MovingLine` module): a 1×1-block,
+  line-based temporal/spatial codec. Only Acorn's BASIC source exists (no
+  cross-checked reference implementation in this repo yet), so it needs a
+  from-source analysis pass before it can be specified to the same standard.
 
 ## How to read a spec
 
