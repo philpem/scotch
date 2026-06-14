@@ -19,12 +19,12 @@ spec is correct and its provenance appendix explains why.
 | [type19-super-moving-blocks.md](type19-super-moving-blocks.md) | Compression type 19, *Super Moving Blocks* — the flagship Moving Blocks bitstream (6Y5UV). | complete |
 | [moving-blocks-7-17-20.md](moving-blocks-7-17-20.md) | The other Moving Blocks codecs — types 7, 17 and 20 — as deltas from type 19. | complete |
 | [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
+| [armovie-sound.md](armovie-sound.md) | The ARMovie sound formats: VIDC exponential / signed linear (format 1) and IMA/DVI ADPCM (format 2). | complete |
 
 ## Planned
 
 Following the same template and shared appendix:
 
-- The ARMovie sound formats (VIDC-µ8, signed-8/16, ADPCM).
 - Types 2 and 23, and the Moving Lines family.
 
 ## How to read a spec
