@@ -1,15 +1,13 @@
 # Compression type 1 — Moving Lines
 
-> **Status: implemented; not yet Acorn-cross-checked.** This project now has a
-> portable Moving Lines codec (`src/codec_movinglines.c`) — a full decoder and an
-> encoder — with round-trip and per-command-family tests, and the copy offset
-> tables (§3.1) are extracted from Acorn's `BatchComp`. What is *not* yet done is
-> a byte-for-byte cross-check against the compiled `MovingLine` decompressor
-> (there is no emulation harness for type 1 yet), so unlike types 7/17/19/20 the
-> agreement with Acorn's exact stream is not machine-proven. The command grammar
-> and offset construction are read straight from the source and are
-> high-confidence; the parts most worth confirming against the module are the
-> spatial offset indexing edges and the `0x1cb` reserved slot.
+> **Status: verified.** This project has a portable Moving Lines codec
+> (`src/codec_movinglines.c`) — a full decoder and an encoder — and it is
+> cross-checked **byte-for-byte against the compiled Acorn `MovingLine` module**
+> under emulation (`tools/movinglines_unicorn.py`, `test_movinglines_compiled`),
+> over fixtures exercising every command family: literals, repeats, temporal and
+> spatial copies, the same-position copy and the bit-packed long-literal run. So
+> like types 7/17/19/20, the format below is machine-proven against Acorn's own
+> decoder, not just read from the source.
 
 Conventions (LSB-first bit order) are in [methodology.md](methodology.md).
 
@@ -118,17 +116,20 @@ project notes [`moving-lines-bitstream-first-pass`](../../notes/moving-lines-bit
 [`moving-lines-decompressor`](../../notes/moving-lines-decompressor.md) and
 [`moving-lines-compressor-process`](../../notes/moving-lines-compressor-process.md).
 
-- **Implemented but not yet Acorn-cross-checked.** The portable
-  `codec_movinglines.c` decodes and encodes this format with round-trip and
-  per-family tests, but there is no emulation harness for type 1, so unlike types
-  7/17/19/20 the claims have not been reproduced from the compiled module
-  byte-for-byte. The code-family table (§3) is read directly from the compressor
-  source and is high-confidence; the offset-table construction, the `0x1CB`
-  reserved slot, and the exact decoder dispatch for `code` ≥ `0x1CD` are the parts
-  most in need of confirmation against the module. The reference encoder emits a
-  valid, round-trip-exact subset (same-position copies, repeats and literals); it
-  does not search temporal/spatial offsets, so it is not bitrate-comparable to
-  Acorn's compressor.
+- **Cross-checked against the compiled module.** `codec_movinglines.c` is run
+  against the genuine `MovingLine` decompressor under emulation for fixtures
+  covering every command family, and the two agree byte-for-byte (the offset
+  tables of §3.1 are thereby confirmed). The reference encoder emits a valid,
+  round-trip-exact subset (same-position copies, repeats and literals); it does
+  not search temporal/spatial offsets, so it is not bitrate-comparable to Acorn's
+  compressor.
+- **The long-literal pixels are read with word-aligned LDM, not unaligned.** The
+  module loads each group of bit-packed pixels with `LDMIA` from the byte address
+  `r0 >> 3` and then shifts by `r0 & 31` to reach the bit position; on Acorn ARM
+  the LDM ignores the low address bits. This is a decoder detail, not a wire-
+  format one — the packing in §3.2 is plain LSB-first 15-bit pixels — but it is
+  what the emulation harness must reproduce (and was the one place the cross-check
+  initially diverged before the alignment was emulated).
 - **"Skip" is a same-position copy.** The compressor comment calls the `0x1E`
   family "skip n+1 pixels", which reads as "leave output unchanged"; the
   decompressor actually copies those pixels from the previous frame at the same

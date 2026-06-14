@@ -21,7 +21,7 @@ spec is correct and its provenance appendix explains why.
 | [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
 | [armovie-sound.md](armovie-sound.md) | The ARMovie sound formats: VIDC exponential / signed linear (format 1) and IMA/DVI ADPCM (format 2). | complete |
 | [raw-formats-2-23.md](raw-formats-2-23.md) | The uncompressed video formats — type 2 (16-bit raw) and type 23 (4:2:2 6Y6Y5U5V). | complete |
-| [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | implemented (`codec_movinglines.c`, round-trip tested); not yet cross-checked vs the compiled module |
+| [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | verified (`codec_movinglines.c`, cross-checked vs the compiled module) |
 
 ### Shared subsystems
 

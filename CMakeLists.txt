@@ -180,6 +180,14 @@ if(NOT MSVC)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+add_executable(make_movinglines_crosscheck_fixtures
+    tests/make_movinglines_crosscheck_fixtures.c)
+target_link_libraries(make_movinglines_crosscheck_fixtures PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_movinglines_crosscheck_fixtures PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_test(NAME test_replay_verify_cli
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay_verify_cli.sh
         $<TARGET_FILE:replay-verify>)
@@ -336,6 +344,20 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/decomp19_unicorn.py
                 ${DECOMP20NEW_COMPILED} new)
         set_tests_properties(test_decomp20new_compiled
+            PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+    set(MOVINGLINE_COMPILED
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/MovingLine/Decompress,ffd"
+        CACHE FILEPATH "Compiled Acorn Moving Lines (type 1) Decompress file")
+    if(EXISTS "${MOVINGLINE_COMPILED}")
+        add_test(NAME test_movinglines_compiled
+            COMMAND sh
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_movinglines_compiled.sh
+                $<TARGET_FILE:make_movinglines_crosscheck_fixtures>
+                ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/movinglines_unicorn.py
+                ${MOVINGLINE_COMPILED})
+        set_tests_properties(test_movinglines_compiled
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 endif()
