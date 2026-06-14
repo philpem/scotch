@@ -21,7 +21,7 @@ spec is correct and its provenance appendix explains why.
 | [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
 | [armovie-sound.md](armovie-sound.md) | The ARMovie sound formats: VIDC exponential / signed linear (format 1) and IMA/DVI ADPCM (format 2). | complete |
 | [raw-formats-2-23.md](raw-formats-2-23.md) | The uncompressed video formats — type 2 (16-bit raw) and type 23 (4:2:2 6Y6Y5U5V). | complete |
-| [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | **draft** (from Acorn BASIC + notes; not yet cross-checked) |
+| [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | implemented (`codec_movinglines.c`, round-trip tested); not yet cross-checked vs the compiled module |
 
 ### Shared subsystems
 
@@ -32,10 +32,12 @@ spec is correct and its provenance appendix explains why.
 
 ## Outstanding
 
-- **Verify Moving Lines.** The type-1 spec is drafted from the `MovingLine`
-  BASIC source and notes but has no cross-checked reference implementation; it
-  needs a portable codec and/or an emulation harness to confirm it byte-for-byte,
-  as types 7/17/19/20 have.
+- **Cross-check Moving Lines against the compiled module.** Type 1 now has a
+  portable codec (`src/codec_movinglines.c`) with round-trip and per-command-
+  family tests, but no emulation harness drives the real `MovingLine`
+  decompressor yet, so its agreement with Acorn's exact stream is not
+  machine-proven the way types 7/17/19/20 are. Wiring it into `replay-encode` /
+  `replay-verify` (it works on raw 15-bit pixels, not `MbFrame`) is also pending.
 
 ## How to read a spec
 

@@ -40,6 +40,7 @@ add_library(replay STATIC
     src/codec_movingblockshq.c
     src/codec_supermovingblocks.c
     src/codec_movingblocksbeta.c
+    src/codec_movinglines.c
 )
 
 target_include_directories(replay PUBLIC include)
@@ -120,6 +121,8 @@ add_replay_test(test_codec_movingblocks
     tests/test_codec_movingblocks.c)
 add_replay_test(test_codec_movingblocksbeta
     tests/test_codec_movingblocksbeta.c)
+add_replay_test(test_codec_movinglines
+    tests/test_codec_movinglines.c)
 add_replay_test(test_supermovingblocks_frame
     tests/test_supermovingblocks_frame.c)
 add_replay_test(test_supermovingblocks_encoder

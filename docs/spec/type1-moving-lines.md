@@ -1,12 +1,15 @@
 # Compression type 1 — Moving Lines
 
-> **Status: draft.** Unlike the other specs in this directory, Moving Lines has
-> **no cross-checked reference implementation** in this project (no portable
-> codec, no Unicorn harness). This spec is derived from Acorn's `MovingLine`
-> BASIC compressor/decompressor source and the project's analysis notes, but its
-> claims have **not** yet been verified byte-for-byte against the compiled
-> module. Treat the code-family layout as solid (it is read straight from the
-> source) and the finer dispatch/edge cases as provisional until a harness exists.
+> **Status: implemented; not yet Acorn-cross-checked.** This project now has a
+> portable Moving Lines codec (`src/codec_movinglines.c`) — a full decoder and an
+> encoder — with round-trip and per-command-family tests, and the copy offset
+> tables (§3.1) are extracted from Acorn's `BatchComp`. What is *not* yet done is
+> a byte-for-byte cross-check against the compiled `MovingLine` decompressor
+> (there is no emulation harness for type 1 yet), so unlike types 7/17/19/20 the
+> agreement with Acorn's exact stream is not machine-proven. The command grammar
+> and offset construction are read straight from the source and are
+> high-confidence; the parts most worth confirming against the module are the
+> spatial offset indexing edges and the `0x1cb` reserved slot.
 
 Conventions (LSB-first bit order) are in [methodology.md](methodology.md).
 
@@ -115,12 +118,17 @@ project notes [`moving-lines-bitstream-first-pass`](../../notes/moving-lines-bit
 [`moving-lines-decompressor`](../../notes/moving-lines-decompressor.md) and
 [`moving-lines-compressor-process`](../../notes/moving-lines-compressor-process.md).
 
-- **Not yet cross-check-verified.** There is no portable Moving Lines codec or
-  emulation harness here, so unlike types 7/17/19/20 the claims have not been
-  reproduced from the compiled module byte-for-byte. The code-family table (§3)
-  is read directly from the compressor source and is high-confidence; the offset-
-  table construction, the `0x1CB` reserved slot, and the exact decoder dispatch
-  for `code` ≥ `0x1CD` are the parts most in need of confirmation.
+- **Implemented but not yet Acorn-cross-checked.** The portable
+  `codec_movinglines.c` decodes and encodes this format with round-trip and
+  per-family tests, but there is no emulation harness for type 1, so unlike types
+  7/17/19/20 the claims have not been reproduced from the compiled module
+  byte-for-byte. The code-family table (§3) is read directly from the compressor
+  source and is high-confidence; the offset-table construction, the `0x1CB`
+  reserved slot, and the exact decoder dispatch for `code` ≥ `0x1CD` are the parts
+  most in need of confirmation against the module. The reference encoder emits a
+  valid, round-trip-exact subset (same-position copies, repeats and literals); it
+  does not search temporal/spatial offsets, so it is not bitrate-comparable to
+  Acorn's compressor.
 - **"Skip" is a same-position copy.** The compressor comment calls the `0x1E`
   family "skip n+1 pixels", which reads as "leave output unchanged"; the
   decompressor actually copies those pixels from the previous frame at the same
