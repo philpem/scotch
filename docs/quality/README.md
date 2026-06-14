@@ -59,10 +59,17 @@ motion.
   true kbit/s x-axis. Reuses `replay_quality_curve.py`'s ffmpeg extract and PPM
   reader so the measurement path is identical.
 
-`rate_quality_sweep.py` defaults `--encode-bin` to `./build-release/replay-encode`
-(an optimised release build — encoding is far slower without `-O`); pass
-`--encode-bin` to point at another build. Both tools need `numpy`, `matplotlib`,
-and `ffmpeg`.
+Both tools need `numpy`, `matplotlib`, and `ffmpeg`, plus an optimised
+`replay-encode` — encoding is far slower without `-O`. They default
+`--encode-bin` to `./build-release/replay-encode`; create that build once with
+
+```sh
+cmake -S . -B build-release && cmake --build build-release
+```
+
+Pass `--encode-bin` to point at any other build. The default `build/` from the
+main README is also optimised (Release) on a fresh configure, so
+`--encode-bin ./build/replay-encode` works equally well.
 
 ## Reproducing the runs
 
