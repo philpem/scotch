@@ -1,5 +1,6 @@
 #include "replay/mb_encode.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -222,6 +223,68 @@ void mb_encode_workspace_destroy(MbEncodeWorkspace *workspace)
 }
 
 /*
+ * Fixed-loss temporal search used when there is no rate-control cache to fill.
+ * Instead of profiling every candidate at every quality level it scores each at
+ * the single target level with partial-distortion early-out (mb_quality_match_
+ * pruned), giving the identical lowest-error/enumeration-order winner far faster
+ * -- most candidates abort after a row or two once a good match is found. Same
+ * result as the cached path at `loss_level`, just without the per-level work.
+ */
+static int temporal_search_pruned(const MbEncodeCodec *enc,
+                                  const MbFrame *source, const MbFrame *previous,
+                                  unsigned x, unsigned y, unsigned size,
+                                  uint8_t u, uint8_t v, unsigned loss_level,
+                                  MbMotionVector *motion,
+                                  unsigned *matched_error, size_t *evaluations)
+{
+    MbQualityThresholds thresholds;
+    unsigned best_error = UINT_MAX;
+    MbMotionVector best = { 0, 0, 0 };
+    int found = 0;
+    unsigned index;
+
+    if (mb_quality_thresholds(loss_level, &thresholds) != REPLAY_OK) {
+        return 0;
+    }
+    for (index = 0U; index < enc->temporal_count; ++index) {
+        MbMotionVector candidate;
+        int source_x;
+        int source_y;
+        unsigned err;
+
+        if (!enc->temporal_vector(index, &candidate)) {
+            break;
+        }
+        source_x = (int)x + candidate.dx;
+        source_y = (int)y + candidate.dy;
+        if (source_x < 0 || source_y < 0 ||
+            source_x + (int)size > (int)previous->width ||
+            source_y + (int)size > (int)previous->height) {
+            continue;
+        }
+        ++*evaluations;
+        if (mb_quality_match_pruned(source, x, y, previous, (unsigned)source_x,
+                                    (unsigned)source_y, size, u, v,
+                                    enc->chroma_half, &thresholds, best_error,
+                                    &err) &&
+            (!found || err < best_error)) {
+            best = candidate;
+            best_error = err;
+            found = 1;
+            if (err == 0U) {
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return 0;
+    }
+    *motion = (MbMotionVector){ best.dx, best.dy, 0 };
+    *matched_error = best_error;
+    return 1;
+}
+
+/*
  * Search the temporal vector sequence and compare 2x2 reconstruction targets.
  * Lowest error wins; enumeration order yields the shortest/source-first code
  * for equal-error candidates. Results cache per quality level so repeated rate
@@ -251,6 +314,11 @@ int mb_encode_match_temporal2x2(const MbEncodeCodec *enc, const MbFrame *source,
         *motion = (MbMotionVector){ result->dx, result->dy, 0 };
         *matched_error = result->error;
         return 1;
+    }
+    if (workspace == NULL) {
+        return temporal_search_pruned(enc, source, previous, x, y, 2U, u, v,
+                                      loss_level, motion, matched_error,
+                                      evaluations);
     }
 
     for (index = 0U; index < enc->temporal_count; ++index) {
@@ -324,6 +392,11 @@ int mb_encode_find_temporal4x4(const MbEncodeCodec *enc, const MbFrame *source,
         *motion = (MbMotionVector){ result->dx, result->dy, 0 };
         *matched_error = result->error;
         return 1;
+    }
+    if (workspace == NULL) {
+        return temporal_search_pruned(enc, source, previous, x, y, 4U, u, v,
+                                      loss_level, motion, matched_error,
+                                      evaluations);
     }
 
     /* Enumeration order gives the shortest/source-first equal-error code. */

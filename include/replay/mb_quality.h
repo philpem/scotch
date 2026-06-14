@@ -57,6 +57,24 @@ int mb_quality_profile_accept(const MbQualityProfile *profile,
                               unsigned *total_error);
 
 /*
+ * Single-level copy match with partial-distortion early-out, for the temporal
+ * motion search's fast (fixed-loss) path. Measures the copy's profile with
+ * `chroma_half` (16 for 5-bit chroma, 32 for 6-bit), abandoning as soon as the
+ * accumulated luma error reaches `prune_above` (pass UINT_MAX for none), then
+ * accepts it against `thresholds`. Non-zero return stores the total error.
+ * Equivalent result to scoring with mb_quality_match_* then accepting, but skips
+ * the per-candidate binary search over quality levels and aborts hopeless
+ * candidates early.
+ */
+int mb_quality_match_pruned(const MbFrame *target, unsigned target_x,
+                            unsigned target_y, const MbFrame *reference,
+                            unsigned reference_x, unsigned reference_y,
+                            unsigned block_size, uint8_t target_u,
+                            uint8_t target_v, int chroma_half,
+                            const MbQualityThresholds *thresholds,
+                            unsigned prune_above, unsigned *total_error);
+
+/*
  * Score a format-19 copy candidate using the original compressor's metric.
  * `target_u` and `target_v` are the signed-five-bit block averages that a data
  * block would reconstruct. `reference` supplies candidate decoded pixels.

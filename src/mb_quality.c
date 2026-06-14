@@ -1,5 +1,6 @@
 #include "replay/mb_quality.h"
 
+#include <limits.h>
 #include <stddef.h>
 
 /*
@@ -59,12 +60,18 @@ ReplayStatus mb_quality_thresholds(unsigned loss_level,
 
 /* Core copy-quality measurement, parameterised by the chroma sign-extension
    half-range (16 for 6Y5UV/YUV555, 32 for 6Y6UV). */
+/*
+ * `prune_above` is a partial-distortion early-out: as soon as the accumulated
+ * luma error reaches it the copy can no longer beat the caller's best match
+ * (chroma only adds to the total), so the scan abandons and returns 0. Callers
+ * that want the full profile pass UINT_MAX.
+ */
 static int profile_measure(const MbFrame *target, unsigned target_x,
                            unsigned target_y, const MbFrame *reference,
                            unsigned reference_x, unsigned reference_y,
                            unsigned block_size, uint8_t target_u,
                            uint8_t target_v, int chroma_half,
-                           MbQualityProfile *profile)
+                           unsigned prune_above, MbQualityProfile *profile)
 {
     unsigned total = 0U;
     int reference_u = 0;
@@ -108,6 +115,10 @@ static int profile_measure(const MbFrame *target, unsigned target_x,
             reference_u += sign_chroma(reference_pixel->u, chroma_half);
             reference_v += sign_chroma(reference_pixel->v, chroma_half);
         }
+        /* Luma alone already loses to the best so far -- chroma only adds. */
+        if (total >= prune_above) {
+            return 0;
+        }
     }
 
     {
@@ -131,7 +142,7 @@ int mb_quality_profile_format19(const MbFrame *target, unsigned target_x,
 {
     return profile_measure(target, target_x, target_y, reference, reference_x,
                            reference_y, block_size, target_u, target_v, 16,
-                           profile);
+                           UINT_MAX, profile);
 }
 
 int mb_quality_profile_6y6uv(const MbFrame *target, unsigned target_x,
@@ -142,7 +153,26 @@ int mb_quality_profile_6y6uv(const MbFrame *target, unsigned target_x,
 {
     return profile_measure(target, target_x, target_y, reference, reference_x,
                            reference_y, block_size, target_u, target_v, 32,
-                           profile);
+                           UINT_MAX, profile);
+}
+
+int mb_quality_match_pruned(const MbFrame *target, unsigned target_x,
+                            unsigned target_y, const MbFrame *reference,
+                            unsigned reference_x, unsigned reference_y,
+                            unsigned block_size, uint8_t target_u,
+                            uint8_t target_v, int chroma_half,
+                            const MbQualityThresholds *thresholds,
+                            unsigned prune_above, unsigned *total_error)
+{
+    MbQualityProfile profile;
+
+    if (!profile_measure(target, target_x, target_y, reference, reference_x,
+                         reference_y, block_size, target_u, target_v,
+                         chroma_half, prune_above, &profile)) {
+        return 0;
+    }
+    return mb_quality_profile_accept(&profile, block_size, thresholds,
+                                     total_error);
 }
 
 unsigned mb_quality_first_accepted_level(const MbQualityProfile *profile,
