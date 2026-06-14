@@ -1,0 +1,42 @@
+# Acorn Replay format specifications
+
+Authoritative, implementation-grade specifications for the Acorn Replay
+(ARMovie) bitstream and container formats. Each document is meant to be
+sufficient, on its own, to build a conforming encoder, decoder or muxer without
+reading the reference C.
+
+These differ from the working notes in [`../../notes/`](../../notes/): the notes
+record how each format was *investigated* (often reasoning forward from Acorn's
+BASIC compressor source); these specs record what the format *is*, as verified
+byte-for-byte against the shipped Acorn decoders. Where the two disagree, the
+spec is correct and its provenance appendix explains why.
+
+## Documents
+
+| Spec | Covers | Status |
+| --- | --- | --- |
+| [methodology.md](methodology.md) | Sources, verification method, and the conventions (bit order, colour) every other spec relies on. Read this first. | stable |
+| [type19-super-moving-blocks.md](type19-super-moving-blocks.md) | Compression type 19, *Super Moving Blocks* — the flagship Moving Blocks bitstream (6Y5UV). | complete |
+| [ae7-armovie-container.md](ae7-armovie-container.md) | The ARMovie/AE7 container: text header, chunk catalogue, frame and sound layout. | complete |
+
+## Planned
+
+Following the same template and shared appendix:
+
+- Moving Blocks types 7, 17 and 20 (mostly deltas against type 19).
+- The ARMovie sound formats (VIDC-µ8, signed-8/16, ADPCM).
+- Types 2 and 23, and the Moving Lines family.
+
+## How to read a spec
+
+Every spec is built from the same parts:
+
+1. **Identity** — the codec number, name, and the `Resources/Info` declaration.
+2. **Normative format** — byte- and bit-exact layout. All multi-bit fields are
+   read **least-significant bit first** (see methodology.md); a field's value is
+   the integer the decoder accumulates, not the order bits appear on the wire.
+3. **Encoder-only material** — decisions an encoder must make that a decoder
+   never sees (e.g. copy-acceptance thresholds), clearly marked *(encoder)*.
+4. **Provenance & corrections** — an appendix citing the original Acorn sources
+   and listing every place those sources were wrong, ambiguous, or silent, with
+   how the correct behaviour was established.

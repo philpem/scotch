@@ -15,6 +15,10 @@ implemented surface, verified claims, and known differences from the original
 compressor. [docs/encoder-policy-comparison.md](docs/encoder-policy-comparison.md)
 explains how decision-policy differences can affect bitrate and quality.
 
+For implementation-grade format specifications — sufficient to build a new
+encoder, decoder or muxer, with provenance appendices — see
+[docs/spec/](docs/spec/) (start with [docs/spec/methodology.md](docs/spec/methodology.md)).
+
 ## Build
 
 ```sh
