@@ -179,8 +179,11 @@ unrecognised-RGB case; it is purely cosmetic (the colour-map selection in
 `MovingLine.ColourMap` and play — see [moving-lines spec
 §colour](spec/type1-moving-lines.md) and the `replay-encode --codec 1` muxer).
 
-**Workaround (optional, not applied):** the muxer could omit the bracketed `RGB`
-label entirely — the player defaults to RGB when no colour is recognised and
-`bas/Player` still derives `RGB16` — which would display cleanly. We keep the
-explicit `[RGB]` label because it is self-documenting and robust across players;
-the bracket is a harmless display artefact.
+**Fix (applied):** `replay-encode --codec 1` now writes the RGB pixel-depth line
+**label-less** (`16 bits per pixel`, no `[RGB]`). The player has no way to
+recognise RGB positively, so RGB is its default — `bas/Player` line 2140 sets
+`f$="rgb"` when no bracket and no `YUV` are found, still resolving
+`ColourMap.RGB16` — and with no bracket to echo, ARPlayer's Movie Info shows a
+clean `RGB`. YUV keeps its label: `bas/Player` line 2120 needs the literal `YUV`
+to select `YUV16`, and a label-less YUV header would wrongly fall through to the
+`rgb` default. So only YUV is labelled; RGB relies on the documented default.

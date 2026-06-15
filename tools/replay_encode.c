@@ -1951,13 +1951,18 @@ int main(int argc, char **argv)
         container.height = height;
         container.want_keys = want_keys;
         /* Moving Lines carries no colour in the stream; the player builds the
-           colour-map name from the bracketed pixel label plus the depth --
-           ColourMap.<label><depth>, e.g. RGB16 / YUV16 (bas/Player line 7450) --
-           so the label must be the bare colour-map prefix (RGB / YUV), not a
-           "5,5,5"-style description. Set it to the model the muxer packed unless
-           one was given explicitly. */
-        if (codec == 1U && container.pixel_label == NULL) {
-            container.pixel_label = ml_yuv ? "YUV" : "RGB";
+           colour-map name from the pixel label plus the depth --
+           ColourMap.<f$><depth>, e.g. RGB16 / YUV16 (bas/Player line 7450). For
+           YUV the label must carry the bare prefix "YUV" (matched by bas/Player
+           line 2120). RGB, though, is the player's default when no colour is
+           recognised (bas/Player line 2140 sets f$="rgb"), so we leave the RGB
+           label OUT entirely: a bracketed "[RGB]" is echoed verbatim into
+           ARPlayer's Movie Info as a stray "[" for the unrecognised-RGB case
+           (player-bugs.md #6), whereas an unlabelled header still resolves to
+           RGB16 and displays cleanly. Only label YUV; never override an explicit
+           --pixel-label. */
+        if (codec == 1U && container.pixel_label == NULL && ml_yuv) {
+            container.pixel_label = "YUV";
         }
         frame_sink_init(&sink, codec, want_keys);
         sinkp = &sink;
