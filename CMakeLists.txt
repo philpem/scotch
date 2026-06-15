@@ -306,6 +306,17 @@ add_test(NAME test_transcode_type23
         $<TARGET_FILE:make_type23_movie>
         $<TARGET_FILE:replay-transcode>)
 
+add_executable(make_audio_movie tests/make_audio_movie.c)
+target_link_libraries(make_audio_movie PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_audio_movie PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode_audio
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_audio.sh
+        $<TARGET_FILE:make_audio_movie>
+        $<TARGET_FILE:replay-transcode>)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
     add_test(NAME test_direct_container

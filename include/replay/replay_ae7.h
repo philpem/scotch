@@ -20,14 +20,30 @@ typedef struct {
     char copyright[REPLAY_AE7_TEXT_MAX];
     char author[REPLAY_AE7_TEXT_MAX];
     unsigned video_codec;
+    /* Trailing text after the video-format number, e.g. the decompressor name
+     * for format 15 ("15 video1"). Empty when none. */
+    char video_label[REPLAY_AE7_TEXT_MAX];
     unsigned width;
     unsigned height;
     unsigned pixel_depth;
+    /* Trailing text after the bits-per-pixel number, carrying the colour model
+     * ("16 bits per pixel [6Y5UV]", "[YUV]", "[YIQ]") and, for 8bpp, the
+     * "palette <offset>" pointer. Empty when none. */
+    char pixel_label[REPLAY_AE7_TEXT_MAX];
     double frames_per_second;
     unsigned sound_codec;
+    /* Trailing text after the sound-format number: the decompressor name for
+     * format 2 ("2 adpcm", "2 GSM"). Empty when none. */
+    char sound_format_label[REPLAY_AE7_TEXT_MAX];
     unsigned sound_rate;
     unsigned sound_channels;
+    /* Trailing text after the channel count, e.g. "REVER" for reversed stereo. */
+    char sound_channels_label[REPLAY_AE7_TEXT_MAX];
     unsigned sound_precision;
+    /* Trailing text after the bits-per-sample number, selecting the format-1
+     * sound decoder per ToUseSound: "ADPCM", "LIN", "UNSIGN", or a VIDC/µ-law
+     * note (otherwise exponential). Empty when none. */
+    char sound_precision_label[REPLAY_AE7_TEXT_MAX];
     unsigned frames_per_chunk;
     unsigned last_chunk;
     uint64_t even_chunk_bytes;
