@@ -84,11 +84,23 @@ Escape                 (1: name)
 1;1;160                (4: was 160;160;160  -> xround = 0, no width rounding)
 1;1;128                (5: was 128;128;128  -> yround = 0, no height rounding)
 Temporal,Spatial       (6: capabilities; correct as-is)
+YUV 5,5,5              (7: colour model; added — see below)
 ```
 
-(The third field is the maximum dimension and is not used for rounding.) The
-`Info` files vendored here are left **unmodified** as the authentic codec
-fixtures; the above is the edit needed for the 2003 RISC OS Player.
+(The third field on lines 4/5 is the maximum dimension and is not used for
+rounding.) The `Info` files vendored here are left **unmodified** as the
+authentic codec fixtures; the above is the edit needed for the 2003 RISC OS
+Player.
+
+#### Escape colour model: YUV 5,5,5
+
+Escape decodes to **16-bit YUV (5,5,5)** — confirmed by decoding a genuine
+Eagle/Escape 100 movie (160×128, whose header declares "16 bits per pixel YUV")
+through the vendored module: only `YUV555` yields a correct image; `6Y5UV`,
+`6Y6UV` and `RGB555` are visibly wrong. The transcoder picks this up
+automatically from the movie header's pixel label, so Escape needs no
+`--video-colour` override; the optional line-7 colour above just records it in
+the `Info` itself.
 
 ## Source and acknowledgement
 

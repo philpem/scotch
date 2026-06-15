@@ -879,35 +879,32 @@ int main(int argc, char **argv)
     char generic_sub[64];
     int have_video = (codec_info(movie.video_codec, &info) == 0);
     if (!have_video && (module_path != NULL || modules_dir != NULL)) {
-        /* Unknown codec: drive it generically from a decompressor. The colour
-         * model comes from --video-colour if given, else from the codec's Info
-         * file (so an external decompressor with a colour line just works). */
+        /* Unknown codec, but we have a decompressor: drive it generically.
+         * Colour-model priority: --video-colour, then a real Info colour line
+         * (e.g. "YUV 8,8,8"), then the movie header's pixel label ("16 bits per
+         * pixel YUV" etc.). The last is how Escape — whose Info carries no
+         * colour line — correctly resolves to YUV555, like the Acorn Player. */
         VideoColour col = COL_6Y5UV;
-        int multi = 0, ok = 0;
+        int multi = 0;
+        memset(&info, 0, sizeof info);
+        snprintf(generic_sub, sizeof generic_sub,
+                 "Decomp%u/Decompress,ffd", movie.video_codec);
+        info.module_subpath = generic_sub;
+        info.name = "external";
         if (video_colour_name != NULL) {
-            col = video_colour_from_name(video_colour_name);
-            ok = 1;
+            info.colour = video_colour_from_name(video_colour_name);
         } else if (info_colour_for(movie.video_codec, module_path, modules_dir,
-                                   &col, &multi) == 0) {
-            ok = 1;
+                                   &col, &multi) == 0 && !multi) {
+            info.colour = col; /* an explicit colour line in the Info file */
+        } else {
+            info.colour = movie.pixel_depth >= 24 ? COL_RGB888 : COL_RGB555;
+            info.header_colour = 1; /* refine from the header pixel label */
         }
-        if (ok) {
-            memset(&info, 0, sizeof info);
-            snprintf(generic_sub, sizeof generic_sub,
-                     "Decomp%u/Decompress,ffd", movie.video_codec);
-            info.module_subpath = generic_sub;
-            info.name = "external";
-            if (video_colour_name == NULL && multi) {
-                info.colour = movie.pixel_depth >= 24 ? COL_RGB888 : COL_RGB555;
-                info.header_colour = 1;
-            } else {
-                info.colour = col;
-            }
-            have_video = 1;
-            fprintf(stderr, "%s: codec %u not built in; using decompressor%s\n",
-                    prog, movie.video_codec,
-                    video_colour_name ? " + --video-colour" : " + Info file");
-        }
+        have_video = 1;
+        fprintf(stderr, "%s: codec %u not built in; using decompressor + %s\n",
+                prog, movie.video_codec,
+                video_colour_name ? "--video-colour"
+                : !info.header_colour ? "Info colour line" : "header colour");
     }
     /* --video-colour overrides the colour model for any codec. */
     if (have_video && video_colour_name != NULL) {
