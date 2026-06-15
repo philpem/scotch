@@ -1,5 +1,20 @@
 # Decomp19 ARM Harness
 
+> **Native harness:** `tools/replay_armsim.c` (the `replay-armsim` binary) is a
+> dependency-free C replacement for both Python harnesses below. It runs the
+> compiled module under the vendored ARMulator (`vendor/armulator`), which
+> models the classic Acorn ARM memory semantics directly — an unaligned `LDR`
+> rotates, and an unaligned `LDM`/word load ignores the low address bits — so
+> **none of the per-codec instruction-signature alignment shims described below
+> are needed**. It accepts the same options as `decomp19_unicorn.py` (plus
+> `--codec 1` for Moving Lines, replacing `movinglines_unicorn.py`) and produces
+> byte-identical output; the equivalence is covered by `test_armsim_corpus` and
+> verified against the Unicorn harness across types 7/17/19/20/23 and Moving
+> Lines. The reusable decode loop and pixel conversions live in
+> `src/replay_codecif.c` (`replay/codecif.h`) so a future Replay→raw transcoder
+> can share them. The decoders are 26-bit RISC OS modules and are run in 26-bit
+> mode (they return with `MOVS pc, lr`); see `vendor/armulator/README.md`.
+
 `tools/decomp19_unicorn.py` executes the original generated Moving Blocks
 decompressors without RISC OS. Its historical name remains because type 19,
 Super Moving Blocks was the first supported target. A compiled copy is present at

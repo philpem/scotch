@@ -56,6 +56,53 @@ else()
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+# --- Vendored ARMulator ARM emulator + sandbox/CodecIf harness -------------
+#
+# The vendored GDB/ARM Ltd "ARMulator" core (vendor/armulator) models the
+# classic Acorn ARM memory semantics that Unicorn gets wrong. It is third-party
+# C that does not build under this project's strict warning set, so it lives in
+# its own library with warnings relaxed and strict aliasing disabled (its page
+# table is accessed through aggressive type punning). MODET is required: the
+# emulation loop's shared `donext` label is only defined when Thumb support is
+# compiled in, even though no Thumb is ever executed here.
+add_library(armulator STATIC
+    vendor/armulator/armemu.c
+    vendor/armulator/armemu32.c
+    vendor/armulator/armsupp.c
+    vendor/armulator/arminit.c
+    vendor/armulator/armvirt.c
+    vendor/armulator/armsim_harness.c
+)
+target_include_directories(armulator PUBLIC vendor/armulator include)
+if(NOT MSVC)
+    target_link_libraries(armulator PUBLIC m)
+endif()
+if(MSVC)
+    target_compile_definitions(armulator PRIVATE MODET)
+else()
+    target_compile_options(armulator PRIVATE -w -fno-strict-aliasing)
+    target_compile_definitions(armulator PRIVATE MODET)
+endif()
+
+# The reusable CodecIf decode layer (our code, strict warnings) sits on top of
+# the sandbox and is shared by the cross-check tool and any future transcoder.
+add_library(codecif STATIC src/replay_codecif.c)
+target_link_libraries(codecif PUBLIC armulator)
+target_include_directories(codecif PUBLIC include)
+if(MSVC)
+    target_compile_options(codecif PRIVATE /W4 /WX)
+else()
+    target_compile_options(codecif PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
+add_executable(replay-armsim tools/replay_armsim.c)
+target_link_libraries(replay-armsim PRIVATE codecif)
+if(NOT MSVC)
+    target_compile_options(replay-armsim PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_executable(replay-verify tools/replay_verify.c)
 target_link_libraries(replay-verify PRIVATE replay)
 
@@ -95,6 +142,14 @@ function(add_replay_test name source)
     endif()
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
+
+add_executable(test_armsim_core tests/test_armsim_core.c)
+target_link_libraries(test_armsim_core PRIVATE codecif)
+if(NOT MSVC)
+    target_compile_options(test_armsim_core PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_armsim_core COMMAND test_armsim_core)
 
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
@@ -205,6 +260,16 @@ add_test(NAME test_movinglines_container
 add_test(NAME test_format19_corpus
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_format19_corpus.sh
         $<TARGET_FILE:replay-verify>)
+
+# Native ARMulator decode of the format-19 corpus (no Python/Unicorn needed).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+    add_test(NAME test_armsim_corpus
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_armsim_corpus.sh
+            $<TARGET_FILE:replay-armsim>
+            ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19
+            "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+    set_tests_properties(test_armsim_corpus PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
