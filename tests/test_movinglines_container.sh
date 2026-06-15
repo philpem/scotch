@@ -25,8 +25,14 @@ grep -q "chunks: 2 entries" "$work/info.txt"
 grep -q "4 frames/chunk" "$work/info.txt"
 # A poster sprite must be present (a zero-length one crashes !ARPlayer).
 grep -qE "sprite: offset=[0-9]+ bytes=[1-9]" "$work/info.txt"
-# Default RGB packing declares the RGB16 colour map (label [RGB] + 16-bit depth).
-head -c 256 "$work/movie,ae7" | grep -q "16 bits per pixel \[RGB\]"
+# Default RGB packing writes a LABEL-LESS pixel-depth line: the player defaults
+# unrecognised colour to RGB16 (bas/Player f$="rgb"), and an unbracketed header
+# avoids the stray "[" ARPlayer otherwise echoes for RGB (player-bugs.md #6).
+head -c 256 "$work/movie,ae7" | grep -q "16 bits per pixel"
+if head -c 256 "$work/movie,ae7" | grep -q "16 bits per pixel \["; then
+    echo "RGB header must be label-less (no [RGB] bracket); see player-bugs.md #6" >&2
+    exit 1
+fi
 
 # --colour yuv packs YUV555 and declares the YUV16 colour map ([YUV] + depth),
 # so the player loads MovingLine.ColourMap.YUV16.

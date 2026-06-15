@@ -34,14 +34,18 @@ spec is correct and its provenance appendix explains why.
 
 Every Acorn video type the project knows (1, 2, 7, 17, 19, 20, 23) plus the
 container and sound is now specified and verified, with a codec behind each.
+
+**Moving Lines colour is confirmed on real hardware.** `replay-encode --codec 1`
+muxes complete `.ae7` movies — in both colour models, with sound — that play
+correctly on the shipped ARPlayer under RPCEmu. The colour metadata is pinned
+from the player source: it packs RGB555 **red-in-low-bits** (the `bgr555le` /
+Replay-poster convention) at 16-bit depth; YUV is labelled `YUV` so `bas/Player`
+selects `YUV16`, while RGB is written label-less and relies on the player's `rgb`
+default (`ColourMap.RGB16`), which also avoids ARPlayer's cosmetic `[` display
+(see [player-bugs.md](../player-bugs.md) #6).
+
 What remains is optional polish:
 
-- **Moving Lines colour on real hardware.** `replay-encode --codec 1` muxes
-  complete `.ae7` movies that decode on the compiled module. The colour metadata
-  is pinned from the player source: it packs RGB555 **red-in-low-bits** (the
-  `bgr555le` / Replay-poster convention) at 16-bit depth, and the shipped player
-  selects RGB when the pixel label carries no `YUV` (`bas/Player`). The only
-  residual is visual confirmation on a real player/emulator.
 - **From-assembler colour rounding.** The one open numerical detail noted in
   [colour-pipeline.md](colour-pipeline.md): confirming CompLib's real-to-integer
   rounding at coefficient boundaries straight from the assembler.
