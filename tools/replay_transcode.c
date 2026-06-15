@@ -373,7 +373,6 @@ static void decode_audio(const ReplayAe7Movie *movie, const uint8_t *data,
                          ReplayBuffer *pcm)
 {
     size_t c;
-    ReplaySoundAdpcmState adpcm = {0, 0};
 
     for (c = 0; c < movie->chunk_count; c++) {
         const ReplayAe7Chunk *chunk = &movie->chunks[c];
@@ -409,25 +408,47 @@ static void decode_audio(const ReplayAe7Movie *movie, const uint8_t *data,
             for (i = 0; i + 1 < sbytes; i += 2)
                 append_s16le(pcm, (int16_t)(s[i] | (s[i + 1] << 8)));
             break;
-        case AUDIO_ADPCM: {
-            /* Mono only: 4-byte per-chunk state header (valprev LE, index,
-             * pad), then 4-bit codes, two samples per byte. */
-            size_t samples;
-            int16_t *out;
-            if (sbytes < 4)
-                die("chunk %zu ADPCM region too short", c);
-            adpcm.predicted = (int16_t)(s[0] | (s[1] << 8));
-            adpcm.step_index = (int8_t)s[2];
-            samples = (sbytes - 4) * 2;
-            out = malloc(samples * sizeof *out + 1);
-            if (out == NULL)
-                die("out of memory decoding ADPCM");
-            replay_sound_adpcm_decode(s + 4, samples, &adpcm, out);
-            for (i = 0; i < samples; i++)
-                append_s16le(pcm, out[i]);
-            free(out);
+        case AUDIO_ADPCM:
+            /* Each chunk is self-contained: a per-channel state header (4 bytes
+             * each: valprev LE, index, pad) then 4-bit IMA codes. Mono packs
+             * two samples per byte; stereo packs one frame per byte (left in
+             * the low nibble, right in the high). */
+            if (movie->sound_channels == 2) {
+                ReplaySoundAdpcmState l, r;
+                size_t frames;
+                int16_t *out;
+                if (sbytes < 8)
+                    die("chunk %zu stereo ADPCM region too short", c);
+                l.predicted = (int16_t)(s[0] | (s[1] << 8));
+                l.step_index = (int8_t)s[2];
+                r.predicted = (int16_t)(s[4] | (s[5] << 8));
+                r.step_index = (int8_t)s[6];
+                frames = sbytes - 8;
+                out = malloc(frames * 2 * sizeof *out + 1);
+                if (out == NULL)
+                    die("out of memory decoding ADPCM");
+                replay_sound_adpcm_decode_stereo(s + 8, frames, &l, &r, out);
+                for (i = 0; i < frames * 2; i++)
+                    append_s16le(pcm, out[i]);
+                free(out);
+            } else {
+                ReplaySoundAdpcmState m;
+                size_t samples;
+                int16_t *out;
+                if (sbytes < 4)
+                    die("chunk %zu ADPCM region too short", c);
+                m.predicted = (int16_t)(s[0] | (s[1] << 8));
+                m.step_index = (int8_t)s[2];
+                samples = (sbytes - 4) * 2;
+                out = malloc(samples * sizeof *out + 1);
+                if (out == NULL)
+                    die("out of memory decoding ADPCM");
+                replay_sound_adpcm_decode(s + 4, samples, &m, out);
+                for (i = 0; i < samples; i++)
+                    append_s16le(pcm, out[i]);
+                free(out);
+            }
             break;
-        }
         case AUDIO_NONE:
         case AUDIO_UNKNOWN:
         default:
@@ -677,18 +698,16 @@ int main(int argc, char **argv)
         if (aud == AUDIO_NONE) {
             fprintf(stderr,
                     "%s: movie has no sound track; no audio written\n", prog);
-        } else if (aud == AUDIO_UNKNOWN
-                   || (aud == AUDIO_ADPCM && movie.sound_channels > 1)) {
-            const char *why = (aud == AUDIO_ADPCM)
-                ? "stereo ADPCM is not supported"
-                : "unsupported sound codec";
+        } else if (aud == AUDIO_UNKNOWN) {
             if (skip_unsupported)
-                fprintf(stderr, "%s: skipping audio: %s (codec %u '%s' '%s')\n",
-                        prog, why, movie.sound_codec, movie.sound_format_label,
+                fprintf(stderr,
+                        "%s: skipping audio: unsupported sound codec "
+                        "(codec %u '%s' '%s')\n",
+                        prog, movie.sound_codec, movie.sound_format_label,
                         movie.sound_precision_label);
             else
-                die("%s (codec %u '%s' '%s'); "
-                    "use --audio-format or --skip-unsupported", why,
+                die("unsupported sound codec (codec %u '%s' '%s'); "
+                    "use --audio-format or --skip-unsupported",
                     movie.sound_codec, movie.sound_format_label,
                     movie.sound_precision_label);
         } else {

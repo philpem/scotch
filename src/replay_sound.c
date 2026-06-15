@@ -245,6 +245,40 @@ ReplayStatus replay_sound_adpcm_write_header(const ReplaySoundAdpcmState *state,
     return replay_buffer_append(out, header, sizeof(header));
 }
 
+/* Decode one 4-bit IMA code, advancing `state` and returning the sample. */
+static int16_t adpcm_decode_code(ReplaySoundAdpcmState *state, unsigned code)
+{
+    int step = adpcm_step_table[state->step_index];
+    int diff = step >> 3;
+    int predicted;
+    int index;
+
+    if (code & 4U) {
+        diff += step;
+    }
+    if (code & 2U) {
+        diff += step >> 1;
+    }
+    if (code & 1U) {
+        diff += step >> 2;
+    }
+    predicted = state->predicted + ((code & 8U) ? -diff : diff);
+    if (predicted > 32767) {
+        predicted = 32767;
+    } else if (predicted < -32768) {
+        predicted = -32768;
+    }
+    index = state->step_index + adpcm_index_table[code & 0x0FU];
+    if (index < 0) {
+        index = 0;
+    } else if (index > 88) {
+        index = 88;
+    }
+    state->predicted = (int16_t)predicted;
+    state->step_index = (int8_t)index;
+    return (int16_t)predicted;
+}
+
 void replay_sound_adpcm_decode(const uint8_t *nibbles, size_t count,
                                ReplaySoundAdpcmState *state,
                                int16_t *out_samples)
@@ -254,35 +288,23 @@ void replay_sound_adpcm_decode(const uint8_t *nibbles, size_t count,
     for (i = 0U; i < count; ++i) {
         unsigned code = (i & 1U) == 0U ? (nibbles[i / 2U] & 0x0FU)
                                        : (nibbles[i / 2U] >> 4U);
-        int step = adpcm_step_table[state->step_index];
-        int diff = step >> 3;
-        int predicted;
-        int index;
+        out_samples[i] = adpcm_decode_code(state, code);
+    }
+}
 
-        if (code & 4U) {
-            diff += step;
-        }
-        if (code & 2U) {
-            diff += step >> 1;
-        }
-        if (code & 1U) {
-            diff += step >> 2;
-        }
-        predicted = state->predicted + ((code & 8U) ? -diff : diff);
-        if (predicted > 32767) {
-            predicted = 32767;
-        } else if (predicted < -32768) {
-            predicted = -32768;
-        }
-        index = state->step_index + adpcm_index_table[code & 0x0FU];
-        if (index < 0) {
-            index = 0;
-        } else if (index > 88) {
-            index = 88;
-        }
-        state->predicted = (int16_t)predicted;
-        state->step_index = (int8_t)index;
-        out_samples[i] = (int16_t)predicted;
+void replay_sound_adpcm_decode_stereo(const uint8_t *bytes, size_t frames,
+                                      ReplaySoundAdpcmState *left,
+                                      ReplaySoundAdpcmState *right,
+                                      int16_t *out_interleaved)
+{
+    size_t i;
+
+    /* One byte per stereo frame: left code in the low nibble, right in the
+     * high nibble (the inverse of replay_sound_adpcm_encode_stereo, matching
+     * the Acorn "2 adpcm" stereo decoder). */
+    for (i = 0U; i < frames; ++i) {
+        out_interleaved[i * 2U] = adpcm_decode_code(left, bytes[i] & 0x0FU);
+        out_interleaved[i * 2U + 1U] = adpcm_decode_code(right, bytes[i] >> 4U);
     }
 }
 
