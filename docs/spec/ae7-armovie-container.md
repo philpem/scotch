@@ -29,6 +29,11 @@ text after the number — parsers read the **leading token** and ignore the
 remainder, so `14 number of chunks` and `14` are equivalent. Trailing spaces are
 stripped.
 
+A **blank numeric line counts as zero.** Some writers (e.g. `!Morpheus`) leave
+the sound fields (lines 11–13) empty when a movie is silent rather than writing
+`0`; a reader must treat an empty/whitespace-only numeric line as `0`, not reject
+it. See §2.3.
+
 | Line | Field | Type | Notes |
 | ---:| --- | --- | --- |
 | 1 | `ARMovie` | literal | magic; exact match required |
@@ -41,9 +46,9 @@ stripped.
 | 8 | Pixel depth | unsigned | bits per pixel (e.g. 16 for 6Y5UV) |
 | 9 | Frame rate | real | frames per second; must be finite and > 0 |
 | 10 | Sound format | unsigned | sound codec id (0 = no sound) |
-| 11 | Sound rate | unsigned | sample rate in Hz |
-| 12 | Sound channels | unsigned | channel count |
-| 13 | Sound precision | unsigned | bits per sample |
+| 11 | Sound rate | unsigned | sample rate in Hz — **or** a sample *period* in microseconds when labelled `µs samples`; see §2.3 |
+| 12 | Sound channels | unsigned | channel count (blank ⇒ 0) |
+| 13 | Sound precision | unsigned | bits per sample (blank ⇒ 0); the *text* also selects the format-1 decoder (see [armovie-sound.md](armovie-sound.md)) |
 | 14 | Frames per chunk | real | nominal; a fractional value (e.g. 12.5) is legal |
 | 15 | **Number of chunks** | unsigned | the **highest zero-based chunk index**, *not* the count — see §2.1 |
 | 16 | Even chunk size | unsigned | declared byte size of even-numbered chunks |
@@ -68,6 +73,23 @@ Lines 16–17 declare the nominal byte size of even- and odd-indexed chunks. The
 support seeking and buffering estimates; the authoritative per-chunk sizes are
 the catalogue's, which a reader must use for extraction.
 
+### 2.3 Sound-field variants (blank, and the µs sample period)
+
+Real movies vary how the sound fields (lines 11–13) are written, and a reader
+must accept all of these:
+
+- **Blank ⇒ zero.** A silent movie may leave any of lines 11–13 empty instead of
+  writing `0` (`!Morpheus` does this for the bits-per-sample line). Treat an
+  empty/whitespace-only numeric line as `0`.
+- **Sound rate as a microsecond period.** Line 11 is normally a frequency in Hz,
+  but some writers give the sample *period* in microseconds, labelled
+  `µs samples` (the `µ` is Latin-1 `0xB5`, occasionally the ASCII `us`). For
+  example the *Dictionary of the Living World* movies write `72 µs samples`,
+  i.e. a 72 µs period = **1 000 000 / 72 ≈ 13 889 Hz** (confirmed by the data:
+  ~27 777 mono 8-bit samples per 2 s chunk). A reader keys on the unit text and
+  converts to Hz; otherwise a 13.9 kHz track is mistaken for a 72 Hz one and the
+  audio plays ~193× too slow.
+
 ## 3. Chunk catalogue
 
 At `catalogue offset`, one newline-terminated line per chunk, in chunk order:
@@ -78,9 +100,15 @@ file_offset,video_bytes[;sound_track_0_bytes[;sound_track_1_bytes...]]
 
 - `file_offset` — byte offset of the chunk in the file.
 - `video_bytes` — length of the chunk's video region.
-- one or more `;`-separated sound-track byte counts. **At least one is always
-  present**; a movie with no sound writes `;0`. A reader sums them for the
+- zero or more `;`-separated sound-track byte counts. A reader sums them for the
   chunk's total sound bytes and counts them for the track count.
+
+A well-formed writer emits a sound field even when silent — `;0`, so a typical
+line is `405504,147690;27777` (one track) or `0,0;0` (silent). But some real
+movies (the *Dictionary of the Living World* series) write a **bare trailing
+`;` with no count** for a silent chunk, e.g. `436224,101160;`. A reader must
+accept an empty field after a `;` as *no sound track* (zero bytes), not a parse
+error. (An empty field between two counts, `…;;5`, is likewise an absent track.)
 
 The shortest legal line is `0,0;0` (6 bytes including the newline). Each chunk's
 region `[file_offset, file_offset + video_bytes + Σ sound_bytes)` must lie within
@@ -195,8 +223,9 @@ miss.) **Always embed a complete poster sprite** with a non-zero `size of sprite
 
 - A **sound-only** movie (video format 0, no frames) must report **0×0**
   dimensions on lines 6–7.
-- The catalogue must **always** carry a sound field — `;0` when silent — never
-  omit it (§3).
+- A conforming muxer should write a sound field — `;0` when silent — for
+  readability and round-tripping. A *reader*, however, must tolerate the bare
+  trailing `;` that some real movies use for a silent chunk (§3).
 
 ## Appendix A. Provenance and corrections
 
@@ -223,8 +252,14 @@ Corrections and clarifications:
   pointer it returns per frame (`tools/decomp19_unicorn.py --frames N`), rather
   than guessing from catalogue averages or byte patterns. The trailing-pad-byte
   behaviour was observed the same way.
-- **The catalogue always carries a sound field.** Even a silent movie writes
-  `;0`; a reader must not treat a missing sound field as valid.
+- **Sound fields vary; a reader must be liberal (§2.3, §3).** The sound rate may
+  be a microsecond sample period (`72 µs samples` ⇒ ~13 889 Hz) rather than Hz; a
+  silent movie may leave the numeric sound fields (lines 11–13) blank rather than
+  writing `0`; and a silent chunk's catalogue line may end with a bare `;` with
+  no count. These were all found in real movies (the *Dictionary of the Living
+  World* / `!Morpheus` collections) and a reader that assumes Hz, requires the
+  fields, or insists on `;0` mis-decodes or rejects them. A *writer* should still
+  emit Hz, explicit `0`s and `;0` for clarity.
 - **Numeric header fields carry trailing prose.** Real files write
   `19 video format`, `-1 (no keys)`, etc. A parser must read only the leading
   number. Conversely a writer should emit the labels for human/tool readability.
