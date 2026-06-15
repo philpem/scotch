@@ -262,12 +262,12 @@ add_test(NAME test_format19_corpus
         $<TARGET_FILE:replay-verify>)
 
 # Native ARMulator decode of the format-19 corpus (no Python/Unicorn needed).
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress,ffd")
     add_test(NAME test_armsim_corpus
         COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_armsim_corpus.sh
             $<TARGET_FILE:replay-armsim>
             ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19
-            "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd")
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress,ffd")
     set_tests_properties(test_armsim_corpus PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
@@ -301,7 +301,7 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(test_decomp19_unicorn PROPERTIES SKIP_RETURN_CODE 77)
 
     set(DECOMP19_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp19/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-19 Decompress file")
     if(EXISTS "${DECOMP19_COMPILED}")
         add_test(NAME test_decomp19_compiled
@@ -323,7 +323,7 @@ if(Python3_Interpreter_FOUND)
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP23_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp23/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-23 Decompress file")
     if(EXISTS "${DECOMP23_COMPILED}")
         add_test(NAME test_decomp23_compiled
@@ -336,7 +336,7 @@ if(Python3_Interpreter_FOUND)
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP17_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp17/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp17/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-17 Decompress file")
     if(EXISTS "${DECOMP17_COMPILED}")
         add_test(NAME test_decomp17_compiled
@@ -363,7 +363,7 @@ if(Python3_Interpreter_FOUND)
             test_fullmovie_decomp17 PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP7_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp7/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp7/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-7 Decompress file")
     if(EXISTS "${DECOMP7_COMPILED}")
         add_test(NAME test_decomp7_compiled
@@ -384,7 +384,7 @@ if(Python3_Interpreter_FOUND)
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP20_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp20/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-20 Decompress file")
     if(EXISTS "${DECOMP20_COMPILED}")
         add_test(NAME test_decomp20_compiled
@@ -405,7 +405,7 @@ if(Python3_Interpreter_FOUND)
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(DECOMP20NEW_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp20new/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp20new/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn format-20 v0.05 (delta chroma) Decompress")
     if(EXISTS "${DECOMP20NEW_COMPILED}")
         add_test(NAME test_decomp20new_compiled
@@ -419,7 +419,7 @@ if(Python3_Interpreter_FOUND)
             PROPERTIES SKIP_RETURN_CODE 77)
     endif()
     set(MOVINGLINE_COMPILED
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/MovingLine/Decompress,ffd"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/MovingLine/Decompress,ffd"
         CACHE FILEPATH "Compiled Acorn Moving Lines (type 1) Decompress file")
     if(EXISTS "${MOVINGLINE_COMPILED}")
         add_test(NAME test_movinglines_compiled
