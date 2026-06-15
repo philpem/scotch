@@ -103,6 +103,13 @@ if(NOT MSVC)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+add_executable(replay-transcode tools/replay_transcode.c)
+target_link_libraries(replay-transcode PRIVATE codecif replay)
+if(NOT MSVC)
+    target_compile_options(replay-transcode PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_executable(replay-verify tools/replay_verify.c)
 target_link_libraries(replay-verify PRIVATE replay)
 
@@ -270,6 +277,22 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress
             "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress,ffd")
     set_tests_properties(test_armsim_corpus PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# End-to-end transcoder check (skips unless the LionFish19 movie is present).
+add_executable(transcode_frame_check tests/transcode_frame_check.c)
+target_link_libraries(transcode_frame_check PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(transcode_frame_check PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode.sh
+        $<TARGET_FILE:replay-transcode>
+        $<TARGET_FILE:transcode_frame_check>
+        "${CMAKE_CURRENT_SOURCE_DIR}/../LionFish19,ae7"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled"
+        ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19)
+set_tests_properties(test_transcode PROPERTIES SKIP_RETURN_CODE 77)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
