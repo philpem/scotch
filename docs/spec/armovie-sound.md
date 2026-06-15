@@ -12,10 +12,14 @@ The AE7 header (container spec §2) describes the sound with four fields:
 
 - **Sound format** (line 10) — the codec id: **1** = the VIDC/linear family
   (§2), **2** = IMA/DVI ADPCM (§3), **0** = no sound.
-- **Sound rate** (line 11) — sample rate in Hz.
+- **Sound rate** (line 11) — sample rate in Hz. Some writers instead give the
+  sample *period* in microseconds, labelled `µs samples` (e.g. `72 µs samples` =
+  1 000 000 / 72 ≈ 13 889 Hz); a reader keys on the unit and converts to Hz. See
+  [the container spec §2.3](ae7-armovie-container.md).
 - **Sound channels** (line 12) — 1 (mono) or 2 (stereo).
 - **Sound precision** (line 13) — bits per sample, written as a number followed
-  by descriptive text that *also selects the decoder* within format 1 (§2).
+  by descriptive text that *also selects the decoder* within format 1 (§2). A
+  silent movie may leave lines 11–13 blank; treat a blank numeric field as 0.
 
 Samples are **interleaved** for stereo (L, R, L, R, …). Each chunk's sound
 follows that chunk's video (container §4); the catalogue's per-track byte counts

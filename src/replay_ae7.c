@@ -87,6 +87,7 @@ static ReplayStatus parse_unsigned_line_label(LineReader *reader,
                                               size_t error_size)
 {
     char line[REPLAY_AE7_TEXT_MAX];
+    char *start;
     char *end;
     unsigned long long parsed;
     ReplayStatus status = copy_line(reader, line, sizeof(line),
@@ -95,9 +96,23 @@ static ReplayStatus parse_unsigned_line_label(LineReader *reader,
     if (status != REPLAY_OK) {
         return status;
     }
+    start = line;
+    while (*start == ' ') {
+        ++start;
+    }
+    /* Some writers (e.g. !Morpheus) leave the numeric sound fields blank when
+     * there is no sound. Treat an empty/whitespace-only line as zero rather
+     * than rejecting it. */
+    if (*start == '\0') {
+        *value = 0U;
+        if (label != NULL && label_size != 0U) {
+            label[0] = '\0';
+        }
+        return REPLAY_OK;
+    }
     errno = 0;
-    parsed = strtoull(line, &end, 10);
-    if (end == line || errno == ERANGE) {
+    parsed = strtoull(start, &end, 10);
+    if (end == start || errno == ERANGE) {
         set_error(error, error_size, "invalid integer on header line %u",
                   reader->line_number);
         return REPLAY_MALFORMED_STREAM;
@@ -176,6 +191,27 @@ static ReplayStatus narrow_unsigned(uint64_t value, unsigned *destination,
     return REPLAY_OK;
 }
 
+/* The sound-rate field (header line 11) is usually a frequency in Hz, but some
+ * writers give a sample *period* in microseconds, labelled "µs samples" (e.g.
+ * "72 µs samples"). The µ is Latin-1 0xB5 (or UTF-8 0xC2 0xB5); a few use the
+ * ASCII "us". Detect that unit on the label that follows the number. */
+static int sound_rate_is_microseconds(const char *label)
+{
+    const unsigned char *p = (const unsigned char *)label;
+
+    if (p[0] == 0xB5U && (p[1] == 's' || p[1] == 'S')) {
+        return 1; /* Latin-1 µs */
+    }
+    if (p[0] == 0xC2U && p[1] == 0xB5U && (p[2] == 's' || p[2] == 'S')) {
+        return 1; /* UTF-8 µs */
+    }
+    if ((p[0] == 'u' || p[0] == 'U') && (p[1] == 's' || p[1] == 'S') &&
+        (p[2] == '\0' || p[2] == ' ')) {
+        return 1; /* ASCII "us" */
+    }
+    return 0;
+}
+
 static ReplayStatus parse_chunk_line(LineReader *reader, ReplayAe7Chunk *chunk,
                                      char *error, size_t error_size)
 {
@@ -206,6 +242,12 @@ static ReplayStatus parse_chunk_line(LineReader *reader, ReplayAe7Chunk *chunk,
     cursor = end;
     while (*cursor == ';') {
         ++cursor;
+        /* Some writers (e.g. the "Dictionary of the Living World" movies) end a
+         * silent chunk's line with a bare ";" and no count. An empty field is an
+         * absent sound track, not a parse error. */
+        if (*cursor < '0' || *cursor > '9') {
+            continue;
+        }
         errno = 0;
         value = strtoull(cursor, &end, 10);
         if (end == cursor || errno == ERANGE ||
@@ -339,6 +381,12 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
            sizeof(movie->sound_channels_label));
     memcpy(movie->sound_precision_label, labels[7],
            sizeof(movie->sound_precision_label));
+    /* A sound rate given as a sample period in microseconds ("72 µs samples")
+     * is converted to Hz, so consumers always see a frequency. */
+    if (movie->sound_rate != 0U && sound_rate_is_microseconds(labels[5])) {
+        movie->sound_rate = (unsigned)((1000000U + movie->sound_rate / 2U)
+                                       / movie->sound_rate);
+    }
     movie->even_chunk_bytes = fields[10];
     movie->odd_chunk_bytes = fields[11];
     movie->catalogue_offset = fields[12];
