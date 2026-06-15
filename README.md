@@ -1,18 +1,31 @@
-# Replay Tooling
+# Scotch
 
-Portable C tooling for inspecting, verifying, and encoding Acorn Replay video
-streams.
+_"Re-record not fade away"_
 
-The implemented target is compression type 19, Super Moving Blocks. The project
-currently provides byte/bitstream primitives, Moving Blocks codec descriptors,
-a complete type 19, Super Moving Blocks payload verifier, a deterministic
-encoder with the
-original 29-level copy-match table, frame-level rate retries, and automated
-cross-checks against Acorn's compiled ARM decompressor.
+Scotch is a reference implementation of the Acorn Replay video compression scheme, as developed by Sophie Wilson et al at Acorn in the 1990s.
+It has two main goals:
+
+  * Accurately document the Replay bitstreams and compression methodology.
+  * Encode video from modern sources to Replay (using FFMPEG as an input format adapter).
+  * **Stretch goal:** Implement a transcoder (from Replay to FFMPEG) with a sandbox to run Replay `Decomp` video codecs.
+
+## History
+
+Scotch started out as a coder and multiplexer for Acorn's Super Moving Blocks codec, as it was the latest "released" Moving Blocks variant and the second-to-last
+evolution of it. Structurally it has most or all of the elements of the earlier Moving Blocks schemes, and implementing it gave a solid base for implementing
+the earlier schemes.
+
+The development work started with the creation of a reimplementation of the Super Moving Blocks decoder, which was cross-checked against the original Acorn
+decoder (written in ARM assembler). This constrained the LLM (Claude) and gave it a firm pass/fail test result - which drove the development of the encoder.
+
+Once Super Moving Blocks had been completed, the other Moving Blocks coders - and Moving Lines - were added. This includes two variants of Moving Blocks Beta
+dated September and November 1996.
+
+## Documentation
 
 See [docs/implementation-status.md](docs/implementation-status.md) for the
 implemented surface, verified claims, and known differences from the original
-compressor. [docs/encoder-policy-comparison.md](docs/encoder-policy-comparison.md)
+compressors. [docs/encoder-policy-comparison.md](docs/encoder-policy-comparison.md)
 explains how decision-policy differences can affect bitrate and quality.
 
 For implementation-grade format specifications — sufficient to build a new
@@ -32,10 +45,11 @@ Builds default to `Release` (`-O3`) when no build type is given; the encoder
 `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug` if you need an unoptimised,
 debuggable build.
 
-The C implementation has no third-party runtime dependency. The optional ARM
-cross-check tests require Python 3 with Unicorn bindings. CMake automatically
-uses `../!ARMovie_compiled/Decomp19/Decompress,ffd` when present; another copy
-can be selected with `-DDECOMP19_COMPILED=/path/to/Decompress,ffd`.
+### Test harness
+
+The C implementation has no third-party runtime dependency.
+
+The optional ARM cross-check tests are now self-contained and use a version of the ARM Ltd. ARMulator emulator core which was derived from the GDB source code.
 
 Inspect an ARMovie/AE7 header and its validated chunk catalogue with:
 
@@ -43,10 +57,8 @@ Inspect an ARMovie/AE7 header and its validated chunk catalogue with:
 build/replay-inspect ../LionFish19,ae7
 ```
 
-The inspector labels known compression identifiers by both number and name,
-for example type 19, Super Moving Blocks. In the AE7 header, `number of chunks`
-is the last zero-based chunk index, so the tool reports both that value and the
-derived catalogue-entry count.
+The inspector labels known compression identifiers by both number and name, e.g. "type 19, Super Moving Blocks".
+In the AE7 header, `number of chunks` is the last zero-based chunk index, so the tool reports both that value and the derived catalogue-entry count.
 
 Check the type 19, Super Moving Blocks Huffman table with:
 
