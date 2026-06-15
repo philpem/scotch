@@ -294,6 +294,18 @@ add_test(NAME test_transcode
         ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19)
 set_tests_properties(test_transcode PROPERTIES SKIP_RETURN_CODE 77)
 
+# Self-contained type-23 transcode check (synthetic movie; no assets needed).
+add_executable(make_type23_movie tests/make_type23_movie.c)
+target_link_libraries(make_type23_movie PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_type23_movie PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode_type23
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_type23.sh
+        $<TARGET_FILE:make_type23_movie>
+        $<TARGET_FILE:replay-transcode>)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
     add_test(NAME test_direct_container
