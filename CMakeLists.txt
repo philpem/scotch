@@ -329,6 +329,18 @@ add_test(NAME test_transcode_audio
         $<TARGET_FILE:make_audio_movie>
         $<TARGET_FILE:replay-transcode>)
 
+# Sound-only movie (video format 0): no video track, no Decomp0 module.
+add_executable(make_sound_only_movie tests/make_sound_only_movie.c)
+target_link_libraries(make_sound_only_movie PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_sound_only_movie PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode_sound_only
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_sound_only.sh
+        $<TARGET_FILE:make_sound_only_movie>
+        $<TARGET_FILE:replay-transcode>)
+
 # Uncompressed-format decompressor route (runs Decomp23 under codecif).
 add_test(NAME test_transcode_module23
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23.sh
