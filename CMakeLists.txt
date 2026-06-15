@@ -291,7 +291,7 @@ add_test(NAME test_transcode
         $<TARGET_FILE:replay-transcode>
         $<TARGET_FILE:transcode_frame_check>
         "${CMAKE_CURRENT_SOURCE_DIR}/../LionFish19,ae7"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs"
         ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19)
 set_tests_properties(test_transcode PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -323,7 +323,7 @@ add_test(NAME test_transcode_module23
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23.sh
         $<TARGET_FILE:make_type23_movie>
         $<TARGET_FILE:replay-transcode>
-        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd")
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp23/Decompress,ffd")
 set_tests_properties(test_transcode_module23 PROPERTIES SKIP_RETURN_CODE 77)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
