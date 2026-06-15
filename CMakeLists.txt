@@ -158,6 +158,17 @@ if(NOT MSVC)
 endif()
 add_test(NAME test_armsim_core COMMAND test_armsim_core)
 
+# Every vendored decompressor module must initialise under the harness.
+add_executable(test_codec_modules_init tests/test_codec_modules_init.c)
+target_link_libraries(test_codec_modules_init PRIVATE codecif)
+if(NOT MSVC)
+    target_compile_options(test_codec_modules_init PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_codec_modules_init
+    COMMAND test_codec_modules_init
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs)
+
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)

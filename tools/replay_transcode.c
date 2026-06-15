@@ -728,11 +728,25 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     return total;
 }
 
+static VideoColour video_colour_from_name(const char *name)
+{
+    if (!strcmp(name, "6y5uv")) return COL_6Y5UV;
+    if (!strcmp(name, "6y6uv")) return COL_6Y6UV;
+    if (!strcmp(name, "yuv555")) return COL_YUV555;
+    if (!strcmp(name, "rgb555")) return COL_RGB555;
+    if (!strcmp(name, "yuv888")) return COL_YUV888;
+    if (!strcmp(name, "rgb888")) return COL_RGB888;
+    if (!strcmp(name, "palette") || !strcmp(name, "pal8")) return COL_PAL8;
+    die("unknown --video-colour '%s' "
+        "(6y5uv|6y6uv|yuv555|rgb555|yuv888|rgb888|palette)", name);
+    return COL_6Y5UV;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL, *module_path = NULL, *modules_dir = NULL;
     const char *output_path = NULL, *audio_output = NULL;
-    const char *audio_format_name = NULL;
+    const char *audio_format_name = NULL, *video_colour_name = NULL;
     int skip_unsupported = 0;
     int i;
 
@@ -745,6 +759,7 @@ int main(int argc, char **argv)
         else if (strcmp(a, "--output") == 0) output_path = NEXT();
         else if (strcmp(a, "--audio-output") == 0) audio_output = NEXT();
         else if (strcmp(a, "--audio-format") == 0) audio_format_name = NEXT();
+        else if (strcmp(a, "--video-colour") == 0) video_colour_name = NEXT();
         else if (strcmp(a, "--skip-unsupported") == 0) skip_unsupported = 1;
         else die("unknown argument '%s'", a);
 #undef NEXT
@@ -765,29 +780,41 @@ int main(int argc, char **argv)
     CodecInfo info;
     char generic_sub[64];
     int have_video = (codec_info(movie.video_codec, &info) == 0);
-    if (!have_video) {
-        /* Unknown codec: if a decompressor is available, drive it generically
-         * from its Info file so an arbitrary external decompressor just works. */
-        VideoColour col;
-        int multi = 0;
-        if (info_colour_for(movie.video_codec, module_path, modules_dir,
-                            &col, &multi) == 0) {
+    if (!have_video && (module_path != NULL || modules_dir != NULL)) {
+        /* Unknown codec: drive it generically from a decompressor. The colour
+         * model comes from --video-colour if given, else from the codec's Info
+         * file (so an external decompressor with a colour line just works). */
+        VideoColour col = COL_6Y5UV;
+        int multi = 0, ok = 0;
+        if (video_colour_name != NULL) {
+            col = video_colour_from_name(video_colour_name);
+            ok = 1;
+        } else if (info_colour_for(movie.video_codec, module_path, modules_dir,
+                                   &col, &multi) == 0) {
+            ok = 1;
+        }
+        if (ok) {
             memset(&info, 0, sizeof info);
             snprintf(generic_sub, sizeof generic_sub,
                      "Decomp%u/Decompress,ffd", movie.video_codec);
             info.module_subpath = generic_sub;
-            info.name = "external (Info file)";
-            if (multi) {
+            info.name = "external";
+            if (video_colour_name == NULL && multi) {
                 info.colour = movie.pixel_depth >= 24 ? COL_RGB888 : COL_RGB555;
                 info.header_colour = 1;
             } else {
                 info.colour = col;
             }
             have_video = 1;
-            fprintf(stderr,
-                    "%s: codec %u not built in; using decompressor + Info file\n",
-                    prog, movie.video_codec);
+            fprintf(stderr, "%s: codec %u not built in; using decompressor%s\n",
+                    prog, movie.video_codec,
+                    video_colour_name ? " + --video-colour" : " + Info file");
         }
+    }
+    /* --video-colour overrides the colour model for any codec. */
+    if (have_video && video_colour_name != NULL) {
+        info.colour = video_colour_from_name(video_colour_name);
+        info.header_colour = 0;
     }
     if (!have_video) {
         if (skip_unsupported)
