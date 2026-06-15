@@ -140,6 +140,9 @@ modules are vendored in
 codec and its colour model. Use `--video-colour` to override the colour model
 (needed for Escape, which declares none), `--audio-format` to pick the sound
 encoding, and `--skip-unsupported` for partial (video- or audio-only) output.
+A sound-only movie (video format 0) is transcoded to audio only; it has no
+codec module, so `--modules-dir` is ignored for it even if some such movies
+carry stray non-zero dimensions in the header.
 
 ## Acorn cross-check
 

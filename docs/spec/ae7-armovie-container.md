@@ -231,6 +231,13 @@ miss.) **Always embed a complete poster sprite** with a non-zero `size of sprite
 
 - A **sound-only** movie (video format 0, no frames) must report **0×0**
   dimensions on lines 6–7.
+- A *reader* must not trust the geometry to identify a sound-only movie:
+  some real ones carry **non-zero** width/height/frame-rate on lines 6–9 even
+  though video format is 0 (e.g. `!ARPlayer`'s `DUMMY` placeholder at 120×96,
+  and the *CineClips* collection at 64×64). Video format 0 means "no video
+  track" regardless of the dimensions; there is no `Decomp0` decompressor, so a
+  tool must key on the format number — treat such a movie as audio-only and
+  never look for a codec module for it.
 - A conforming muxer should write a sound field — `;0` when silent — for
   readability and round-tripping. A *reader*, however, must tolerate the bare
   trailing `;` that some real movies use for a silent chunk (§3).

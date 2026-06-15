@@ -20,6 +20,11 @@
  * that need one it must be supplied: --module FILE, or --modules-dir DIR from
  * which DecompN/Decompress,ffd (or MovingLine/Decompress,ffd) is taken. Type 23
  * needs no module.
+ *
+ * Video format 0 is "no video track" (a sound-only movie): it is decoded for
+ * its audio only, never as a codec, so --modules-dir does not make it chase a
+ * non-existent Decomp0. Some real sound-only movies carry non-zero dimensions
+ * in the header, so this is keyed on the format number, not the geometry.
  */
 
 #include "replay/codecif.h"
@@ -878,7 +883,17 @@ int main(int argc, char **argv)
     CodecInfo info;
     char generic_sub[64];
     int have_video = (codec_info(movie.video_codec, &info) == 0);
-    if (!have_video && (module_path != NULL || modules_dir != NULL)) {
+    /* Video format 0 means "no video track" (a sound-only movie), not an
+     * unknown codec: there is no Decomp0 decompressor, so it must skip both the
+     * external-decompressor fallback below and the unsupported-codec error. We
+     * key on the codec number alone — some real sound-only movies (!ARPlayer's
+     * DUMMY, the CineClips collection) wrongly carry non-zero dimensions in the
+     * header, so the geometry can't be trusted to identify them. */
+    int sound_only = (movie.video_codec == 0);
+    if (sound_only) {
+        fprintf(stderr, "%s: video format 0: sound-only movie, no video track\n",
+                prog);
+    } else if (!have_video && (module_path != NULL || modules_dir != NULL)) {
         /* Unknown codec, but we have a decompressor: drive it generically.
          * Colour-model priority: --video-colour, then a real Info colour line
          * (e.g. "YUV 8,8,8"), then the movie header's pixel label ("16 bits per
@@ -911,7 +926,7 @@ int main(int argc, char **argv)
         info.colour = video_colour_from_name(video_colour_name);
         info.header_colour = 0;
     }
-    if (!have_video) {
+    if (!have_video && !sound_only) {
         if (skip_unsupported)
             fprintf(stderr, "%s: skipping video: codec %u is not supported\n",
                     prog, movie.video_codec);
@@ -947,8 +962,18 @@ int main(int argc, char **argv)
             do_audio = 1;
         }
     }
-    if (!have_video && !do_audio)
-        die("nothing to output");
+    if (!have_video && !do_audio) {
+        /* A sound-only movie whose only sound track we cannot decode (or which
+         * carries none — e.g. the DUMMY placeholder) has nothing to transcode,
+         * but that is not a tool failure: report it and exit cleanly. */
+        if (!sound_only)
+            die("nothing to output");
+        fprintf(stderr, "%s: sound-only movie has no decodable sound track; "
+                        "nothing to transcode\n", prog);
+        replay_ae7_movie_destroy(&movie);
+        free(movie_data);
+        return 0;
+    }
 
     /* ---- audio (decoded first so a streamed WAV is complete before ffmpeg
      * opens it) ---- */
