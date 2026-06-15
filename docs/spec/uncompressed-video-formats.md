@@ -80,6 +80,16 @@ word is the Info colour line.
 Not decoded: 12/13 (MPEG), 14 (Ultimotion), 15 (named/indirect video) — these
 need external codecs.
 
+## Unknown codecs: driven by the Info file
+
+For a video format the transcoder has no built-in entry for, it falls back to a
+generic path: it locates the decompressor (`--module FILE`, or
+`<modules-dir>/Decomp<N>/Decompress,ffd`), reads the working-output colour model
+from line 7 of the codec's `Info` file (the colour line above), runs the module
+unpatched under codecif, and converts accordingly. So an arbitrary external
+decompressor "just works" given its `Decompress` code and `Info` file. The
+built-in table above is used for the known formats (and matches their Info).
+
 ## Status / caveats
 
 - The decode (module → working words) is authoritative for every format: it is

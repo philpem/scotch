@@ -164,6 +164,83 @@ static VideoColour refine_colour(VideoColour base, const char *label)
     return base; /* RGB is the documented default */
 }
 
+/* Parse a codec Info file's colour line ("YUV 8,8,8", "6Y5UV 6,5,5",
+ * "RGB 5,5,5", or a bare bit-depth like "8" for palette) into a VideoColour.
+ * Returns 1 on success. */
+static int colour_from_info_line(const char *line, VideoColour *out)
+{
+    while (*line == ' ')
+        line++;
+    if (strncmp(line, "6Y5UV", 5) == 0) { *out = COL_6Y5UV; return 1; }
+    if (strncmp(line, "6Y6UV", 5) == 0) { *out = COL_6Y6UV; return 1; }
+    if (strncmp(line, "YUV", 3) == 0 || strncmp(line, "RGB", 3) == 0) {
+        int rgb = (line[0] == 'R');
+        const char *p = line + 3;
+        const char *comma;
+        int a, b;
+        while (*p == ' ')
+            p++;
+        a = atoi(p);
+        comma = strchr(p, ',');
+        b = comma != NULL ? atoi(comma + 1) : a;
+        if (a == 8) { *out = rgb ? COL_RGB888 : COL_YUV888; return 1; }
+        if (a == 5) { *out = rgb ? COL_RGB555 : COL_YUV555; return 1; }
+        if (a == 6) { *out = (b == 6) ? COL_6Y6UV : COL_6Y5UV; return 1; }
+        return 0;
+    }
+    if (line[0] >= '0' && line[0] <= '9') { *out = COL_PAL8; return 1; }
+    return 0;
+}
+
+/* Locate a decompressor's Info file (alongside the module, or
+ * <modules_dir>/Decomp<codec>/Info) and read its working-output colour model.
+ * The colour is line 7 by Acorn convention; fall back to the first colour-like
+ * line. *multi is set when the Info lists several models (the movie header then
+ * selects). Returns 0 on success. */
+static int info_colour_for(unsigned codec, const char *module_path,
+                           const char *modules_dir, VideoColour *colour,
+                           int *multi)
+{
+    char info_path[1024];
+    char line[256], line7[256] = {0}, first[256] = {0};
+    const char *chosen = NULL;
+    VideoColour scratch;
+    FILE *f;
+    int ln = 0;
+
+    if (module_path != NULL) {
+        const char *slash = strrchr(module_path, '/');
+        int dir_len = slash != NULL ? (int)(slash - module_path + 1) : 0;
+        snprintf(info_path, sizeof info_path, "%.*sInfo", dir_len, module_path);
+    } else if (modules_dir != NULL) {
+        snprintf(info_path, sizeof info_path, "%s/Decomp%u/Info",
+                 modules_dir, codec);
+    } else {
+        return -1;
+    }
+
+    f = fopen(info_path, "rb");
+    if (f == NULL)
+        return -1;
+    while (fgets(line, sizeof line, f) != NULL) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (++ln == 7)
+            snprintf(line7, sizeof line7, "%s", line);
+        if (first[0] == '\0' && colour_from_info_line(line, &scratch))
+            snprintf(first, sizeof first, "%s", line);
+    }
+    fclose(f);
+
+    if (line7[0] != '\0' && colour_from_info_line(line7, &scratch))
+        chosen = line7;
+    else if (first[0] != '\0')
+        chosen = first;
+    if (chosen == NULL)
+        return -1;
+    *multi = (strchr(chosen, ';') != NULL);
+    return colour_from_info_line(chosen, colour) ? 0 : -1;
+}
+
 static uint8_t clamp8(int v)
 {
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -678,14 +755,40 @@ int main(int argc, char **argv)
     /* ---- decide what we can produce; an unrecognised codec is fatal unless
      * --skip-unsupported asks for partial (video-only / audio-only) output. */
     CodecInfo info;
+    char generic_sub[64];
     int have_video = (codec_info(movie.video_codec, &info) == 0);
+    if (!have_video) {
+        /* Unknown codec: if a decompressor is available, drive it generically
+         * from its Info file so an arbitrary external decompressor just works. */
+        VideoColour col;
+        int multi = 0;
+        if (info_colour_for(movie.video_codec, module_path, modules_dir,
+                            &col, &multi) == 0) {
+            memset(&info, 0, sizeof info);
+            snprintf(generic_sub, sizeof generic_sub,
+                     "Decomp%u/Decompress,ffd", movie.video_codec);
+            info.module_subpath = generic_sub;
+            info.name = "external (Info file)";
+            if (multi) {
+                info.colour = movie.pixel_depth >= 24 ? COL_RGB888 : COL_RGB555;
+                info.header_colour = 1;
+            } else {
+                info.colour = col;
+            }
+            have_video = 1;
+            fprintf(stderr,
+                    "%s: codec %u not built in; using decompressor + Info file\n",
+                    prog, movie.video_codec);
+        }
+    }
     if (!have_video) {
         if (skip_unsupported)
             fprintf(stderr, "%s: skipping video: codec %u is not supported\n",
                     prog, movie.video_codec);
         else
             die("video codec %u is not supported "
-                "(use --skip-unsupported for audio-only output)",
+                "(supply --module/--modules-dir for an external decompressor, "
+                "or --skip-unsupported for audio-only output)",
                 movie.video_codec);
     }
 
