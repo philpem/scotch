@@ -166,6 +166,13 @@ replay_armsim_new (ReplayArmMode mode)
     else
         ARMul_SelectProcessor (sim->state, ARM_v4_Prop);
 
+    /* ARMul_NewState already reset the CPU, but in the default 32-bit mode;
+     * reset again now that the 26-/32-bit choice is made so the processor mode
+     * matches. Without this a 26-bit sandbox stays in SVC32MODE, and EMODE
+     * (0x13) leaks bit 4 into every `MOV pc, Rn` return, landing 0x10 past the
+     * target. */
+    ARMul_Reset (sim->state);
+
     if (!ARMul_MemoryInit (sim->state, 0))
     {
         free (sim->state);
