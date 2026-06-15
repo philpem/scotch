@@ -21,13 +21,20 @@ located by byte offsets given **in** the header, so they may appear anywhere in
 the file; in practice writers place the payload immediately after the header and
 the catalogue/sprite/keys after the payload.
 
-## 2. Text header (21 lines)
+## 2. Text header (20 or 21 lines)
 
-Exactly 21 newline-terminated (`\n`; a trailing `\r` is tolerated) lines. Line 1
+Normally 21 newline-terminated (`\n`; a trailing `\r` is tolerated) lines. Line 1
 is the literal magic; the rest are a value optionally followed by descriptive
 text after the number — parsers read the **leading token** and ignore the
 remainder, so `14 number of chunks` and `14` are equivalent. Trailing spaces are
 stripped.
+
+**Line 21 (`offset to keys`) is optional.** Some 1992 sound-only movies
+(Head-Line "Welcome to RISC OS 3!" sessions, digitised by Acorn) write only 20
+header lines and follow line 20 directly with the poster sprite. A reader must
+treat an absent line 21 as `-1` (no keys) rather than reading the sprite bytes as
+an over-long line. The catalogue and sprite are located by their absolute
+offsets (lines 18–19), so omitting line 21 does not shift them.
 
 A **blank numeric line counts as zero.** Some writers (e.g. `!Morpheus`) leave
 the sound fields (lines 11–13) empty when a movie is silent rather than writing
@@ -56,7 +63,7 @@ it. See §2.3.
 | 18 | Catalogue offset | unsigned | byte offset of the catalogue table |
 | 19 | Sprite offset | unsigned | byte offset of the poster sprite |
 | 20 | Sprite size | unsigned | poster sprite length in bytes (0 if none) |
-| 21 | Offset to keys | signed | byte offset of the key-frame table, or **−1** for none |
+| 21 | Offset to keys | signed | byte offset of the key-frame table, or **−1** for none; **optional** — may be omitted entirely (treat as −1), see above |
 
 Writers emit human labels after each number, e.g. `19 video format`, `160
 pixels`, `12.5 frames per second`, `14 number of chunks`, `-1 (no keys)`.
@@ -158,7 +165,8 @@ store samples directly. The sound formats are specified separately (planned).
   28 are 8bpp and render the data as garbage).
 - **Key-frame table** (line 21): a byte offset to a table indexing the frames
   that are independently decodable (enabling seeking), or −1 when the movie has
-  none. Its internal layout is not specified here (see Appendix A).
+  none. The line itself is optional (see §2) — when absent, read it as −1. Its
+  internal layout is not specified here (see Appendix A).
 
 ## 6. Player constraints a conforming muxer must satisfy
 

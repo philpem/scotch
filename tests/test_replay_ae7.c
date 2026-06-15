@@ -92,5 +92,38 @@ int main(void)
         CHECK(movie.chunks[1].sound_bytes == 0U);
         replay_ae7_movie_destroy(&movie);
     }
+
+    /* Real-world tolerance (see docs/spec/ae7-armovie-container.md §2/§5): line
+       21 ("offset to keys") is optional. Some 1992 sound-only movies (Head-Line
+       "Welcome to RISC OS 3!" sessions, digitised by Acorn) write only 20
+       header lines, so the bytes after line 20 are the poster sprite -- the
+       parser must read that as "no keys" (-1), not an over-long line 21. */
+    {
+        static const char nokeys_header[] =
+            "ARMovie\nTest\nCopyright\nAuthor\n"
+            "0 video format\n160 pixels\n128 pixels\n16 bits per pixel\n25 fps\n"
+            "1 sound format\n12000 Hz samples\n1 channel\n"
+            "8 bits per sample (exponential)\n100 frames per chunk\n"
+            "01 last chunk\n64 even\n64 odd\n"
+            "512 catalogue\n400 sprite\n16 sprite bytes\n"; /* no line 21 */
+        static const char nokeys_catalogue[] =
+            "320,0;48\n"
+            "400,0;48\n";
+        uint8_t nokeys[1024] = { 0U };
+
+        memcpy(nokeys, nokeys_header, sizeof(nokeys_header) - 1U);
+        memcpy(&nokeys[512], nokeys_catalogue, sizeof(nokeys_catalogue) - 1U);
+        status = replay_ae7_parse(nokeys, sizeof(nokeys), &movie,
+                                  error, sizeof(error));
+        CHECK(status == REPLAY_OK);
+        CHECK(movie.video_codec == 0U);              /* sound-only */
+        CHECK(movie.sound_codec == 1U);
+        CHECK(movie.sound_rate == 12000U);
+        CHECK(movie.key_frame_offset == -1);         /* absent line 21 -> -1 */
+        CHECK(movie.chunk_count == 2U);
+        CHECK(movie.chunks[0].sound_bytes == 48U);
+        CHECK(movie.chunks[1].sound_bytes == 48U);
+        replay_ae7_movie_destroy(&movie);
+    }
     return EXIT_SUCCESS;
 }

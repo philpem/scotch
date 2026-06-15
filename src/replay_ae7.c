@@ -348,9 +348,21 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
             return status;
         }
     }
-    if ((status = parse_signed_line(&reader, &movie->key_frame_offset,
-                                    error, error_size)) != REPLAY_OK) {
-        return status;
+    /* Line 21 ("offset to keys") is optional. Some 1992 sound-only movies
+     * (Head-Line "Welcome to RISC OS 3!" sessions, digitised by Acorn) write
+     * only 20 header lines, so the bytes after line 20 are the poster sprite,
+     * not a key offset -- the parser would otherwise read binary as an
+     * over-long "line 21". The catalogue and sprite are found by absolute
+     * offset, and the key-frame table is advisory, so a missing/garbled key
+     * line is harmless: default to -1 (no keys). reader.position is reset to
+     * catalogue_offset below, so an over-read here does not affect catalogue
+     * parsing. */
+    if (parse_signed_line(&reader, &movie->key_frame_offset,
+                          error, error_size) != REPLAY_OK) {
+        movie->key_frame_offset = -1;
+        if (error != NULL && error_size != 0U) {
+            error[0] = '\0';
+        }
     }
 
 #define NARROW(field, source, line)                                           \
