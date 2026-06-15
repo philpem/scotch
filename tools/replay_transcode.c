@@ -241,6 +241,69 @@ static int info_colour_for(unsigned codec, const char *module_path,
     return colour_from_info_line(chosen, colour) ? 0 : -1;
 }
 
+/* A genuine block-rounding mask is a power of two in [1,64] (every real codec
+ * uses 1,2,4,8,16 or 32). Escape's Info puts maximum dimensions on lines 4/5
+ * (160/128), which the rounding logic would misread as a block, so reject
+ * anything that isn't a sane power-of-two block and fall back to 1 (no
+ * rounding) — exactly what Escape needs, and what the buggy 2003 Player fails
+ * to do. */
+static unsigned valid_block(long v)
+{
+    if (v >= 1 && v <= 64 && (v & (v - 1)) == 0)
+        return (unsigned)v;
+    return 1;
+}
+
+static unsigned block_round_up(unsigned dim, unsigned block)
+{
+    return (dim + block - 1) & ~(block - 1); /* block is a power of two */
+}
+
+/* Read the codec's pixel-block size from Info lines 4 and 5 (the field after
+ * the first ';', as the RISC OS Player does). The decoder must run at
+ * dimensions rounded up to this block; without it a movie whose size is not a
+ * block multiple (e.g. a 24x24 LinePack movie, block 32) decodes desynced.
+ * Defaults to 1x1 (no rounding) when no/invalid Info is present. */
+static void info_block_for(unsigned codec, const char *module_path,
+                           const char *modules_dir,
+                           unsigned *block_x, unsigned *block_y)
+{
+    char info_path[1024], line[256];
+    FILE *f;
+    int ln = 0;
+
+    *block_x = *block_y = 1;
+
+    if (module_path != NULL) {
+        const char *slash = strrchr(module_path, '/');
+        int dir_len = slash != NULL ? (int)(slash - module_path + 1) : 0;
+        snprintf(info_path, sizeof info_path, "%.*sInfo", dir_len, module_path);
+    } else if (modules_dir != NULL) {
+        snprintf(info_path, sizeof info_path, "%s/Decomp%u/Info",
+                 modules_dir, codec);
+    } else {
+        return;
+    }
+
+    f = fopen(info_path, "rb");
+    if (f == NULL)
+        return;
+    while (fgets(line, sizeof line, f) != NULL) {
+        const char *semi;
+        if (++ln != 4 && ln != 5)
+            continue;
+        semi = strchr(line, ';');
+        if (semi != NULL) {
+            unsigned b = valid_block(strtol(semi + 1, NULL, 10));
+            if (ln == 4)
+                *block_x = b;
+            else
+                *block_y = b;
+        }
+    }
+    fclose(f);
+}
+
 static uint8_t clamp8(int v)
 {
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
@@ -264,13 +327,16 @@ static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
 
 /* Convert one decoded frame (working-output words) to RGB24. `pixels` is
  * scratch for the YUV-triplet paths; `palette` is 256*3 RGB or NULL. */
+/* `words` is the decoder's working output for a frame of `stride` pixels per
+ * row (the block-rounded width); we emit only the declared out_w x out_h
+ * region, so a block codec run at a rounded size is cropped back here. */
 static void convert_frame(VideoColour colour, const uint8_t *words,
-                          MbPixel *pixels, unsigned width, unsigned height,
+                          MbPixel *pixels, unsigned stride,
+                          unsigned out_w, unsigned out_h,
                           const uint8_t *palette, uint8_t *rgb)
 {
-    size_t count = (size_t)width * height;
-    size_t stride = (size_t)width * 3;
-    size_t i;
+    size_t out_stride = (size_t)out_w * 3;
+    unsigned r, x;
 
     switch (colour) {
     case COL_6Y5UV:
@@ -280,50 +346,62 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
             : colour == COL_6Y6UV ? REPLAY_PIX_6Y6UV : REPLAY_PIX_YUV555;
         MbFrame frame;
         ReplayStatus st;
-        replay_pix_unpack(pl, words, count, (uint8_t *)pixels);
-        frame.width = width;
-        frame.height = height;
-        frame.stride = width;
+        replay_pix_unpack(pl, words, (size_t)stride * out_h, (uint8_t *)pixels);
+        frame.width = out_w;
+        frame.height = out_h;
+        frame.stride = stride;
         frame.pixels = pixels;
-        st = colour == COL_6Y5UV ? mb_color_6y5uv_to_rgb24(&frame, rgb, stride)
-            : colour == COL_6Y6UV ? mb_color_6y6uv_to_rgb24(&frame, rgb, stride)
-            : mb_color_yuv555_to_rgb24(&frame, rgb, stride);
+        st = colour == COL_6Y5UV
+                 ? mb_color_6y5uv_to_rgb24(&frame, rgb, out_stride)
+             : colour == COL_6Y6UV
+                 ? mb_color_6y6uv_to_rgb24(&frame, rgb, out_stride)
+                 : mb_color_yuv555_to_rgb24(&frame, rgb, out_stride);
         if (st != REPLAY_OK)
             die("colour conversion failed");
         break;
     }
     case COL_RGB555:
-        for (i = 0; i < count; i++) {
-            unsigned v = words[i * 4] | ((unsigned)words[i * 4 + 1] << 8);
-            unsigned r = v & 0x1F, g = (v >> 5) & 0x1F, b = (v >> 10) & 0x1F;
-            rgb[i * 3 + 0] = (uint8_t)((r << 3) | (r >> 2));
-            rgb[i * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
-            rgb[i * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
-        }
+        for (r = 0; r < out_h; r++)
+            for (x = 0; x < out_w; x++) {
+                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                unsigned v = words[s * 4] | ((unsigned)words[s * 4 + 1] << 8);
+                unsigned rr = v & 0x1F, g = (v >> 5) & 0x1F, b = (v >> 10) & 0x1F;
+                rgb[d * 3 + 0] = (uint8_t)((rr << 3) | (rr >> 2));
+                rgb[d * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
+                rgb[d * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+            }
         break;
     case COL_RGB888:
-        for (i = 0; i < count; i++) {
-            rgb[i * 3 + 0] = words[i * 4 + 0];
-            rgb[i * 3 + 1] = words[i * 4 + 1];
-            rgb[i * 3 + 2] = words[i * 4 + 2];
-        }
+        for (r = 0; r < out_h; r++)
+            for (x = 0; x < out_w; x++) {
+                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                rgb[d * 3 + 0] = words[s * 4 + 0];
+                rgb[d * 3 + 1] = words[s * 4 + 1];
+                rgb[d * 3 + 2] = words[s * 4 + 2];
+            }
         break;
     case COL_YUV888:
-        for (i = 0; i < count; i++)
-            yuv888_to_rgb(words[i * 4], (int8_t)words[i * 4 + 1],
-                          (int8_t)words[i * 4 + 2], &rgb[i * 3]);
+        for (r = 0; r < out_h; r++)
+            for (x = 0; x < out_w; x++) {
+                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                yuv888_to_rgb(words[s * 4], (int8_t)words[s * 4 + 1],
+                              (int8_t)words[s * 4 + 2], &rgb[d * 3]);
+            }
         break;
     case COL_PAL8:
-        for (i = 0; i < count; i++) {
-            unsigned idx = words[i * 4];
-            if (palette != NULL) {
-                rgb[i * 3 + 0] = palette[idx * 3 + 0];
-                rgb[i * 3 + 1] = palette[idx * 3 + 1];
-                rgb[i * 3 + 2] = palette[idx * 3 + 2];
-            } else {
-                rgb[i * 3 + 0] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = (uint8_t)idx;
+        for (r = 0; r < out_h; r++)
+            for (x = 0; x < out_w; x++) {
+                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                unsigned idx = words[s * 4];
+                if (palette != NULL) {
+                    rgb[d * 3 + 0] = palette[idx * 3 + 0];
+                    rgb[d * 3 + 1] = palette[idx * 3 + 1];
+                    rgb[d * 3 + 2] = palette[idx * 3 + 2];
+                } else {
+                    rgb[d * 3 + 0] = rgb[d * 3 + 1] = rgb[d * 3 + 2] =
+                        (uint8_t)idx;
+                }
             }
-        }
         break;
     }
 }
@@ -601,8 +679,13 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                                      const char *output_path)
 {
     char err[256];
+    char module_buf[1024];
     FILE *out = stdout;
     size_t pixel_count = (size_t)movie->width * movie->height;
+    int use_module = !(info->direct_type23 && module_path == NULL);
+    unsigned block_x = 1, block_y = 1;
+    unsigned rounded_w = movie->width, rounded_h = movie->height;
+    size_t rounded_count;
     MbPixel *pixels;
     uint8_t *rgb;
     unsigned long total = 0;
@@ -614,7 +697,27 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         if (out == NULL)
             die("cannot create %s", output_path);
     }
-    pixels = malloc((pixel_count ? pixel_count : 1) * sizeof(MbPixel));
+
+    /* Resolve the decompressor and its block size up-front so the decoder runs
+     * at block-rounded dimensions (with a buffer to match); the declared size
+     * is cropped back on output. The native type-23 path needs no rounding. */
+    if (use_module) {
+        if (module_path == NULL) {
+            if (modules_dir == NULL)
+                die("codec %u needs a decompressor: pass --module or "
+                    "--modules-dir", movie->video_codec);
+            snprintf(module_buf, sizeof module_buf, "%s/%s",
+                     modules_dir, info->module_subpath);
+            module_path = module_buf;
+        }
+        info_block_for(movie->video_codec, module_path, NULL,
+                       &block_x, &block_y);
+        rounded_w = block_round_up(movie->width, block_x);
+        rounded_h = block_round_up(movie->height, block_y);
+    }
+    rounded_count = (size_t)rounded_w * rounded_h;
+
+    pixels = malloc((rounded_count ? rounded_count : 1) * sizeof(MbPixel));
     rgb = malloc((pixel_count ? pixel_count : 1) * 3);
     if (pixels == NULL || rgb == NULL)
         die("out of memory");
@@ -637,8 +740,12 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     fprintf(stderr, "%s: codec %u (%s), %ux%u, %.4g fps\n",
             prog, movie->video_codec, info->name, movie->width, movie->height,
             movie->frames_per_second);
+    if (rounded_w != movie->width || rounded_h != movie->height)
+        fprintf(stderr, "%s: decoding at %ux%u (block %ux%u), cropping to "
+                "%ux%u\n", prog, rounded_w, rounded_h, block_x, block_y,
+                movie->width, movie->height);
 
-    if (info->direct_type23 && module_path == NULL) {
+    if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. */
         size_t frame_count = 0, fi;
@@ -661,7 +768,6 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             total++;
         }
     } else {
-        char module_buf[1024];
         size_t module_len;
         uint8_t *module;
         ReplayCodecIf *cif;
@@ -669,17 +775,9 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         uint8_t *out_words;
         size_t c;
 
-        if (module_path == NULL) {
-            if (modules_dir == NULL)
-                die("codec %u needs a decompressor: pass --module or "
-                    "--modules-dir", movie->video_codec);
-            snprintf(module_buf, sizeof module_buf, "%s/%s",
-                     modules_dir, info->module_subpath);
-            module_path = module_buf;
-        }
         module = read_file(module_path, &module_len);
-        cif = replay_codecif_open(module, module_len, movie->width,
-                                  movie->height, REPLAY_ARM_MODE_26,
+        cif = replay_codecif_open(module, module_len, rounded_w,
+                                  rounded_h, REPLAY_ARM_MODE_26,
                                   err, sizeof err);
         if (cif == NULL) die("%s", err);
         frame_words = replay_codecif_frame_words_len(cif);
@@ -709,7 +807,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                         break; /* final chunk may be short / padded */
                     die("chunk %zu frame %u: %s", c, f, err);
                 }
-                convert_frame(colour, out_words, pixels,
+                convert_frame(colour, out_words, pixels, rounded_w,
                               movie->width, movie->height, palette, rgb);
                 if (fwrite(rgb, 1, pixel_count * 3, out) != pixel_count * 3)
                     die("write error");

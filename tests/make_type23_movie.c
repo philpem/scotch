@@ -6,7 +6,13 @@
  * directly from the source frames (independent of the transcoder's decode path),
  * making the comparison a real end-to-end check of the container walk + unpack.
  *
- * usage: make_type23_movie OUT_MOVIE OUT_EXPECTED_RGB W H FRAMES FRAMES_PER_CHUNK
+ * usage: make_type23_movie OUT_MOVIE OUT_EXPECTED_RGB W H FRAMES \
+ *            FRAMES_PER_CHUNK [DECLARED_W]
+ *
+ * Frames are packed (and the decoder must run) at W; an optional DECLARED_W <= W
+ * is written into the movie header instead, so the module route has to round the
+ * declared width up to the codec block and crop back. The expected RGB is then
+ * the first DECLARED_W columns of each row. Omit DECLARED_W for DECLARED_W == W.
  */
 
 #include "replay/mb_color.h"
@@ -36,8 +42,8 @@ static void write_file(const char *path, const uint8_t *data, size_t len)
 
 int main(int argc, char **argv)
 {
-    if (argc != 7)
-        fail("usage: OUT_MOVIE OUT_EXPECTED W H FRAMES FPC");
+    if (argc != 7 && argc != 8)
+        fail("usage: OUT_MOVIE OUT_EXPECTED W H FRAMES FPC [DECLARED_W]");
 
     const char *movie_path = argv[1];
     const char *expected_path = argv[2];
@@ -45,10 +51,13 @@ int main(int argc, char **argv)
     unsigned height = (unsigned)atoi(argv[4]);
     unsigned frames = (unsigned)atoi(argv[5]);
     unsigned fpc = (unsigned)atoi(argv[6]);
+    unsigned decl_w = argc == 8 ? (unsigned)atoi(argv[7]) : width;
     size_t pixel_count = (size_t)width * height;
 
     if (width == 0 || (width & 1u) || height == 0 || frames == 0)
         fail("bad geometry");
+    if (decl_w == 0 || decl_w > width)
+        fail("bad declared width");
 
     size_t frame_bytes = 0;
     if (replay_type23_frame_bytes(width, height, &frame_bytes) != REPLAY_OK)
@@ -92,15 +101,18 @@ int main(int argc, char **argv)
 
         if (mb_color_6y5uv_to_rgb24(&frame, rgb, (size_t)width * 3) != REPLAY_OK)
             fail("color");
-        if (replay_buffer_append(&expected, rgb, pixel_count * 3) != REPLAY_OK)
-            fail("oom");
+        /* Expected output is the declared (cropped) region, row by row. */
+        for (unsigned y = 0; y < height; y++)
+            if (replay_buffer_append(&expected, rgb + (size_t)y * width * 3,
+                                     (size_t)decl_w * 3) != REPLAY_OK)
+                fail("oom");
     }
 
     ReplayAe7WriteOptions opt;
     memset(&opt, 0, sizeof opt);
     opt.title = "type23 test";
     opt.video_codec = 23;
-    opt.width = width;
+    opt.width = decl_w;
     opt.height = height;
     opt.pixel_depth = 16;
     opt.frames_per_second = 12.5;

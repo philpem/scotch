@@ -63,8 +63,13 @@ decoder is told the frame is 288×128 — corrupting the decode/paint buffers.
 (Modern codecs use e.g. `4;4;1280` → `xround = 3`, rounding width up to 4.)
 
 This is a Player-side `Info`-format incompatibility, not a fault in the module:
-it initialises and decodes correctly under this project's harness, which passes
-the exact dimensions like the 3.71 Player.
+it initialises and decodes correctly under this project's harness. The
+transcoder reads the block size from `Info` lines 4/5 and rounds the decode up
+to it (so block codecs such as LinePack at 32×32 decode non-multiple sizes
+correctly), but it validates that the block is a sane power of two (≤ 64).
+Escape's `160`/`128` fail that check, so the transcoder falls back to no
+rounding and runs Escape at its exact dimensions — handling it correctly where
+the 2003 Player does not.
 
 #### Correct replacement `Info` for Escape
 
