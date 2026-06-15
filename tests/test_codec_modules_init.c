@@ -19,7 +19,7 @@ static const char *const modules[] = {
     "Decomp9", "Decomp10", "Decomp11", "Decomp16", "Decomp21", "Decomp22",
     "Decomp23", "Decomp24", "Decomp25", "Decomp26", "Decomp27",
     /* Non-Acorn (freeware): Eidos Escape, Henrik Bjerregaard Pedersen */
-    "Decomp100", "Decomp800", "Decomp802"
+    "Decomp100", "Decomp102", "Decomp800", "Decomp802"
 };
 
 static uint8_t *read_file(const char *path, size_t *len)
