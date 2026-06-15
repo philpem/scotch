@@ -246,7 +246,15 @@ static uint8_t clamp8(int v)
     return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
-/* CCIR-601 YUV (8-bit, signed chroma) to RGB; best-effort (see spec note). */
+/* YUV 8,8,8 to RGB. Verified against Acorn's own colour maps
+ * (ARMovie_2003/Colour/bas/YUV24 and YUV16): chroma is signed (-128..127, the
+ * maps sign-extend the byte), luma is full-range 0..255, and the transform is
+ * R = Y + 1.40V, G = Y - 0.34U - 0.71V, B = Y + 1.77U (Acorn's effective
+ * coefficients are 255/128 * {0.701, 0.114*0.886/0.587, 0.299*0.701/0.587,
+ * 0.886} = 1.397/0.343/0.711/1.765). The BT.601 constants below match those to
+ * <0.5% and are the same ones the 5/6-bit converters in mb_color use, so all
+ * formats share one preview transform. (YUV24 has an apparent /0.576 typo on
+ * the green-from-V term; 0.714 here matches the intended 0.587-based value.) */
 static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
 {
     out[0] = clamp8(y + (1402 * v) / 1000);

@@ -46,7 +46,7 @@ generators (e.g. Decomp16 builds `00 vv uu YY`, i.e. Y in the low byte):
 | `RGB 5,5,5`     | R[0:4] G[5:9] B[10:14] (red low)  | RGB555 → RGB |
 | `YUV 6,5,5` / `6Y5UV 6,5,5` | Y[0:5] U[6:10] V[11:15] | 6Y5UV → RGB (CompLib) |
 | `6Y6UV 6,6,6`   | Y[0:5] U[6:11] V[12:17]           | 6Y6UV → RGB (CompLib) |
-| `YUV 8,8,8`     | Y[0:7] U[8:15] V[16:23]           | YUV888 → RGB (CCIR, best-effort) |
+| `YUV 8,8,8`     | Y[0:7] U[8:15] V[16:23]           | YUV888 → RGB (verified vs YUV24/YUV16 maps) |
 | `RGB 8,8,8`     | R[0:7] G[8:15] B[16:23]           | RGB888 → RGB |
 | `8`             | 8-bit index/greyscale             | palette (header `palette <off>`) or greyscale |
 
@@ -96,7 +96,16 @@ built-in table above is used for the known formats (and matches their Info).
   Acorn's own `Decompress` code run unpatched.
 - RGB output is exact for the 6Y5UV/6Y6UV/YUV555 families (the CompLib preview
   converters this project already uses) and for the straight RGB layouts.
-- **YUV 8,8,8 → RGB uses a standard CCIR matrix and is best-effort**: no
-  8-bit-YUV sample movies were available to verify the exact chroma scaling.
+- **YUV 8,8,8 → RGB is verified against Acorn's colour maps**
+  (`ARMovie_2003/Colour/bas/YUV24` and `YUV16`). Those maps confirm the working
+  word's chroma is **signed** (-128..127, sign-extended) and luma is
+  **full-range** 0..255. Acorn's effective matrix is `255/128 ×`
+  {0.701, 0.114·0.886/0.587, 0.299·0.701/0.587, 0.886} =
+  R=1.397·V, G=−0.343·U−0.711·V, B=1.765·U. The transcoder uses the BT.601
+  constants (1.402/0.344/0.714/1.772), which agree to <0.5% and match the 5/6-bit
+  converters so every format shares one preview transform. (YUV24 has an apparent
+  `/0.576` typo on the green-from-V term; the value used here matches the
+  intended `/0.587`.) Still unverified against a real 8-bit-YUV movie, as none
+  was available.
 - Format 4 palette lookup uses the header `palette <offset>` table when present,
   otherwise greyscale.
