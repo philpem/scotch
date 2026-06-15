@@ -46,14 +46,44 @@ Eagle M2 video capture card, which can record in Escape 102 format.
 ### Note: Escape on later RISC OS Players
 
 Escape (100 and 102) plays on the RISC OS 3.71 `!ARMovie.Player` but not on the
-2003 one. The 3.71 Player derives block-rounding from the screen mode; the 2003
-Player instead reads the codec's `Info` file, taking `xround`/`yround` from the
-field after the first `;` on `Info` lines 4 and 5 (minus one). Escape's 1993-era
-`Info` uses those lines for maximum dimensions (`160;160;160` / `128;128;128`)
-rather than the modern block triples (e.g. `4;4;1280`), so the 2003 Player
-computes `xround=159, yround=127` — nonsense rounding that corrupts the decode/
-paint buffers. This is a Player-side `Info`-format incompatibility, not a fault
-in the module (it initialises and decodes correctly under our harness).
+2003 one, because of a change to how the Player reads the codec's `Info` file.
+
+- The **3.71 Player** reads `Info` lines 4 and 5 but ignores them, and calls the
+  decompressor with the movie's exact width/height (no rounding).
+- The **2003 Player** treats lines 4 and 5 as block-size triples
+  `block;block;max` and derives a rounding mask `xround = (2nd field) - 1`
+  (likewise `yround` from line 5). It then rounds the frame size **up** to that
+  block and hands the rounded width to the decompressor:
+  `xround = (sx + xround) AND NOT xround`.
+
+Escape's 1993-era `Info` uses lines 4/5 for *maximum dimensions*
+(`160;160;160` / `128;128;128`), not block triples, so the 2003 Player computes
+`xround = 159`, `yround = 127`. A 160-wide frame is then rounded to 288 and the
+decoder is told the frame is 288×128 — corrupting the decode/paint buffers.
+(Modern codecs use e.g. `4;4;1280` → `xround = 3`, rounding width up to 4.)
+
+This is a Player-side `Info`-format incompatibility, not a fault in the module:
+it initialises and decodes correctly under this project's harness, which passes
+the exact dimensions like the 3.71 Player.
+
+#### Correct replacement `Info` for Escape
+
+Escape needs no block rounding (the 3.71 Player ran it with exact dimensions), so
+the fix is to make `xround`/`yround` evaluate to 0 — block size 1 — by setting
+the second field of lines 4 and 5 to `1`. Only lines 4 and 5 change:
+
+```text
+Escape                 (1: name)
+© Eidos plc 1993       (2: originator)
+                       (3: blank -> 16bpp, old non-C calling sequence; correct)
+1;1;160                (4: was 160;160;160  -> xround = 0, no width rounding)
+1;1;128                (5: was 128;128;128  -> yround = 0, no height rounding)
+Temporal,Spatial       (6: capabilities; correct as-is)
+```
+
+(The third field is the maximum dimension and is not used for rounding.) The
+`Info` files vendored here are left **unmodified** as the authentic codec
+fixtures; the above is the edit needed for the 2003 RISC OS Player.
 
 ## Source and acknowledgement
 
