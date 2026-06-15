@@ -3,8 +3,9 @@
  *
  * Parses the container, decodes each frame -- running the original compiled
  * decompressor under the ARMulator (via replay/codecif.h) for the Moving
- * Blocks / Moving Lines codecs, or unpacking directly for the fixed-size type
- * 23 4:2:2 format -- converts to RGB24, and streams the frames to stdout:
+ * Blocks / Moving Lines codecs and for the uncompressed formats (whose tiny
+ * Decompress modules just unpack fixed-layout pixels), or with the native
+ * unpacker for type 23 -- converts to RGB24, and streams the frames to stdout:
  *
  *   replay-transcode --input movie,ae7 --modules-dir ../!ARMovie_compiled \
  *       --audio-output sound.wav \
@@ -74,110 +75,172 @@ static uint8_t *read_file(const char *path, size_t *len_out)
 /* Video                                                              */
 /* ------------------------------------------------------------------ */
 
+static int ci_contains(const char *haystack, const char *needle); /* below */
+
+/* Interpretation of a decompressor's unpatched working-output word. See
+ * docs/spec/uncompressed-video-formats.md. */
+typedef enum {
+    COL_6Y5UV,   /* Y[0:5] U[6:10] V[11:15] */
+    COL_6Y6UV,   /* Y[0:5] U[6:11] V[12:17] */
+    COL_YUV555,  /* Y[0:4] U[5:9] V[10:14] */
+    COL_RGB555,  /* R[0:4] G[5:9] B[10:14], red low */
+    COL_YUV888,  /* Y[0:7] U[8:15] V[16:23] (CCIR, best-effort) */
+    COL_RGB888,  /* R[0:7] G[8:15] B[16:23] */
+    COL_PAL8     /* 8-bit palette index / greyscale */
+} VideoColour;
+
 typedef struct {
-    ReplayPixelLayout layout;
-    const char *module_subpath; /* NULL = no ARM module (type 23) */
+    const char *module_subpath; /* DecompN/Decompress,ffd; NULL = native type 23 */
     const char *name;
-    int direct_type23;
+    VideoColour colour;         /* working-output interpretation */
+    int header_colour;          /* refine `colour` from the movie's colour label */
+    int direct_type23;          /* decode with the native replay_type23 unpacker */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
 {
     memset(out, 0, sizeof *out);
     switch (codec) {
-    case 1:
-        out->layout = REPLAY_PIX_RAW16;
-        out->module_subpath = "MovingLine/Decompress,ffd";
-        out->name = "Moving Lines";
-        return 0;
-    case 7:
-        out->layout = REPLAY_PIX_YUV555;
-        out->module_subpath = "Decomp7/Decompress,ffd";
-        out->name = "Moving Blocks";
-        return 0;
-    case 17:
-        out->layout = REPLAY_PIX_YUV555;
-        out->module_subpath = "Decomp17/Decompress,ffd";
-        out->name = "Moving Blocks HQ";
-        return 0;
-    case 19:
-        out->layout = REPLAY_PIX_6Y5UV;
-        out->module_subpath = "Decomp19/Decompress,ffd";
-        out->name = "Super Moving Blocks";
-        return 0;
-    case 20:
-        out->layout = REPLAY_PIX_6Y6UV;
-        out->module_subpath = "Decomp20/Decompress,ffd";
-        out->name = "Moving Blocks Beta";
-        return 0;
-    case 23:
-        out->layout = REPLAY_PIX_6Y5UV; /* unpacked to one 6Y5UV sample/pixel */
-        out->module_subpath = NULL;
-        out->name = "type 23 (6Y6Y5U5V 4:2:2)";
-        out->direct_type23 = 1;
-        return 0;
-    default:
-        return -1;
+    /* Compressed (ARM decompressor). */
+    case 1: out->module_subpath = "MovingLine/Decompress,ffd";
+        out->name = "Moving Lines"; out->colour = COL_RGB555;
+        out->header_colour = 1; return 0;
+    case 7: out->module_subpath = "Decomp7/Decompress,ffd";
+        out->name = "Moving Blocks"; out->colour = COL_YUV555; return 0;
+    case 17: out->module_subpath = "Decomp17/Decompress,ffd";
+        out->name = "Moving Blocks HQ"; out->colour = COL_YUV555; return 0;
+    case 19: out->module_subpath = "Decomp19/Decompress,ffd";
+        out->name = "Super Moving Blocks"; out->colour = COL_6Y5UV; return 0;
+    case 20: out->module_subpath = "Decomp20/Decompress,ffd";
+        out->name = "Moving Blocks Beta"; out->colour = COL_6Y6UV; return 0;
+    /* Uncompressed (tiny unpacking decompressor; output per the Info colour
+     * line -- see docs/spec/uncompressed-video-formats.md). */
+    case 2: out->module_subpath = "Decomp2/Decompress,ffd";
+        out->name = "16bpp uncompressed"; out->colour = COL_RGB555;
+        out->header_colour = 1; return 0;
+    case 3: out->module_subpath = "Decomp3/Decompress,ffd";
+        out->name = "YYUV (10bpp)"; out->colour = COL_YUV555; return 0;
+    case 4: out->module_subpath = "Decomp4/Decompress,ffd";
+        out->name = "8bpp uncompressed"; out->colour = COL_PAL8; return 0;
+    case 5: out->module_subpath = "Decomp5/Decompress,ffd";
+        out->name = "4Y1UV (8bpp)"; out->colour = COL_YUV555; return 0;
+    case 6: out->module_subpath = "Decomp6/Decompress,ffd";
+        out->name = "16Y1UV (6bpp)"; out->colour = COL_YUV555; return 0;
+    case 8: out->module_subpath = "Decomp8/Decompress,ffd";
+        out->name = "24bpp uncompressed"; out->colour = COL_RGB888;
+        out->header_colour = 1; return 0;
+    case 9: out->module_subpath = "Decomp9/Decompress,ffd";
+        out->name = "YYUV8 (16bpp)"; out->colour = COL_YUV888; return 0;
+    case 10: out->module_subpath = "Decomp10/Decompress,ffd";
+        out->name = "4Y1UV8 (12bpp)"; out->colour = COL_YUV888; return 0;
+    case 11: out->module_subpath = "Decomp11/Decompress,ffd";
+        out->name = "16Y1UV8 (9bpp)"; out->colour = COL_YUV888; return 0;
+    case 16: out->module_subpath = "Decomp16/Decompress,ffd";
+        out->name = "4Y1UV8 (12bpp)"; out->colour = COL_YUV888; return 0;
+    case 21: out->module_subpath = "Decomp21/Decompress,ffd";
+        out->name = "YUYV8 (16bpp)"; out->colour = COL_YUV888; return 0;
+    case 22: out->module_subpath = "Decomp22/Decompress,ffd";
+        out->name = "YY8UVd4 (12bpp)"; out->colour = COL_YUV888; return 0;
+    case 23: out->name = "6Y6Y5U5V (11bpp)"; out->colour = COL_6Y5UV;
+        out->direct_type23 = 1; return 0;
+    case 24: out->module_subpath = "Decomp24/Decompress,ffd";
+        out->name = "4x6Y1x5UV (8.5bpp)"; out->colour = COL_6Y5UV; return 0;
+    case 25: out->module_subpath = "Decomp25/Decompress,ffd";
+        out->name = "YYYYd4UVd4 (6bpp)"; out->colour = COL_6Y6UV; return 0;
+    default: return -1;
     }
 }
 
-static void mbframe_to_rgb24(ReplayPixelLayout layout, const MbFrame *frame,
-                             uint8_t *rgb, size_t stride);
+/* For formats whose colour model is set by the movie header (2, 8, Moving
+ * Lines), refine the default from the bits-per-pixel colour label. `base` is
+ * the depth-appropriate RGB default (RGB555 at 16bpp, RGB888 at 24bpp). */
+static VideoColour refine_colour(VideoColour base, const char *label)
+{
+    int is24 = (base == COL_RGB888);
+    if (ci_contains(label, "6Y5UV")) return COL_6Y5UV;
+    if (ci_contains(label, "6Y6UV")) return COL_6Y6UV;
+    if (ci_contains(label, "YUV")) return is24 ? COL_YUV888 : COL_YUV555;
+    if (ci_contains(label, "RGB")) return is24 ? COL_RGB888 : COL_RGB555;
+    return base; /* RGB is the documented default */
+}
 
-/* Convert one decoded frame (codec working words) to RGB24. */
-static void words_to_rgb24(ReplayPixelLayout layout, const uint8_t *words,
-                           MbPixel *pixels, unsigned width, unsigned height,
-                           uint8_t *rgb)
+static uint8_t clamp8(int v)
+{
+    return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
+/* CCIR-601 YUV (8-bit, signed chroma) to RGB; best-effort (see spec note). */
+static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
+{
+    out[0] = clamp8(y + (1402 * v) / 1000);
+    out[1] = clamp8(y - (344 * u) / 1000 - (714 * v) / 1000);
+    out[2] = clamp8(y + (1772 * u) / 1000);
+}
+
+/* Convert one decoded frame (working-output words) to RGB24. `pixels` is
+ * scratch for the YUV-triplet paths; `palette` is 256*3 RGB or NULL. */
+static void convert_frame(VideoColour colour, const uint8_t *words,
+                          MbPixel *pixels, unsigned width, unsigned height,
+                          const uint8_t *palette, uint8_t *rgb)
 {
     size_t count = (size_t)width * height;
     size_t stride = (size_t)width * 3;
+    size_t i;
 
-    if (layout == REPLAY_PIX_RAW16) {
-        /* Moving Lines stores a 15-bit pixel, red in the low bits (R[0:4]
-         * G[5:9] B[10:14]); expand each component to eight bits. */
-        size_t i;
+    switch (colour) {
+    case COL_6Y5UV:
+    case COL_6Y6UV:
+    case COL_YUV555: {
+        ReplayPixelLayout pl = colour == COL_6Y5UV ? REPLAY_PIX_6Y5UV
+            : colour == COL_6Y6UV ? REPLAY_PIX_6Y6UV : REPLAY_PIX_YUV555;
+        MbFrame frame;
+        ReplayStatus st;
+        replay_pix_unpack(pl, words, count, (uint8_t *)pixels);
+        frame.width = width;
+        frame.height = height;
+        frame.stride = width;
+        frame.pixels = pixels;
+        st = colour == COL_6Y5UV ? mb_color_6y5uv_to_rgb24(&frame, rgb, stride)
+            : colour == COL_6Y6UV ? mb_color_6y6uv_to_rgb24(&frame, rgb, stride)
+            : mb_color_yuv555_to_rgb24(&frame, rgb, stride);
+        if (st != REPLAY_OK)
+            die("colour conversion failed");
+        break;
+    }
+    case COL_RGB555:
         for (i = 0; i < count; i++) {
-            unsigned lo = words[i * 4];
-            unsigned hi = words[i * 4 + 1];
-            unsigned v = lo | (hi << 8);
+            unsigned v = words[i * 4] | ((unsigned)words[i * 4 + 1] << 8);
             unsigned r = v & 0x1F, g = (v >> 5) & 0x1F, b = (v >> 10) & 0x1F;
             rgb[i * 3 + 0] = (uint8_t)((r << 3) | (r >> 2));
             rgb[i * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
             rgb[i * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
         }
-        return;
-    }
-
-    replay_pix_unpack(layout, words, count, (uint8_t *)pixels);
-    {
-        MbFrame frame;
-        frame.width = width;
-        frame.height = height;
-        frame.stride = width;
-        frame.pixels = pixels;
-        mbframe_to_rgb24(layout, &frame, rgb, stride);
-    }
-}
-
-/* Convert an already-unpacked MbFrame (Y,U,V samples) to RGB24. */
-static void mbframe_to_rgb24(ReplayPixelLayout layout, const MbFrame *frame,
-                             uint8_t *rgb, size_t stride)
-{
-    ReplayStatus st;
-    switch (layout) {
-    case REPLAY_PIX_6Y6UV:
-        st = mb_color_6y6uv_to_rgb24(frame, rgb, stride);
         break;
-    case REPLAY_PIX_YUV555:
-        st = mb_color_yuv555_to_rgb24(frame, rgb, stride);
+    case COL_RGB888:
+        for (i = 0; i < count; i++) {
+            rgb[i * 3 + 0] = words[i * 4 + 0];
+            rgb[i * 3 + 1] = words[i * 4 + 1];
+            rgb[i * 3 + 2] = words[i * 4 + 2];
+        }
         break;
-    case REPLAY_PIX_6Y5UV:
-    default:
-        st = mb_color_6y5uv_to_rgb24(frame, rgb, stride);
+    case COL_YUV888:
+        for (i = 0; i < count; i++)
+            yuv888_to_rgb(words[i * 4], (int8_t)words[i * 4 + 1],
+                          (int8_t)words[i * 4 + 2], &rgb[i * 3]);
+        break;
+    case COL_PAL8:
+        for (i = 0; i < count; i++) {
+            unsigned idx = words[i * 4];
+            if (palette != NULL) {
+                rgb[i * 3 + 0] = palette[idx * 3 + 0];
+                rgb[i * 3 + 1] = palette[idx * 3 + 1];
+                rgb[i * 3 + 2] = palette[idx * 3 + 2];
+            } else {
+                rgb[i * 3 + 0] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = (uint8_t)idx;
+            }
+        }
         break;
     }
-    if (st != REPLAY_OK)
-        die("colour conversion failed");
 }
 
 /* ------------------------------------------------------------------ */
@@ -437,6 +500,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     MbPixel *pixels;
     uint8_t *rgb;
     unsigned long total = 0;
+    VideoColour colour = info->colour;
+    const uint8_t *palette = NULL;
 
     if (output_path != NULL) {
         out = fopen(output_path, "wb");
@@ -448,12 +513,28 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     if (pixels == NULL || rgb == NULL)
         die("out of memory");
 
+    /* Formats whose colour model is header-driven (2, 8, Moving Lines). */
+    if (info->header_colour)
+        colour = refine_colour(info->colour, movie->pixel_label);
+
+    /* 8-bit palette: the header carries "palette <offset>" to a 256*3 RGB
+     * table. Without one the index is treated as greyscale. */
+    if (colour == COL_PAL8) {
+        const char *p = strstr(movie->pixel_label, "palette");
+        if (p != NULL) {
+            unsigned long off = strtoul(p + 7, NULL, 10);
+            if (off != 0 && off + 256u * 3u <= movie_len)
+                palette = movie_data + off;
+        }
+    }
+
     fprintf(stderr, "%s: codec %u (%s), %ux%u, %.4g fps\n",
             prog, movie->video_codec, info->name, movie->width, movie->height,
             movie->frames_per_second);
 
-    if (info->direct_type23) {
-        /* Fixed-size packed frames: unpack directly, no ARM decoder. */
+    if (info->direct_type23 && module_path == NULL) {
+        /* Fixed-size packed frames: unpack directly, no ARM decoder. An
+         * explicit --module forces the decompressor route instead. */
         size_t frame_count = 0, fi;
         if (replay_type23_frame_count(movie, &frame_count) != REPLAY_OK)
             die("type 23: bad frame layout");
@@ -466,8 +547,9 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             if (replay_type23_unpack_frame(movie_data, movie_len, movie, fi,
                                            &frame) != REPLAY_OK)
                 die("type 23: unpack frame %zu failed", fi);
-            mbframe_to_rgb24(info->layout, &frame, rgb,
-                             (size_t)movie->width * 3);
+            if (mb_color_6y5uv_to_rgb24(&frame, rgb, (size_t)movie->width * 3)
+                != REPLAY_OK)
+                die("colour conversion failed");
             if (fwrite(rgb, 1, pixel_count * 3, out) != pixel_count * 3)
                 die("write error");
             total++;
@@ -521,8 +603,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                         break; /* final chunk may be short / padded */
                     die("chunk %zu frame %u: %s", c, f, err);
                 }
-                words_to_rgb24(info->layout, out_words, pixels,
-                               movie->width, movie->height, rgb);
+                convert_frame(colour, out_words, pixels,
+                              movie->width, movie->height, palette, rgb);
                 if (fwrite(rgb, 1, pixel_count * 3, out) != pixel_count * 3)
                     die("write error");
                 total++;

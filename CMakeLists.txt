@@ -317,6 +317,14 @@ add_test(NAME test_transcode_audio
         $<TARGET_FILE:make_audio_movie>
         $<TARGET_FILE:replay-transcode>)
 
+# Uncompressed-format decompressor route (runs Decomp23 under codecif).
+add_test(NAME test_transcode_module23
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23.sh
+        $<TARGET_FILE:make_type23_movie>
+        $<TARGET_FILE:replay-transcode>
+        "${CMAKE_CURRENT_SOURCE_DIR}/../!ARMovie_compiled/Decomp23/Decompress,ffd")
+set_tests_properties(test_transcode_module23 PROPERTIES SKIP_RETURN_CODE 77)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)
     add_test(NAME test_direct_container
