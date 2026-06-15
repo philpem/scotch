@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the compiled Acorn Moving Lines (type 1) decompressor under Unicorn.
 
-The bundled module is !ARMovie_compiled/MovingLine/Decompress (the word-per-pixel
+The bundled module is vendor/armovie-codecs/MovingLine/Decompress,ffd (the word-per-pixel
 variant). Left unpatched, it stores each decoded pixel as its raw 15-bit value in
 an ARM word, so the harness reads those words back and writes them as native
 little-endian 16-bit halfwords -- the same representation this project's

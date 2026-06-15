@@ -18,7 +18,7 @@
 `tools/decomp19_unicorn.py` executes the original generated Moving Blocks
 decompressors without RISC OS. Its historical name remains because type 19,
 Super Moving Blocks was the first supported target. A compiled copy is present at
-`!ARMovie_compiled/Decomp19/Decompress,ffd`; its SHA-256 digest is
+`vendor/armovie-codecs/Decomp19/Decompress,ffd`; its SHA-256 digest is
 `3d302da5f71efbc43a2cb677db75c4e46c791ec2d65bd272617e01e0656d8678`.
 
 ## Documented Interface

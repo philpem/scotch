@@ -7,7 +7,7 @@
  * Decompress modules just unpack fixed-layout pixels), or with the native
  * unpacker for type 23 -- converts to RGB24, and streams the frames to stdout:
  *
- *   replay-transcode --input movie,ae7 --modules-dir ../!ARMovie_compiled \
+ *   replay-transcode --input movie,ae7 --modules-dir vendor/armovie-codecs \
  *       --audio-output sound.wav \
  *     | ffmpeg -f rawvideo -pixel_format rgb24 -video_size WxH -framerate FPS \
  *         -i - -i sound.wav -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4

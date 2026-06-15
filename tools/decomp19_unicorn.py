@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run selected Acorn generated video decompressors under Unicorn.
 
-A compiled binary is bundled under !ARMovie_compiled/Decomp19. Another binary
+A compiled binary is bundled under vendor/armovie-codecs/Decomp19. Another binary
 with the same CodecIf contract may be supplied explicitly. The harness leaves
 the colour-lookup patch table untouched so each output word remains packed as
 the codec's native 6Y5UV value: Y in bits 0..5, U in 6..10, V in 11..15.
