@@ -103,6 +103,13 @@ if(NOT MSVC)
         -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
 endif()
 
+add_executable(replay-transcode tools/replay_transcode.c)
+target_link_libraries(replay-transcode PRIVATE codecif replay)
+if(NOT MSVC)
+    target_compile_options(replay-transcode PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+
 add_executable(replay-verify tools/replay_verify.c)
 target_link_libraries(replay-verify PRIVATE replay)
 
@@ -151,11 +158,23 @@ if(NOT MSVC)
 endif()
 add_test(NAME test_armsim_core COMMAND test_armsim_core)
 
+# Every vendored decompressor module must initialise under the harness.
+add_executable(test_codec_modules_init tests/test_codec_modules_init.c)
+target_link_libraries(test_codec_modules_init PRIVATE codecif)
+if(NOT MSVC)
+    target_compile_options(test_codec_modules_init PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_codec_modules_init
+    COMMAND test_codec_modules_init
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs)
+
 add_replay_test(test_replay_buffer tests/test_replay_buffer.c)
 add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
 add_replay_test(test_replay_ae7_write tests/test_replay_ae7_write.c)
 add_replay_test(test_replay_sound tests/test_replay_sound.c)
+add_replay_test(test_sound_adpcm_stereo tests/test_sound_adpcm_stereo.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)
 add_replay_test(test_replay_type23 tests/test_replay_type23.c)
 add_replay_test(test_mb_huffman tests/test_mb_huffman.c)
@@ -270,6 +289,62 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress
             "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp19/Decompress,ffd")
     set_tests_properties(test_armsim_corpus PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# End-to-end transcoder check (skips unless the LionFish19 movie is present).
+add_executable(transcode_frame_check tests/transcode_frame_check.c)
+target_link_libraries(transcode_frame_check PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(transcode_frame_check PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode.sh
+        $<TARGET_FILE:replay-transcode>
+        $<TARGET_FILE:transcode_frame_check>
+        "${CMAKE_CURRENT_SOURCE_DIR}/../LionFish19,ae7"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs"
+        ${CMAKE_CURRENT_SOURCE_DIR}/corpus/format19)
+set_tests_properties(test_transcode PROPERTIES SKIP_RETURN_CODE 77)
+
+# Self-contained type-23 transcode check (synthetic movie; no assets needed).
+add_executable(make_type23_movie tests/make_type23_movie.c)
+target_link_libraries(make_type23_movie PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_type23_movie PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode_type23
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_type23.sh
+        $<TARGET_FILE:make_type23_movie>
+        $<TARGET_FILE:replay-transcode>)
+
+add_executable(make_audio_movie tests/make_audio_movie.c)
+target_link_libraries(make_audio_movie PRIVATE replay)
+if(NOT MSVC)
+    target_compile_options(make_audio_movie PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+add_test(NAME test_transcode_audio
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_audio.sh
+        $<TARGET_FILE:make_audio_movie>
+        $<TARGET_FILE:replay-transcode>)
+
+# Uncompressed-format decompressor route (runs Decomp23 under codecif).
+add_test(NAME test_transcode_module23
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23.sh
+        $<TARGET_FILE:make_type23_movie>
+        $<TARGET_FILE:replay-transcode>
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp23/Decompress,ffd")
+set_tests_properties(test_transcode_module23 PROPERTIES SKIP_RETURN_CODE 77)
+
+# Block-rounding path: a 12-wide header over 16-wide frames forces the module
+# route to round up to Decomp23's 16-pixel block and crop back.
+add_test(NAME test_transcode_module23_rounding
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23_rounding.sh
+        $<TARGET_FILE:make_type23_movie>
+        $<TARGET_FILE:replay-transcode>
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp23/Decompress,ffd")
+set_tests_properties(test_transcode_module23_rounding PROPERTIES SKIP_RETURN_CODE 77)
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND)

@@ -77,4 +77,13 @@ void replay_sound_adpcm_decode(const uint8_t *nibbles, size_t count,
                                ReplaySoundAdpcmState *state,
                                int16_t *out_samples);
 
+/* Decode `frames` stereo frames: one byte per frame, left code in the low
+ * nibble and right in the high nibble (the Acorn "2 adpcm" stereo layout).
+ * `out_interleaved` receives 2*frames samples as L,R,L,R..., updating each
+ * channel's state. */
+void replay_sound_adpcm_decode_stereo(const uint8_t *bytes, size_t frames,
+                                      ReplaySoundAdpcmState *left,
+                                      ReplaySoundAdpcmState *right,
+                                      int16_t *out_interleaved);
+
 #endif

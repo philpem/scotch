@@ -78,8 +78,13 @@ static ReplayStatus copy_line(LineReader *reader, char *destination,
     return REPLAY_OK;
 }
 
-static ReplayStatus parse_unsigned_line(LineReader *reader, uint64_t *value,
-                                        char *error, size_t error_size)
+/* Parse a "NUMBER trailing label" header line. When `label` is non-NULL the
+ * text after the number (leading spaces stripped) is copied into it; copy_line
+ * has already trimmed trailing spaces. */
+static ReplayStatus parse_unsigned_line_label(LineReader *reader,
+                                              uint64_t *value, char *label,
+                                              size_t label_size, char *error,
+                                              size_t error_size)
 {
     char line[REPLAY_AE7_TEXT_MAX];
     char *end;
@@ -98,8 +103,21 @@ static ReplayStatus parse_unsigned_line(LineReader *reader, uint64_t *value,
         return REPLAY_MALFORMED_STREAM;
     }
     *value = (uint64_t)parsed;
+    if (label != NULL && label_size != 0U) {
+        size_t length;
+        while (*end == ' ') {
+            ++end;
+        }
+        length = strlen(end);
+        if (length >= label_size) {
+            length = label_size - 1U;
+        }
+        memcpy(label, end, length);
+        label[length] = '\0';
+    }
     return REPLAY_OK;
 }
+
 
 static ReplayStatus parse_signed_line(LineReader *reader, int64_t *value,
                                       char *error, size_t error_size)
@@ -241,6 +259,7 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
     LineReader reader = { data, size, 0U, 0U };
     char magic[16];
     uint64_t fields[15];
+    char labels[15][REPLAY_AE7_TEXT_MAX];
     size_t index;
     ReplayStatus status;
 
@@ -270,8 +289,9 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
     }
 
     for (index = 0U; index < 4U; ++index) {
-        if ((status = parse_unsigned_line(&reader, &fields[index],
-                                          error, error_size)) != REPLAY_OK) {
+        if ((status = parse_unsigned_line_label(
+                 &reader, &fields[index], labels[index], sizeof(labels[index]),
+                 error, error_size)) != REPLAY_OK) {
             return status;
         }
     }
@@ -280,8 +300,9 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
         return status;
     }
     for (index = 4U; index < 15U; ++index) {
-        if ((status = parse_unsigned_line(&reader, &fields[index],
-                                          error, error_size)) != REPLAY_OK) {
+        if ((status = parse_unsigned_line_label(
+                 &reader, &fields[index], labels[index], sizeof(labels[index]),
+                 error, error_size)) != REPLAY_OK) {
             return status;
         }
     }
@@ -309,6 +330,15 @@ ReplayStatus replay_ae7_parse(const uint8_t *data, size_t size,
     NARROW(movie->frames_per_chunk, fields[8], 14U);
     NARROW(movie->last_chunk, fields[9], 15U);
 #undef NARROW
+    /* Trailing labels carry the video colour model and the sound sub-format. */
+    memcpy(movie->video_label, labels[0], sizeof(movie->video_label));
+    memcpy(movie->pixel_label, labels[3], sizeof(movie->pixel_label));
+    memcpy(movie->sound_format_label, labels[4],
+           sizeof(movie->sound_format_label));
+    memcpy(movie->sound_channels_label, labels[6],
+           sizeof(movie->sound_channels_label));
+    memcpy(movie->sound_precision_label, labels[7],
+           sizeof(movie->sound_precision_label));
     movie->even_chunk_bytes = fields[10];
     movie->odd_chunk_bytes = fields[11];
     movie->catalogue_offset = fields[12];
