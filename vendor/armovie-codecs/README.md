@@ -40,8 +40,8 @@ acknowledgement of their respective copyright holders:
 | 802 (`Decomp802`) | Movie 16:3 | © Henrik Bjerregaard Pedersen, 1995 |
 
 Escape (100/102) declares no colour model in its `Info`; pass `--video-colour`
-to the transcoder for it. Decomp102 was extracted from a Computer Concepts CFS
-archive with `riscosarc`.
+to the transcoder for it. Decomp102 was included with the Computer Concepts
+Eagle M2 video capture card, which can record in Escape 102 format.
 
 ### Note: Escape on later RISC OS Players
 
