@@ -341,6 +341,13 @@ add_test(NAME test_transcode_sound_only
         $<TARGET_FILE:make_sound_only_movie>
         $<TARGET_FILE:replay-transcode>)
 
+# Real-world regression: !ARPlayer's DUMMY placeholder is a non-conforming
+# sound-only movie (video format 0 with non-zero 120x96 dimensions, no sound).
+add_test(NAME test_transcode_dummy
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_dummy.sh
+        $<TARGET_FILE:replay-transcode>
+        "${CMAKE_CURRENT_SOURCE_DIR}/corpus/container/dummy.ae7")
+
 # Uncompressed-format decompressor route (runs Decomp23 under codecif).
 add_test(NAME test_transcode_module23
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_module23.sh
