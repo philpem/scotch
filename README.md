@@ -159,6 +159,22 @@ A sound-only movie (video format 0) is transcoded to audio only; it has no
 codec module, so `--modules-dir` is ignored for it even if some such movies
 carry stray non-zero dimensions in the header.
 
+MovieFS (Warm Silence Software) re-encapsulated PC codecs — video formats
+600–699, e.g. Cinepak (602) — are supported by driving their compiled MovieFS
+decompressor: the tool selects the colour-table-free `Dec24` variant (full
+YUV→RGB, emitting RGB888) and strips MovieFS's 16-byte per-frame wrapper. These
+modules are not in `vendor/armovie-codecs`; point `--modules-dir` at an ARMovie
+codec tree that has them, e.g.:
+
+```sh
+build/replay-transcode --input ironman.rpl --modules-dir path/to/!ARMovie \
+    --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+```
+
+Wired so far: 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24. See
+[docs/moviefs-nut-passthrough.md](docs/moviefs-nut-passthrough.md) for the codec
+inventory, the variant analysis, and the NUT→ffmpeg alternative.
+
 ## Acorn cross-check
 
 An optional CTest decodes the checked-in format-19 corpus with the original

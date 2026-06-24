@@ -33,6 +33,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
 #include "replay/replay_status.h"
@@ -101,6 +102,8 @@ typedef struct {
     VideoColour colour;         /* working-output interpretation */
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
+    int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
+    int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -119,6 +122,27 @@ static int codec_info(unsigned codec, CodecInfo *out)
         out->name = "Super Moving Blocks"; out->colour = COL_6Y5UV; return 0;
     case 20: out->module_subpath = "Decomp20/Decompress,ffd";
         out->name = "Moving Blocks Beta"; out->colour = COL_6Y6UV; return 0;
+    /* MovieFS (Warm Silence Software) re-encapsulated PC codecs, 600-699. Each
+     * codec frame is wrapped in a 16-byte MovieFS header; the codecs ship
+     * several decompressor variants and we deliberately drive the Dec24 variant,
+     * whose `FNplook` is empty so it does the full YUV->RGB conversion with its
+     * own internal tables and never needs the caller-supplied colour-lookup
+     * table (R3) that the screen-painting `Decompress`/`DecompresH` variants
+     * require (those infinite-loop unpatched). Dec24 emits 24bpp RGB words
+     * (00 BB GG RR), i.e. COL_RGB888. The WSS modules are 32-bit code, so run
+     * them in 32-bit ARM mode. See docs/moviefs-nut-passthrough.md. */
+    case 602: out->module_subpath = "Decomp602/Dec24,ffd";
+        out->name = "Cinepak (CVID, MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 608: out->module_subpath = "Decomp608/Dec24,ffd";
+        out->name = "RGB24 AVI (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 615: out->module_subpath = "Decomp615/Dec24,ffd";
+        out->name = "QT RLE 24 (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 626: out->module_subpath = "Decomp626/Dec24,ffd";
+        out->name = "RGB24 QT (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
     /* Uncompressed (tiny unpacking decompressor; output per the Info colour
      * line -- see docs/spec/uncompressed-video-formats.md). */
     case 2: out->module_subpath = "Decomp2/Decompress,ffd";
@@ -839,22 +863,40 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         ReplayCodecIf *cif;
         size_t frame_words;
         uint8_t *out_words;
+        uint8_t *unwrap = NULL;     /* scratch for de-wrapped MovieFS payload */
         size_t c;
 
         module = read_file(module_path, &module_len);
-        cif = replay_codecif_open(module, module_len, rounded_w,
-                                  rounded_h, REPLAY_ARM_MODE_26,
+        cif = replay_codecif_open(module, module_len, rounded_w, rounded_h,
+                                  info->arm_mode_32 ? REPLAY_ARM_MODE_32
+                                                    : REPLAY_ARM_MODE_26,
                                   err, sizeof err);
         if (cif == NULL) die("%s", err);
         frame_words = replay_codecif_frame_words_len(cif);
         out_words = malloc(frame_words);
         if (out_words == NULL) die("out of memory");
 
+        /* The de-wrap scratch must hold the largest chunk's video payload
+         * (stripped output is always <= input). */
+        if (info->moviefs_wrapper) {
+            size_t max_vbytes = 0;
+            for (c = 0; c < movie->chunk_count; c++)
+                if (movie->chunks[c].video_bytes > max_vbytes)
+                    max_vbytes = (size_t)movie->chunks[c].video_bytes;
+            if (max_vbytes != 0 && (unwrap = malloc(max_vbytes)) == NULL)
+                die("out of memory");
+        }
+
         for (c = 0; c < movie->chunk_count; c++) {
             const ReplayAe7Chunk *chunk = &movie->chunks[c];
             size_t voff = (size_t)chunk->file_offset;
             size_t vbytes = (size_t)chunk->video_bytes;
+            const uint8_t *vdata;
             size_t offset = 0;
+            /* Frames to decode this chunk: frames_per_chunk normally, but the
+             * MovieFS wrapper tells us the exact count so we never run the
+             * decoder past the end (a runaway WSS frame burns the whole budget). */
+            unsigned frames_this_chunk = movie->frames_per_chunk;
             unsigned f;
 
             /* Interleave this chunk's sound ahead of its video frames. */
@@ -864,11 +906,23 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 continue;
             if (voff > movie_len || vbytes > movie_len - voff)
                 die("chunk %zu video region is out of range", c);
-            if (replay_codecif_load_payload(cif, movie_data + voff, vbytes,
+
+            vdata = movie_data + voff;
+            if (info->moviefs_wrapper) {
+                size_t unwrap_len = 0;
+                frames_this_chunk = (unsigned)replay_moviefs_unwrap_chunk(
+                    vdata, vbytes, unwrap, &unwrap_len);
+                if (frames_this_chunk == 0)
+                    die("chunk %zu: no MovieFS frames found (bad wrapper?)", c);
+                vdata = unwrap;
+                vbytes = unwrap_len;
+            }
+
+            if (replay_codecif_load_payload(cif, vdata, vbytes,
                                             err, sizeof err) != 0)
                 die("chunk %zu: %s", c, err);
 
-            for (f = 0; f < movie->frames_per_chunk; f++) {
+            for (f = 0; f < frames_this_chunk; f++) {
                 size_t consumed = 0;
                 if (replay_codecif_decode(cif, &offset, out_words, &consumed,
                                           err, sizeof err) != 0) {
@@ -882,6 +936,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 total++;
             }
         }
+        free(unwrap);
         free(out_words);
         replay_codecif_close(cif);
         free(module);

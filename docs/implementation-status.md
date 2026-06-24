@@ -126,6 +126,18 @@ this file describes the current portable code in `replay-tooling`.
   the generator asserts the encoder exercised them so the gate cannot silently
   weaken. This is the coverage the focused fixtures lacked.
 
+- MovieFS (Warm Silence Software) re-encapsulated PC codecs (video formats
+  600–699) in `replay-transcode`. The transcoder strips MovieFS's 16-byte
+  per-frame wrapper (`src/replay_moviefs.c`, `replay_moviefs_unwrap_chunk`) and
+  drives the codec's colour-table-free `Dec24` variant in 32-bit ARM mode — its
+  `FNplook` is empty (or a patchable pass-through), so it does the full YUV→RGB
+  conversion with internal tables and never needs the caller-supplied colour
+  table the screen-painting `Decompress` variants require (those infinite-loop
+  unpatched). `Dec24` emits 24bpp RGB (`COL_RGB888`). Wired: 602 Cinepak
+  (validated byte-for-byte against ffmpeg on a real 160×120 movie), plus 608/626
+  RGB24 and 615 QT-RLE24 (same harness-compatible variant, pending sample
+  validation). See `docs/moviefs-nut-passthrough.md`.
+
 ## Verified Claims
 
 - Hand-reviewed golden tests cover bit order, Huffman symbols, data blocks, and
