@@ -238,8 +238,19 @@ identity table) to a Replay word. That is real but bounded work, and it is
 Not yet wired (need work and/or samples): the `Dec8` palette family (600/604/
 606/607/609/610/613/622/623/624 — runnable but emit palette indices, so they
 need the container/codec palette plumbed through `COL_PAL8`); 605 Ultimotion
-(`Dec16`, colour undeclared); the screen-painter-only codecs (601/603/614); and
-628/629 Indeo (no source, Intel IP → use NUT → ffmpeg).
+(`Dec16`, colour undeclared); the screen-painter-only codecs (601/603/614).
+
+A second path, **codec pass-through to NUT**, is also implemented (requires
+`--output-format nut`): instead of decoding, each chunk's frames are de-wrapped
+and muxed straight into the NUT video stream under a codec fourcc, and ffmpeg
+decodes them. This is the path for codecs the sandbox can't run — Indeo:
+**628/629** (MovieFS, `IV31`/`IV32`) and **901/902** (VideoFS, `YVU9`/`IV32`).
+The pass-through machinery is validated by routing Cinepak through it (matches
+the decode path's frame); the Indeo fourcc mappings are wired but **not yet
+validated against a real movie** (none exists in the workspace). The pass-through
+video stream carries the codec frames verbatim; a container null frame
+(repeat-previous) re-emits the previous frame's bytes (exact for raw/intra,
+approximate for an inter codec — to revisit with a sample).
 
 ### Recommendation
 
@@ -309,10 +320,16 @@ So 9xx must be remuxed and handed to FFmpeg, exactly as for the screen-painter
 
 This needs a "codec pass-through to NUT" transcoder mode (extract frames + mux
 with a codec fourcc, no decode) — the generalisation of the proven Cinepak→NUT
-experiment. That mode is independently useful (it is the NUT→FFmpeg path this
-document recommends for Indeo and the screen-painter codecs); it can be built and
-validated on Cinepak today, with the 9xx framing above wired on top and confirmed
-once a 901/902 movie is available.
+experiment. **That mode is now implemented** (`passthrough_video` in
+`tools/replay_transcode.c`, the `passthrough_fourcc`/`passthrough_wrap` codec
+fields, and the `ReplayFrameWrapIter` in `replay_moviefs`): 901 → `YVU9`
+(rawvideo `yuv410p`) and 902 → `IV32` (`indeo3`), both VideoFS-wrapped; 628/629
+Indeo are wired the same way with MovieFS framing. Validated by routing Cinepak
+through it; the 9xx mappings await a real sample.
+
+There is **no compressor** for the 9xx codecs (decode-only, like the 6xx MovieFS
+codecs) — only the Acorn codecs and Pederson 800/802 ship compressors — so these
+formats are import/playback only.
 
 ## Open questions for implementation
 

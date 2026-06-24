@@ -137,6 +137,16 @@ this file describes the current portable code in `replay-tooling`.
   (validated byte-for-byte against ffmpeg on a real 160×120 movie), plus 608/626
   RGB24 and 615 QT-RLE24 (same harness-compatible variant, pending sample
   validation). See `docs/moviefs-nut-passthrough.md`.
+- Codec pass-through to NUT (`--output-format nut`) for codecs the sandbox can't
+  run: instead of decoding, each de-wrapped codec frame is muxed into the NUT
+  video stream under a codec fourcc (`passthrough_video`, `ReplayFrameWrapIter`),
+  letting ffmpeg decode. Wired for Indeo — 628/629 (MovieFS `IV31`/`IV32`) and
+  the IMS VideoFS codecs 901 (raw YVU9 → `YVU9`/rawvideo) and 902 (Indeo 3.2 →
+  `IV32`). VideoFS uses the same 16-byte wrapper as MovieFS but a different size
+  field (`data_len + 28` vs `+ 12`), reverse-engineered from the Decomp901/902 C
+  sources. The pass-through machinery is validated by routing Cinepak through it;
+  the Indeo mappings are not yet validated against a real movie (none available).
+  9xx are decode-only (no compressor exists).
 
 ## Verified Claims
 

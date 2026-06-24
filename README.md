@@ -171,9 +171,15 @@ build/replay-transcode --input ironman.rpl --modules-dir path/to/!ARMovie \
     --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
 ```
 
-Wired so far: 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24. See
+Wired so far: 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24.
+
+Codecs the sandbox can't run (Indeo) instead use **codec pass-through**: with
+`--output-format nut` the frames are de-wrapped and muxed under a codec fourcc so
+ffmpeg decodes them. Wired: 628/629 (MovieFS Indeo 3.x) and 901/902 (IMS VideoFS:
+901 raw YVU9, 902 Indeo 3.2). These mappings are derived from the codec sources
+and validated on Cinepak, but not yet against a real Indeo movie. See
 [docs/moviefs-nut-passthrough.md](docs/moviefs-nut-passthrough.md) for the codec
-inventory, the variant analysis, and the NUT→ffmpeg alternative.
+inventory, the variant analysis, and the VideoFS framing.
 
 ## Acorn cross-check
 

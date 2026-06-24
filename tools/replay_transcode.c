@@ -104,6 +104,11 @@ typedef struct {
     int direct_type23;          /* decode with the native replay_type23 unpacker */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
+    /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
+     * NUT under this fourcc and let ffmpeg decode it. Set for codecs we can't run
+     * in the sandbox (C codecs / screen-painters), e.g. Indeo. NULL = decode. */
+    const char *passthrough_fourcc;
+    ReplayWrapKind passthrough_wrap; /* per-frame wrapper flavour for the frames */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -143,6 +148,24 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 626: out->module_subpath = "Decomp626/Dec24,ffd";
         out->name = "RGB24 QT (MovieFS)"; out->colour = COL_RGB888;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    /* Indeo, pass-through to ffmpeg (requires --output-format nut). These ship
+     * only a screen-painter (628/629) or a CLib-dependent C decoder (901/902)
+     * that the sandbox can't run, but ffmpeg decodes them well. We strip the
+     * per-frame wrapper and mux each frame under the matching NUT fourcc. 6xx
+     * are MovieFS-wrapped; 9xx are VideoFS-wrapped (different size field). See
+     * docs/moviefs-nut-passthrough.md. Untested against samples for 9xx. */
+    case 628: out->name = "Indeo 3.1 (IV31, MovieFS, pass-through)";
+        out->passthrough_fourcc = "IV31";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 629: out->name = "Indeo 3.2 (IV32, MovieFS, pass-through)";
+        out->passthrough_fourcc = "IV32";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 901: out->name = "Indeo Raw YVU9 (VideoFS, pass-through)";
+        out->passthrough_fourcc = "YVU9";
+        out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
+    case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
+        out->passthrough_fourcc = "IV32";
+        out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
     /* Uncompressed (tiny unpacking decompressor; output per the Info colour
      * line -- see docs/spec/uncompressed-video-formats.md). */
     case 2: out->module_subpath = "Decomp2/Decompress,ffd";
@@ -763,6 +786,59 @@ static void sink_chunk_audio(MuxSink *sink, size_t c)
     replay_buffer_free(&pcm);
 }
 
+/* Pass-through: don't decode -- mux each chunk's (de-wrapped) codec frames
+ * straight into the NUT video stream (whose fourcc the caller set to the codec
+ * tag) and let ffmpeg decode them. The interleaved sound is emitted per chunk,
+ * exactly as in the decode path. Returns the number of frames written.
+ *
+ * A null frame (repeat-previous wrapper marker) re-emits the previous frame's
+ * bytes: correct for the raw/intra codecs; for an inter codec it is an
+ * approximation (no real "no-change" packet exists) -- to be revisited once a
+ * real 9xx sample is available. */
+static unsigned long passthrough_video(const ReplayAe7Movie *movie,
+                                       const uint8_t *movie_data,
+                                       size_t movie_len, const CodecInfo *info,
+                                       MuxSink *sink)
+{
+    unsigned long total = 0;
+    const uint8_t *prev_frame = NULL;
+    size_t prev_len = 0;
+    size_t c;
+
+    for (c = 0; c < movie->chunk_count; c++) {
+        const ReplayAe7Chunk *chunk = &movie->chunks[c];
+        size_t voff = (size_t)chunk->file_offset;
+        size_t vbytes = (size_t)chunk->video_bytes;
+        ReplayFrameWrapIter it;
+        const uint8_t *frame;
+        size_t frame_len;
+        int is_null;
+
+        sink_chunk_audio(sink, c);
+
+        if (vbytes == 0)
+            continue;
+        if (voff > movie_len || vbytes > movie_len - voff)
+            die("chunk %zu video region is out of range", c);
+
+        replay_frame_wrap_iter_init(&it, movie_data + voff, vbytes,
+                                    info->passthrough_wrap);
+        while (replay_frame_wrap_iter_next(&it, &frame, &frame_len, &is_null)) {
+            if (is_null) {
+                if (prev_frame == NULL)
+                    continue; /* no previous frame to repeat */
+                frame = prev_frame;
+                frame_len = prev_len;
+            }
+            sink_video_frame(sink, frame, frame_len);
+            prev_frame = frame;
+            prev_len = frame_len;
+            total++;
+        }
+    }
+    return total;
+}
+
 /* Decode all video frames to RGB24 and push them (and, in NUT mode, the
  * interleaved sound) through `sink`. Returns the number of frames written. */
 static unsigned long transcode_video(const ReplayAe7Movie *movie,
@@ -1137,6 +1213,13 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /* Pass-through codecs are remuxed into NUT for ffmpeg to decode; there is no
+     * decoded RGB24 to write, so raw mode cannot represent them. */
+    int passthrough = have_video && info.passthrough_fourcc != NULL;
+    if (passthrough && !nut_mode)
+        die("video codec %u (%s) is decoded by ffmpeg, not this tool; "
+            "use --output-format nut", movie.video_codec, info.name);
+
     /* ---- set up the output sink ---- */
     FILE *out = stdout;
     int need_out = nut_mode || have_video;
@@ -1164,7 +1247,10 @@ int main(int argc, char **argv)
             unsigned tbn, tbd;
             rational_from_fps(movie.frames_per_second, &tbn, &tbd);
             streams[nstreams].cls = REPLAY_NUT_VIDEO;
-            memcpy(streams[nstreams].fourcc, NUT_FOURCC_RGB24, 4);
+            if (passthrough)
+                memcpy(streams[nstreams].fourcc, info.passthrough_fourcc, 4);
+            else
+                memcpy(streams[nstreams].fourcc, NUT_FOURCC_RGB24, 4);
             streams[nstreams].tb_num = tbn;
             streams[nstreams].tb_den = tbd;
             streams[nstreams].width = movie.width;
@@ -1205,7 +1291,9 @@ int main(int argc, char **argv)
 
     /* ---- video (and, in NUT mode, the interleaved sound) ---- */
     unsigned long total = 0;
-    if (have_video) {
+    if (passthrough) {
+        total = passthrough_video(&movie, movie_data, movie_len, &info, &sink);
+    } else if (have_video) {
         total = transcode_video(&movie, movie_data, movie_len, &info,
                                 module_path, modules_dir, &sink);
     } else if (nut_mode && do_audio) {
