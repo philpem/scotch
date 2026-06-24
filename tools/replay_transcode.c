@@ -33,6 +33,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
 #include "replay/replay_status.h"
 #include "replay/replay_type23.h"
@@ -535,107 +536,116 @@ static void append_s16le(ReplayBuffer *buf, int sample)
         die("out of memory building sound track");
 }
 
+/* Decode one chunk's sound region into interleaved signed-16 LE PCM, appended
+ * to `pcm`. Reversed stereo (channels label contains "REVER") is normalised to
+ * canonical left,right within the bytes this call appends, so the result is
+ * identical whether audio is decoded a chunk at a time (NUT interleave) or all
+ * at once (WAV). */
+static void decode_chunk_audio(const ReplayAe7Movie *movie, const uint8_t *data,
+                               size_t data_len, AudioFormat format, size_t c,
+                               ReplayBuffer *pcm)
+{
+    const ReplayAe7Chunk *chunk = &movie->chunks[c];
+    size_t soff = (size_t)(chunk->file_offset + chunk->video_bytes);
+    size_t sbytes = (size_t)chunk->sound_bytes;
+    size_t start = pcm->size;
+    const uint8_t *s;
+    size_t i;
+
+    if (sbytes == 0)
+        return;
+    if (soff > data_len || sbytes > data_len - soff)
+        die("chunk %zu sound region is out of range", c);
+    s = data + soff;
+
+    switch (format) {
+    case AUDIO_ULAW:
+        for (i = 0; i < sbytes; i++)
+            append_s16le(pcm, replay_sound_vidc_e8_to_s16(s[i]));
+        break;
+    case AUDIO_ALAW:
+        for (i = 0; i < sbytes; i++)
+            append_s16le(pcm, alaw_to_s16(s[i]));
+        break;
+    case AUDIO_SIGNED_8:
+        for (i = 0; i < sbytes; i++)
+            append_s16le(pcm, (int)(int8_t)s[i] << 8);
+        break;
+    case AUDIO_UNSIGNED_8:
+        for (i = 0; i < sbytes; i++)
+            append_s16le(pcm, ((int)s[i] - 128) << 8);
+        break;
+    case AUDIO_SIGNED_16:
+        for (i = 0; i + 1 < sbytes; i += 2)
+            append_s16le(pcm, (int16_t)(s[i] | (s[i + 1] << 8)));
+        break;
+    case AUDIO_ADPCM:
+        /* Each chunk is self-contained: a per-channel state header (4 bytes
+         * each: valprev LE, index, pad) then 4-bit IMA codes. Mono packs
+         * two samples per byte; stereo packs one frame per byte (left in
+         * the low nibble, right in the high). */
+        if (movie->sound_channels == 2) {
+            ReplaySoundAdpcmState l, r;
+            size_t frames;
+            int16_t *out;
+            if (sbytes < 8)
+                die("chunk %zu stereo ADPCM region too short", c);
+            l.predicted = (int16_t)(s[0] | (s[1] << 8));
+            l.step_index = (int8_t)s[2];
+            r.predicted = (int16_t)(s[4] | (s[5] << 8));
+            r.step_index = (int8_t)s[6];
+            frames = sbytes - 8;
+            out = malloc(frames * 2 * sizeof *out + 1);
+            if (out == NULL)
+                die("out of memory decoding ADPCM");
+            replay_sound_adpcm_decode_stereo(s + 8, frames, &l, &r, out);
+            for (i = 0; i < frames * 2; i++)
+                append_s16le(pcm, out[i]);
+            free(out);
+        } else {
+            ReplaySoundAdpcmState m;
+            size_t samples;
+            int16_t *out;
+            if (sbytes < 4)
+                die("chunk %zu ADPCM region too short", c);
+            m.predicted = (int16_t)(s[0] | (s[1] << 8));
+            m.step_index = (int8_t)s[2];
+            samples = (sbytes - 4) * 2;
+            out = malloc(samples * sizeof *out + 1);
+            if (out == NULL)
+                die("out of memory decoding ADPCM");
+            replay_sound_adpcm_decode(s + 4, samples, &m, out);
+            for (i = 0; i < samples; i++)
+                append_s16le(pcm, out[i]);
+            free(out);
+        }
+        break;
+    case AUDIO_NONE:
+    case AUDIO_UNKNOWN:
+    default:
+        return;
+    }
+
+    /* Reversed stereo: swap each L/R pair (within this chunk's appended bytes). */
+    if (movie->sound_channels == 2
+        && ci_contains(movie->sound_channels_label, "rever")) {
+        size_t k;
+        for (k = start; k + 3 < pcm->size; k += 4) {
+            uint8_t *p = pcm->data + k;
+            uint8_t t0 = p[0], t1 = p[1];
+            p[0] = p[2]; p[1] = p[3]; p[2] = t0; p[3] = t1;
+        }
+    }
+}
+
 /* Decode every chunk's sound region into interleaved signed-16 LE PCM. */
 static void decode_audio(const ReplayAe7Movie *movie, const uint8_t *data,
                          size_t data_len, AudioFormat format,
                          ReplayBuffer *pcm)
 {
     size_t c;
-
-    for (c = 0; c < movie->chunk_count; c++) {
-        const ReplayAe7Chunk *chunk = &movie->chunks[c];
-        size_t soff = (size_t)(chunk->file_offset + chunk->video_bytes);
-        size_t sbytes = (size_t)chunk->sound_bytes;
-        const uint8_t *s;
-        size_t i;
-
-        if (sbytes == 0)
-            continue;
-        if (soff > data_len || sbytes > data_len - soff)
-            die("chunk %zu sound region is out of range", c);
-        s = data + soff;
-
-        switch (format) {
-        case AUDIO_ULAW:
-            for (i = 0; i < sbytes; i++)
-                append_s16le(pcm, replay_sound_vidc_e8_to_s16(s[i]));
-            break;
-        case AUDIO_ALAW:
-            for (i = 0; i < sbytes; i++)
-                append_s16le(pcm, alaw_to_s16(s[i]));
-            break;
-        case AUDIO_SIGNED_8:
-            for (i = 0; i < sbytes; i++)
-                append_s16le(pcm, (int)(int8_t)s[i] << 8);
-            break;
-        case AUDIO_UNSIGNED_8:
-            for (i = 0; i < sbytes; i++)
-                append_s16le(pcm, ((int)s[i] - 128) << 8);
-            break;
-        case AUDIO_SIGNED_16:
-            for (i = 0; i + 1 < sbytes; i += 2)
-                append_s16le(pcm, (int16_t)(s[i] | (s[i + 1] << 8)));
-            break;
-        case AUDIO_ADPCM:
-            /* Each chunk is self-contained: a per-channel state header (4 bytes
-             * each: valprev LE, index, pad) then 4-bit IMA codes. Mono packs
-             * two samples per byte; stereo packs one frame per byte (left in
-             * the low nibble, right in the high). */
-            if (movie->sound_channels == 2) {
-                ReplaySoundAdpcmState l, r;
-                size_t frames;
-                int16_t *out;
-                if (sbytes < 8)
-                    die("chunk %zu stereo ADPCM region too short", c);
-                l.predicted = (int16_t)(s[0] | (s[1] << 8));
-                l.step_index = (int8_t)s[2];
-                r.predicted = (int16_t)(s[4] | (s[5] << 8));
-                r.step_index = (int8_t)s[6];
-                frames = sbytes - 8;
-                out = malloc(frames * 2 * sizeof *out + 1);
-                if (out == NULL)
-                    die("out of memory decoding ADPCM");
-                replay_sound_adpcm_decode_stereo(s + 8, frames, &l, &r, out);
-                for (i = 0; i < frames * 2; i++)
-                    append_s16le(pcm, out[i]);
-                free(out);
-            } else {
-                ReplaySoundAdpcmState m;
-                size_t samples;
-                int16_t *out;
-                if (sbytes < 4)
-                    die("chunk %zu ADPCM region too short", c);
-                m.predicted = (int16_t)(s[0] | (s[1] << 8));
-                m.step_index = (int8_t)s[2];
-                samples = (sbytes - 4) * 2;
-                out = malloc(samples * sizeof *out + 1);
-                if (out == NULL)
-                    die("out of memory decoding ADPCM");
-                replay_sound_adpcm_decode(s + 4, samples, &m, out);
-                for (i = 0; i < samples; i++)
-                    append_s16le(pcm, out[i]);
-                free(out);
-            }
-            break;
-        case AUDIO_NONE:
-        case AUDIO_UNKNOWN:
-        default:
-            return;
-        }
-    }
-
-    /* Reversed stereo (channels label contains "REVER"): swap each L/R pair so
-     * the WAV is canonical left,right. */
-    if (movie->sound_channels == 2
-        && ci_contains(movie->sound_channels_label, "rever")) {
-        size_t frames = pcm->size / 4;
-        size_t k;
-        for (k = 0; k < frames; k++) {
-            uint8_t *p = pcm->data + k * 4;
-            uint8_t t0 = p[0], t1 = p[1];
-            p[0] = p[2]; p[1] = p[3]; p[2] = t0; p[3] = t1;
-        }
-    }
+    for (c = 0; c < movie->chunk_count; c++)
+        decode_chunk_audio(movie, data, data_len, format, c, pcm);
 }
 
 static void write_wav(const char *path, const ReplayBuffer *pcm,
@@ -673,19 +683,73 @@ static void write_wav(const char *path, const ReplayBuffer *pcm,
 }
 
 /* ------------------------------------------------------------------ */
+/* Output sink: raw RGB24 (with a sidecar WAV) or a muxed NUT stream.   */
+/* ------------------------------------------------------------------ */
 
-/* Decode all video frames to RGB24 and write them to output_path (or stdout).
- * Returns the number of frames written. */
+typedef enum { SINK_RAW, SINK_NUT } SinkMode;
+
+typedef struct {
+    SinkMode mode;
+    FILE *raw_out;                /* SINK_RAW: RGB24 frames go straight here */
+    ReplayNutMuxer *nut;          /* SINK_NUT */
+    size_t video_stream;          /* NUT stream indices */
+    size_t audio_stream;
+    int has_audio;                /* NUT: interleave the sound track */
+    unsigned channels;
+    AudioFormat audio_format;
+    const ReplayAe7Movie *movie;
+    const uint8_t *movie_data;
+    size_t movie_len;
+    uint64_t video_pts;           /* next frame index (video time base) */
+    uint64_t audio_pts;           /* next per-channel sample (audio time base) */
+} MuxSink;
+
+static void sink_video_frame(MuxSink *sink, const uint8_t *rgb, size_t bytes)
+{
+    if (sink->mode == SINK_RAW) {
+        if (fwrite(rgb, 1, bytes, sink->raw_out) != bytes)
+            die("write error");
+    } else {
+        if (replay_nut_write_frame(sink->nut, sink->video_stream,
+                                   (int64_t)sink->video_pts, 1, rgb, bytes)
+            != REPLAY_OK)
+            die("nut: video frame write failed");
+        sink->video_pts++;
+    }
+}
+
+/* NUT interleave: emit chunk c's decoded sound (if any) as one audio frame. */
+static void sink_chunk_audio(MuxSink *sink, size_t c)
+{
+    ReplayBuffer pcm;
+    size_t frame_bytes;
+    if (sink->mode != SINK_NUT || !sink->has_audio)
+        return;
+    replay_buffer_init(&pcm);
+    decode_chunk_audio(sink->movie, sink->movie_data, sink->movie_len,
+                       sink->audio_format, c, &pcm);
+    frame_bytes = 2u * (sink->channels != 0 ? sink->channels : 1u);
+    if (pcm.size != 0) {
+        if (replay_nut_write_frame(sink->nut, sink->audio_stream,
+                                   (int64_t)sink->audio_pts, 1, pcm.data,
+                                   pcm.size) != REPLAY_OK)
+            die("nut: audio frame write failed");
+        sink->audio_pts += pcm.size / frame_bytes;
+    }
+    replay_buffer_free(&pcm);
+}
+
+/* Decode all video frames to RGB24 and push them (and, in NUT mode, the
+ * interleaved sound) through `sink`. Returns the number of frames written. */
 static unsigned long transcode_video(const ReplayAe7Movie *movie,
                                      const uint8_t *movie_data,
                                      size_t movie_len, const CodecInfo *info,
                                      const char *module_path,
                                      const char *modules_dir,
-                                     const char *output_path)
+                                     MuxSink *sink)
 {
     char err[256];
     char module_buf[1024];
-    FILE *out = stdout;
     size_t pixel_count = (size_t)movie->width * movie->height;
     int use_module = !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
@@ -696,12 +760,6 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     unsigned long total = 0;
     VideoColour colour = info->colour;
     const uint8_t *palette = NULL;
-
-    if (output_path != NULL) {
-        out = fopen(output_path, "wb");
-        if (out == NULL)
-            die("cannot create %s", output_path);
-    }
 
     /* Resolve the decompressor and its block size up-front so the decoder runs
      * at block-rounded dimensions (with a buffer to match); the declared size
@@ -752,10 +810,14 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
 
     if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
-         * explicit --module forces the decompressor route instead. */
-        size_t frame_count = 0, fi;
+         * explicit --module forces the decompressor route instead. The native
+         * path is not chunk-iterated, so in NUT mode the per-chunk sound is
+         * emitted up front (still as per-chunk packets with ascending pts). */
+        size_t frame_count = 0, fi, c;
         if (replay_type23_frame_count(movie, &frame_count) != REPLAY_OK)
             die("type 23: bad frame layout");
+        for (c = 0; c < movie->chunk_count; c++)
+            sink_chunk_audio(sink, c);
         for (fi = 0; fi < frame_count; fi++) {
             MbFrame frame;
             frame.width = movie->width;
@@ -768,8 +830,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             if (mb_color_6y5uv_to_rgb24(&frame, rgb, (size_t)movie->width * 3)
                 != REPLAY_OK)
                 die("colour conversion failed");
-            if (fwrite(rgb, 1, pixel_count * 3, out) != pixel_count * 3)
-                die("write error");
+            sink_video_frame(sink, rgb, pixel_count * 3);
             total++;
         }
     } else {
@@ -796,6 +857,9 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             size_t offset = 0;
             unsigned f;
 
+            /* Interleave this chunk's sound ahead of its video frames. */
+            sink_chunk_audio(sink, c);
+
             if (vbytes == 0)
                 continue;
             if (voff > movie_len || vbytes > movie_len - voff)
@@ -814,8 +878,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 }
                 convert_frame(colour, out_words, pixels, rounded_w,
                               movie->width, movie->height, palette, rgb);
-                if (fwrite(rgb, 1, pixel_count * 3, out) != pixel_count * 3)
-                    die("write error");
+                sink_video_frame(sink, rgb, pixel_count * 3);
                 total++;
             }
         }
@@ -824,8 +887,6 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         free(module);
     }
 
-    if (out != stdout)
-        fclose(out);
     free(rgb);
     free(pixels);
     return total;
@@ -845,12 +906,46 @@ static VideoColour video_colour_from_name(const char *name)
     return COL_6Y5UV;
 }
 
+/* NUT codec tags, in the on-disk order ffmpeg writes them (little-endian). */
+static const uint8_t NUT_FOURCC_RGB24[4] = { 'R', 'G', 'B', 24 };
+static const uint8_t NUT_FOURCC_PCM_S16LE[4] = { 'P', 'S', 'D', 16 };
+
+static unsigned gcd_u(unsigned a, unsigned b)
+{
+    while (b != 0) {
+        unsigned t = a % b;
+        a = b;
+        b = t;
+    }
+    return a != 0 ? a : 1u;
+}
+
+/* Express a frame rate as a NUT time base: time(frame i) = i * num/den. */
+static void rational_from_fps(double fps, unsigned *num, unsigned *den)
+{
+    unsigned n, d, g;
+    if (!(fps > 0.0)) {
+        *num = 1u;
+        *den = 25u;
+        return;
+    }
+    d = (unsigned)(fps * 1000.0 + 0.5);  /* den ~ fps*1000, num = 1000 => 1/fps */
+    if (d == 0)
+        d = 1u;
+    n = 1000u;
+    g = gcd_u(n, d);
+    *num = n / g;
+    *den = d / g;
+}
+
 int main(int argc, char **argv)
 {
     const char *input_path = NULL, *module_path = NULL, *modules_dir = NULL;
     const char *output_path = NULL, *audio_output = NULL;
     const char *audio_format_name = NULL, *video_colour_name = NULL;
+    const char *output_format = "raw";
     int skip_unsupported = 0;
+    int nut_mode;
     int i;
 
     for (i = 1; i < argc; i++) {
@@ -860,6 +955,7 @@ int main(int argc, char **argv)
         else if (strcmp(a, "--module") == 0) module_path = NEXT();
         else if (strcmp(a, "--modules-dir") == 0) modules_dir = NEXT();
         else if (strcmp(a, "--output") == 0) output_path = NEXT();
+        else if (strcmp(a, "--output-format") == 0) output_format = NEXT();
         else if (strcmp(a, "--audio-output") == 0) audio_output = NEXT();
         else if (strcmp(a, "--audio-format") == 0) audio_format_name = NEXT();
         else if (strcmp(a, "--video-colour") == 0) video_colour_name = NEXT();
@@ -868,6 +964,9 @@ int main(int argc, char **argv)
 #undef NEXT
     }
     if (input_path == NULL) die("--input MOVIE is required");
+    if (strcmp(output_format, "raw") != 0 && strcmp(output_format, "nut") != 0)
+        die("unknown --output-format '%s' (raw|nut)", output_format);
+    nut_mode = (strcmp(output_format, "nut") == 0);
 
     size_t movie_len;
     uint8_t *movie_data = read_file(input_path, &movie_len);
@@ -937,15 +1036,23 @@ int main(int argc, char **argv)
                 movie.video_codec);
     }
 
+    /* In NUT mode the sound track is always muxed (when present and decodable),
+     * so a sidecar --audio-output is meaningless. In raw mode audio is written
+     * only when --audio-output names a WAV file. */
+    if (nut_mode && audio_output != NULL)
+        fprintf(stderr, "%s: --audio-output ignored in nut mode (sound is "
+                        "muxed into the stream)\n", prog);
+
     AudioFormat aud = AUDIO_NONE;
     int do_audio = 0;
-    if (audio_output != NULL) {
+    int want_audio = nut_mode || (audio_output != NULL);
+    if (want_audio) {
         aud = audio_format_name != NULL
             ? audio_format_from_name(audio_format_name)
             : choose_audio_format(&movie);
         if (aud == AUDIO_NONE) {
-            fprintf(stderr,
-                    "%s: movie has no sound track; no audio written\n", prog);
+            fprintf(stderr, "%s: movie has no sound track; no audio %s\n",
+                    prog, nut_mode ? "muxed" : "written");
         } else if (aud == AUDIO_UNKNOWN) {
             if (skip_unsupported)
                 fprintf(stderr,
@@ -975,28 +1082,102 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* ---- audio (decoded first so a streamed WAV is complete before ffmpeg
-     * opens it) ---- */
-    if (do_audio) {
-        ReplayBuffer pcm;
-        replay_buffer_init(&pcm);
-        decode_audio(&movie, movie_data, movie_len, aud, &pcm);
-        write_wav(audio_output, &pcm, movie.sound_rate,
-                  movie.sound_channels ? movie.sound_channels : 1u);
-        fprintf(stderr, "%s: wrote %s (%s, %u Hz, %u ch, %zu PCM bytes)\n",
-                prog, audio_output, audio_format_text(aud), movie.sound_rate,
-                movie.sound_channels, pcm.size);
-        replay_buffer_free(&pcm);
+    /* ---- set up the output sink ---- */
+    FILE *out = stdout;
+    int need_out = nut_mode || have_video;
+    if (need_out && output_path != NULL) {
+        out = fopen(output_path, "wb");
+        if (out == NULL)
+            die("cannot create %s", output_path);
     }
 
-    /* ---- video ---- */
+    MuxSink sink;
+    memset(&sink, 0, sizeof sink);
+    sink.movie = &movie;
+    sink.movie_data = movie_data;
+    sink.movie_len = movie_len;
+    sink.audio_format = aud;
+    sink.channels = movie.sound_channels != 0 ? movie.sound_channels : 1u;
+
+    ReplayNutMuxer *nut = NULL;
+    if (nut_mode) {
+        ReplayNutStream streams[2];
+        size_t nstreams = 0;
+        memset(streams, 0, sizeof streams);
+        sink.mode = SINK_NUT;
+        if (have_video) {
+            unsigned tbn, tbd;
+            rational_from_fps(movie.frames_per_second, &tbn, &tbd);
+            streams[nstreams].cls = REPLAY_NUT_VIDEO;
+            memcpy(streams[nstreams].fourcc, NUT_FOURCC_RGB24, 4);
+            streams[nstreams].tb_num = tbn;
+            streams[nstreams].tb_den = tbd;
+            streams[nstreams].width = movie.width;
+            streams[nstreams].height = movie.height;
+            sink.video_stream = nstreams++;
+        }
+        if (do_audio) {
+            streams[nstreams].cls = REPLAY_NUT_AUDIO;
+            memcpy(streams[nstreams].fourcc, NUT_FOURCC_PCM_S16LE, 4);
+            streams[nstreams].tb_num = 1u;
+            streams[nstreams].tb_den = movie.sound_rate != 0 ? movie.sound_rate : 1u;
+            streams[nstreams].sample_rate = movie.sound_rate;
+            streams[nstreams].channels = sink.channels;
+            sink.audio_stream = nstreams++;
+            sink.has_audio = 1;
+        }
+        nut = replay_nut_open(out, streams, nstreams, err, sizeof err);
+        if (nut == NULL)
+            die("%s", err);
+        sink.nut = nut;
+    } else {
+        sink.mode = SINK_RAW;
+        sink.raw_out = out;
+        /* Raw mode: write the sidecar WAV up front so a streamed pipeline can
+         * open it while the RGB24 video is still flowing on stdout. */
+        if (do_audio) {
+            ReplayBuffer pcm;
+            replay_buffer_init(&pcm);
+            decode_audio(&movie, movie_data, movie_len, aud, &pcm);
+            write_wav(audio_output, &pcm, movie.sound_rate,
+                      movie.sound_channels ? movie.sound_channels : 1u);
+            fprintf(stderr, "%s: wrote %s (%s, %u Hz, %u ch, %zu PCM bytes)\n",
+                    prog, audio_output, audio_format_text(aud), movie.sound_rate,
+                    movie.sound_channels, pcm.size);
+            replay_buffer_free(&pcm);
+        }
+    }
+
+    /* ---- video (and, in NUT mode, the interleaved sound) ---- */
     unsigned long total = 0;
-    if (have_video)
+    if (have_video) {
         total = transcode_video(&movie, movie_data, movie_len, &info,
-                                module_path, modules_dir, output_path);
+                                module_path, modules_dir, &sink);
+    } else if (nut_mode && do_audio) {
+        /* Sound-only movie muxed as an audio-only NUT stream. */
+        size_t c;
+        for (c = 0; c < movie.chunk_count; c++)
+            sink_chunk_audio(&sink, c);
+    }
+
+    if (nut != NULL && replay_nut_close(nut) != REPLAY_OK)
+        die("nut: flush failed");
+    if (out != stdout)
+        fclose(out);
 
     /* ---- summary + ready-to-run ffmpeg command ---- */
-    if (have_video && do_audio)
+    if (nut_mode) {
+        if (have_video)
+            fprintf(stderr,
+                    "%s: wrote %lu frames + muxed sound (NUT)\n"
+                    "%s: ... | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p "
+                    "-c:a aac out.mp4\n",
+                    prog, total, prog);
+        else
+            fprintf(stderr,
+                    "%s: wrote audio-only NUT stream\n"
+                    "%s: ... | ffmpeg -i - out.m4a\n", prog, prog);
+    } else if (have_video && do_audio) {
         fprintf(stderr,
                 "%s: wrote %lu frames\n"
                 "%s: ffmpeg -f rawvideo -pixel_format rgb24 -video_size %ux%u "
@@ -1004,16 +1185,17 @@ int main(int argc, char **argv)
                 "-c:a aac -shortest out.mp4\n",
                 prog, total, prog, movie.width, movie.height,
                 movie.frames_per_second, audio_output);
-    else if (have_video)
+    } else if (have_video) {
         fprintf(stderr,
                 "%s: wrote %lu frames\n"
                 "%s: ffmpeg -f rawvideo -pixel_format rgb24 -video_size %ux%u "
                 "-framerate %.6g -i - -c:v libx264 -pix_fmt yuv420p out.mp4\n",
                 prog, total, prog, movie.width, movie.height,
                 movie.frames_per_second);
-    else if (do_audio)
+    } else if (do_audio) {
         fprintf(stderr, "%s: audio-only; encode with: ffmpeg -i %s out.m4a\n",
                 prog, audio_output);
+    }
 
     replay_ae7_movie_destroy(&movie);
     free(movie_data);

@@ -41,6 +41,7 @@ add_library(replay STATIC
     src/codec_supermovingblocks.c
     src/codec_movingblocksbeta.c
     src/codec_movinglines.c
+    src/replay_nut.c
 )
 
 target_include_directories(replay PUBLIC include)
@@ -174,6 +175,7 @@ add_replay_test(test_replay_bitstream tests/test_replay_bitstream.c)
 add_replay_test(test_replay_ae7 tests/test_replay_ae7.c)
 add_replay_test(test_replay_ae7_write tests/test_replay_ae7_write.c)
 add_replay_test(test_replay_sound tests/test_replay_sound.c)
+add_replay_test(test_nut_mux tests/test_nut_mux.c)
 add_replay_test(test_sound_adpcm_stereo tests/test_sound_adpcm_stereo.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)
 add_replay_test(test_replay_type23 tests/test_replay_type23.c)
@@ -380,6 +382,14 @@ if(FFMPEG_EXECUTABLE)
             ${FFMPEG_EXECUTABLE}
             $<TARGET_FILE:replay-encode>
             $<TARGET_FILE:replay-verify>)
+    # NUT container round-trip: ffmpeg must demux the muxed output back to the
+    # same video and audio replay-transcode produces in raw mode.
+    add_test(NAME test_transcode_nut
+        COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_transcode_nut.sh
+            $<TARGET_FILE:make_audio_movie>
+            $<TARGET_FILE:replay-transcode>
+            ${FFMPEG_EXECUTABLE})
+    set_tests_properties(test_transcode_nut PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 if(Python3_Interpreter_FOUND)
     add_test(NAME test_mb19_quality_sweep

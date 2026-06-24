@@ -49,5 +49,11 @@ library depend on FFmpeg ABI versions. Library integration becomes worthwhile
 if the final CLI needs seeking, embedded audio, timestamp-driven selection, or
 better cross-platform process error reporting.
 
+On the *output* side (`replay-transcode`), muxed single-pipe output is already
+available without any libav dependency: `--output-format nut` writes a NUT
+container that carries the video, the sound, and the geometry/frame-rate in one
+self-describing stream. See [nut-output.md](nut-output.md). The hand-written
+muxer keeps the no-third-party-runtime-dependency guarantee intact.
+
 CTest exercises the pipe with FFmpeg's generated `testsrc2` source when an
 `ffmpeg` executable is available.
