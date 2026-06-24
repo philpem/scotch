@@ -153,10 +153,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
      * transform (patch table is -1, so it is r3-free like Dec24) and emits
      * packed 8-bit palette indices (1 byte/pixel). The palette is the movie's,
      * read from the AE7 header `palette <offset>` (COL_PAL8, the standard Replay
-     * 8bpp mechanism). FLIC (610) is left out: its Dec8 keeps a per-frame palette
-     * in its own workspace, which a single header palette can't capture. DL (622)
-     * and ANM (623) take no palette in their Dec8, so they use the header palette
-     * like the rest. Not yet validated against a sample. */
+     * 8bpp mechanism). DL (622) and ANM (623) take no palette in their Dec8, so
+     * they use the header palette like the rest. FLIC (610) is handled by
+     * pass-through instead (its Dec8 keeps a per-frame palette in its workspace;
+     * ffmpeg's flic reads the in-stream palette directly). Not yet validated
+     * against a sample. */
     case 600: out->module_subpath = "Decomp600/Dec8,ffd";
         out->name = "CRAM8 AVI (MovieFS)"; out->colour = COL_PAL8;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
@@ -197,11 +198,15 @@ static int codec_info(unsigned codec, CodecInfo *out)
      * wrapper and mux each frame under the matching NUT fourcc, letting ffmpeg
      * decode. Used where ffmpeg is the cleaner path -- codecs whose only sandbox
      * variant needs the colour table (601/603) or a runtime the sandbox lacks
-     * (628/629 Indeo, 901/902 VideoFS C codecs), or where avoiding ARM emulation
-     * is simply preferable (605). ffmpeg decodes msvideo1 (CRAM), rpza and ulti
-     * with no extra metadata; CRAM defaults to 16-bit, matching CRAM16. 6xx are
-     * MovieFS-wrapped; 9xx are VideoFS-wrapped (different size field). See
-     * docs/moviefs-nut-passthrough.md. Not yet validated against samples. */
+     * (628/629 Indeo, 901/902 VideoFS C codecs), where avoiding ARM emulation is
+     * simply preferable (605), or where the codec's own palette lives in the
+     * bitstream and ffmpeg already tracks it (610 FLIC, whose Dec8 keeps a
+     * per-frame palette in its workspace -- ffmpeg's flic reads the FLI_COLOR
+     * chunks itself, no extradata needed). ffmpeg decodes msvideo1 (CRAM), rpza,
+     * ulti and flic with no extra metadata; CRAM defaults to 16-bit, matching
+     * CRAM16. 6xx are MovieFS-wrapped; 9xx are VideoFS-wrapped (different size
+     * field). See docs/moviefs-nut-passthrough.md. Apart from the FLIC decode
+     * path (validated with a synthesised frame) these await real samples. */
     case 601: out->name = "CRAM16 AVI (msvideo1, MovieFS, pass-through)";
         out->passthrough_fourcc = "CRAM";
         out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
@@ -210,6 +215,9 @@ static int codec_info(unsigned codec, CodecInfo *out)
         out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
     case 605: out->name = "Ultimotion AVI (ulti, MovieFS, pass-through)";
         out->passthrough_fourcc = "ULTI";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 610: out->name = "FLI/FLC (flic, MovieFS, pass-through)";
+        out->passthrough_fourcc = "FLIC";
         out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
     case 628: out->name = "Indeo 3.1 (IV31, MovieFS, pass-through)";
         out->passthrough_fourcc = "IV31";
