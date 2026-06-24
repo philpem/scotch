@@ -2,7 +2,9 @@
 
 Scoping for Replay video format **500**, the second codec called out in issue #9
 (the "All About Planes" educational disc; sample `test-videos/BUCCAN`). Status:
-*scoping/RE — not yet implemented.*
+*format + decode algorithm resolved and validated by a mode-28 prototype
+(katie / toast-delta / BUCCAN); productisation into the library + transcoder,
+and the 4-bit modes, are pending.*
 
 ## Summary
 
@@ -101,13 +103,47 @@ screen (BUCCAN is `Normal`, i.e. full screens). Euclid_Expand writes raw screen
 bytes for the mode (8bpp → `width*height` index bytes; mind RISC OS row word
 alignment), **not** a sprite-with-header.
 
-### LZW (technique 1), from Nihav `codecs/euclid.rs`
+### Decode algorithm (resolved, from Nihav `codecs/euclid.rs`)
 
-Variable-width: `START_BITS=9 .. MAX_BITS=16`, dictionary from `START_POS=257`,
-code `256` = clear/end; width grows (`dict_lim <<= 1; idx_bits += 1`) up to 16
-bits; `dict_sym[]`/`dict_prev[]` backlink arrays, each code emitted in reverse —
-standard LZW. (RLE = technique 0; exact bit order / RLE opcodes to confirm against
-`euclid.rs` while implementing.)
+Per frame: the packet is `block[4 .. len]` (the data after the leading length
+word; the trailing length word is ignored). Decode by technique into a
+frame-sized buffer (`frm_size`), then for a **Delta** film XOR it onto the
+running frame, else it replaces the running frame. `update = flags & 1`.
+
+- **LZW (technique 1)** — bits are read **LSB-first** (`BitReaderMode::LE`). The
+  dictionary **resets every frame**. Skip the first **9 bits**, then read
+  `idx_bits`-wide codes starting at **9 bits**: code `256` ends the frame; codes
+  `< dict_pos` decode via the `dict_prev`/`dict_sym` backlink chain (emit
+  reversed, base symbol ≤ 256); the `== dict_pos` case is the standard KwKwK; new
+  entries are added from `dict_pos = 257`; when `dict_pos == dict_lim` the width
+  grows (`dict_lim <<= 1; idx_bits += 1`) up to 16 bits. Decode must fill exactly
+  `frm_size` bytes.
+- **RLE (technique 0)** — byte runs: read `len`; if `0`, read another byte (if
+  also `0`, read a 24-bit big-endian length, else `len = (b1<<8)|b2`); the run
+  pixel is `read_byte()` when `len` is even, else `0`; `len >>= 1`; fill `len`
+  pixels. (No RLE films in the corpus yet — documented, untested.)
+- **raw (technique 2)** — copy `frm_size` bytes verbatim.
+
+`frm_size` and the output layout depend on the screen `mode`: **28/21 = 8-bit
+direct** (`width*height`, one byte per pixel — copy `width` bytes per row);
+**27 = 4-bit full height** (`(width/2)*height`, two pixels per byte); **12/13/39
+= 4-bit half-res** (also vertically doubled on output); **15/36/40 = 8-bit
+row-doubled**.
+
+### Validation (prototype)
+
+A standalone C prototype of the above (mode 28, LZW + raw, normal + delta)
+decodes correctly:
+
+- **katie** (320×256, mode 28, Normal) — a Border Collie and ball;
+- **toast** (600×450, mode 28, **Delta**, 60 frames) — frame 30 is a clean
+  toaster-element diagram, so the per-frame XOR delta is correct;
+- **BUCCAN** (the Replay-embedded sample, decoded from the IotaFilm at
+  `chunk[0].file_offset`) — the Buccaneer aircraft.
+
+A 27-film TCA corpus (`test-videos/tca-films/`, fetched from iota.co.uk, not
+committed) is the dev/validation set; it covers modes 12/15/27/28, Normal and
+Delta, with and without sound — all parse, and every mode-28 film decodes.
 
 ## PALE chunk (from Iota PALE page, validated on BUCCAN)
 
@@ -170,13 +206,16 @@ video decode and well below it in priority — the video frames are the goal.
 - `ARMovie_2003/Video/Decomp500/`: the `!RunImage` BASIC orchestration and the
   `EuclidX`/`IotaSound` modules — last-resort disassembly authority for the LZW.
 
-## Open questions (remaining)
+## Remaining work / open questions
 
-- Exact **LZW bit order** (LSB- vs MSB-first) and the **RLE (technique 0)** opcode
-  format — pin from `euclid.rs` (and a frame-0 byte walk) while implementing.
-- **Mode → screen layout**: BUCCAN is mode 28 (8bpp); confirm row word-alignment
-  and whether multi-byte modes (16/24bpp) appear in real type-500 movies.
+- **Productise**: move the prototype into a `replay_tca` library (+ unit test) and
+  wire it into `replay-transcode` as a stateful native dispatch (like
+  `direct_type23`) → `COL_PAL8` → RGB24, validated on BUCCAN end to end.
+- **4-bit modes** (12/15/27, ~10 corpus films): nibble expansion and the
+  half-res / row-doubled output layouts above. Mode 28 is done.
+- **RLE (technique 0)** is documented but untested — no corpus sample uses it.
 - **Multi-chunk** type-500 layout: BUCCAN is a single chunk holding the whole
   ACEF. How a multi-chunk movie splits frames across Replay chunks (and whether
-  PALE/SOUN are stored once) needs a second sample to confirm.
-- Iota sound (`SOUN` SoundLib `&C47` / `DIR1`) format for the audio track.
+  PALE/SOUN are stored once) needs a second Replay-wrapped sample to confirm.
+- **Audio**: Iota sound (`SOUN` SoundLib `&C47` + `DIR1` sequencer) — separate,
+  lower-priority task (see the Audio section).
