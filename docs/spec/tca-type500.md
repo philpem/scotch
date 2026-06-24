@@ -43,36 +43,72 @@ ACEF  a4690000(=27044 total)  9c690000(=27036)  "Untitled\r\0"  ffff
 `512×384` is `2×` the pixel size (`256×192`) — the BASIC reads `acef%!20`/`acef%!24`
 as window dimensions in OS units (2 OS units per pixel), so pixel size = those / 2.
 
-## Container format (ACEF), from Nihav `demuxers/tca.rs`
+## IotaFilm layout in the Replay container (confirmed on BUCCAN)
 
-- Optional `ACEF` tag + `u32le` size, then a ~0x30-byte header; width @ +0x08,
-  height @ +0x0C of the header (`u32le`); even dimensions required. (Header also
-  carries a NUL/CR-terminated title and the bpp — see the BUCCAN dump above; exact
-  offsets to be pinned during implementation.)
-- **Frames** follow, each prefixed with a `u32le` size (payload = `size - 4`;
-  valid range 9..1048576).
-- **Trailing chunks** scanned by `tag` + `u32le size`:
-  - `PALE` — palette. Size `0x28..0x428`, multiple of 4; entries are
-    `[index:u8][R:u8][G:u8][B:u8]` → up to 256 RGB triplets (768-byte palette).
-  - `RATE` — frame rate (`tb_num`, `tb_den`; `tb_den` doubled).
-  - `SOUN` — audio, with a nested `WAV1`/`WAV2` tag (Iota sound).
-  - `DIR1`, `FULL` — present in BUCCAN (per the `!RunImage` chunk search); roles
-    TBD (likely a frame directory / full-frame index).
+A type-500 movie embeds the **whole IotaFilm** (`&C2A`) contiguously, starting at
+the video chunk's `file_offset`. Iota's "Film" format is a chunk file — each chunk
+is `[ID:4][size incl. header:u32le][data]`, walked with the documented
+`FNfilm_findchunk` (`!start == ID ? start+8 : start += start!4`). BUCCAN's chunks,
+contiguous from +50232 to EOF:
 
-## Frame decode, from Nihav `codecs/euclid.rs`
+| Chunk | @ | size | role |
+| ----- | -: | ---: | ---- |
+| `ACEF` | 50232 | 27044 | the compressed frames (this is the Replay video chunk) |
+| `PALE` | 77276 | 1060 | palette + screen-mode info |
+| `FULL` | 78336 | 48 | full-screen mode prefs (Acorn only; ignore) |
+| `RATE` | 78384 | 20 | playback rate |
+| `DIR1` | 78404 | 160 | sound-effect soundtrack |
+| `SOUN` | 78564 | 44296 | SoundLib samples (`&C47`) |
+| `FADE` | — | — | fades/pauses between frames — **doc 404s** (Iota's `pauses.htm` is gone); optional, ignore |
 
-- Per-frame **method**: `0 = RLE`, `1 = LZW`, `2 = raw`.
-- **`update` (delta) flag**: when set, the decoded bytes are XORed into the
-  previous frame (`*pix ^= b`) — i.e. predicted/P-frame; otherwise a keyframe.
-- **LZW**: variable-width, `START_BITS=9`, `MAX_BITS=16`, dictionary starts at
-  `START_POS=257`; code `256` is the clear/end code; dictionary grows
-  `dict_lim <<= 1; idx_bits += 1` up to 16 bits; `dict_sym[]`/`dict_prev[]`
-  backlink arrays, emitting each code's bytes in reverse (standard LZW).
-- **Pixel layout is screen-mode dependent**: 4-bit-packed half-res
-  (modes 12/13/39), row-doubled (15/36/40), 4-bit full height (27), 8-bit direct
-  (21/28). BUCCAN is 8bpp, so the **8-bit-direct** path is the first target.
-- **Output**: 8-bit paletted (`PAL8`) + the 768-byte palette from `PALE` → our
-  pipeline converts to RGB24 via the existing `COL_PAL8` path.
+So decode = AE7 reader gives `chunk[0].file_offset`; from there, `FNfilm_findchunk`
+for `ACEF` (frames) and `PALE` (palette). (`RATE` is redundant with the Replay
+header's fps; `SOUN`/`DIR1` are audio, later.)
+
+## ACEF chunk and ACE film header (from Iota `format.txt`, validated on BUCCAN)
+
+`ACEF` = `[id:"ACEF"][offset-to-next:u32le]` then the ACE film data, a 64-byte
+header followed by the Euclid data block:
+
+| Off | Field | BUCCAN |
+| --: | ----- | ------ |
+| 0 | film length (incl header + 0 end word) | 27036 |
+| 4 | film name, ≤11 chars ending in a control code (`&0D`) | "Untitled" |
+| 16 | offset to film start (Mogul sets 64) | 64 |
+| 20 | width in **OS units** (= 2× pixels) | 512 → 256px |
+| 24 | height in OS units | 384 → 192px |
+| 28 | original RISC OS screen mode | 28 (8bpp) |
+| 32 | compression technique (`Euclid` R0): `0=RLE, 1=LZW` | 1 (LZW) |
+| 36 | flags: bits0-1 `0=Normal,1=Delta`; bits2-3 loop `0 stop/1 repeat/2 yoyo` | 8 → Normal, yoyo |
+
+### Frame blocks (the Euclid data block)
+
+From `film + offset-to-film-start` (64): a sequence of frame blocks, each
+`[len:u32le][compressed screen data][len:u32le]`, advance by the leading `len`;
+a `len == 0` word terminates. Confirmed: BUCCAN walks **17 frames** (matching
+`frames_per_chunk`) ending exactly at the zero word. Decode each block's data with
+the film's technique (RLE/LZW); for `Delta` films XOR the result onto the previous
+screen (BUCCAN is `Normal`, i.e. full screens). Euclid_Expand writes raw screen
+bytes for the mode (8bpp → `width*height` index bytes; mind RISC OS row word
+alignment), **not** a sprite-with-header.
+
+### LZW (technique 1), from Nihav `codecs/euclid.rs`
+
+Variable-width: `START_BITS=9 .. MAX_BITS=16`, dictionary from `START_POS=257`,
+code `256` = clear/end; width grows (`dict_lim <<= 1; idx_bits += 1`) up to 16
+bits; `dict_sym[]`/`dict_prev[]` backlink arrays, each code emitted in reverse —
+standard LZW. (RLE = technique 0; exact bit order / RLE opcodes to confirm against
+`euclid.rs` while implementing.)
+
+## PALE chunk (from Iota PALE page, validated on BUCCAN)
+
+`[id:"PALE"][size:u32le]` then words: `+8` pencil colour, `+12` paper colour,
+`+16` ModeFlags (bit 7 = Acorn "true" 256-colour palette), `+20` Log2BPP
+(`3 = 8bpp`), `+24` Log2BPC, `+28` XEigFactor, `+32` YEigFactor, `+36..` the
+palette: one **ColourTrans** word per logical colour. On disk each word is
+`[index:u8][R:u8][G:u8][B:u8]` (LE) — verified on BUCCAN: idx0=`00 00 00 00`
+(black), idx4=`04 44 00 00` (R=0x44). So `R=byte1, G=byte2, B=byte3`; BUCCAN has
+256 entries (size 1060 = 36 + 256×4). Build a 256×3 RGB table → `COL_PAL8`.
 
 ## Implementation plan
 
@@ -94,18 +130,22 @@ as window dimensions in OS units (2 OS units per pixel), so pixel size = those /
 - Nihav `nihav-acorn`: `src/demuxers/tca.rs` (container), `src/codecs/euclid.rs`
   (LZW + frame decode), `src/codecs/iotasound.rs` (audio). Authoritative and
   readable; the C decoder should track these.
-- Iota format spec: `http://www.iota.co.uk/tca/filefmt/format.txt` plus the ACEF
-  and PALE chunk pages. The server forces HTTPS with a mismatched certificate, so
-  WebFetch can't reach it; fetch locally with `curl -k`.
+- Iota format spec — `http://www.iota.co.uk/tca/filefmt/format.txt` (the
+  authoritative text), plus the overview `index78f5.html?page=filefmt/default`
+  and the PALE page `indexe466.html?page=filefmt/pale`. WebFetch can't reach the
+  site (it forces HTTPS and the cert name is invalid); plain `curl` over HTTP from
+  the sandbox **works** (`curl -ksS http://www.iota.co.uk/...`). The `FADE`/pauses
+  page is a soft-404 (PHP `include` of a missing `filefmt/filefmt/pauses.htm`).
 - `ARMovie_2003/Video/Decomp500/`: the `!RunImage` BASIC orchestration and the
   `EuclidX`/`IotaSound` modules — last-resort disassembly authority for the LZW.
 
-## Open questions
+## Open questions (remaining)
 
-- Exact ACEF header layout (title length handling, where bpp/mode/frame-count and
-  the per-frame `method`/`update` flags live) — pin from `euclid.rs` + a hexdump
-  walk of BUCCAN's frames.
-- Which screen `mode` BUCCAN's frames declare (drives the pixel layout path).
-- Whether frames are individually size-prefixed within the chunk or indexed via a
-  `DIR1`/`FULL` table.
-- Iota sound (`SOUN`/`WAV1`/`WAV2`) format for the audio track.
+- Exact **LZW bit order** (LSB- vs MSB-first) and the **RLE (technique 0)** opcode
+  format — pin from `euclid.rs` (and a frame-0 byte walk) while implementing.
+- **Mode → screen layout**: BUCCAN is mode 28 (8bpp); confirm row word-alignment
+  and whether multi-byte modes (16/24bpp) appear in real type-500 movies.
+- **Multi-chunk** type-500 layout: BUCCAN is a single chunk holding the whole
+  ACEF. How a multi-chunk movie splits frames across Replay chunks (and whether
+  PALE/SOUN are stored once) needs a second sample to confirm.
+- Iota sound (`SOUN` SoundLib `&C47` / `DIR1`) format for the audio track.
