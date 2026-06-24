@@ -185,6 +185,12 @@ from the codec sources and not yet validated against real movies. See
 [docs/moviefs-nut-passthrough.md](docs/moviefs-nut-passthrough.md) for the codec
 inventory, the variant analysis, and the VideoFS framing.
 
+Type 500, Iota's "The Complete Animator" (TCA/ACEF), is decoded natively by
+`replay_tca` (no module, no ffmpeg) — the film is embedded in the Replay
+container and decoded to 8bpp + its palette. 8-bit modes (28/21) work end to end
+(`--skip-unsupported` skips the Iota sound track); the 4-bit modes are future
+work. See [docs/spec/tca-type500.md](docs/spec/tca-type500.md).
+
 ## Acorn cross-check
 
 An optional CTest decodes the checked-in format-19 corpus with the original

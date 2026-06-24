@@ -160,6 +160,15 @@ this file describes the current portable code in `replay-tooling`.
   freeware decoder modules used by the native paths are vendored under
   `vendor/armovie-codecs` (the specific `Dec24`/`Dec8`/`Decompress` variant +
   `Info` per codec), so the default `--modules-dir` drives them.
+- Iota "The Complete Animator" (TCA / ACEF), Replay type 500, decoded natively by
+  `src/replay_tca.c` (`replay_tca_open`/`replay_tca_next_frame`) and driven by
+  `replay-transcode`'s `direct_tca` dispatch (`codec_info` case 500). It walks the
+  embedded IotaFilm (ACEF film header + PALE palette), decodes the Euclid frame
+  blocks (variable-width LZW / RLE / raw, with Delta XOR) for the 8-bit screen
+  modes (28/21), and emits 8bpp indices + palette through `COL_PAL8` → RGB24.
+  `test_replay_tca` covers the raw/LZW/Delta paths; the real BUCCAN movie
+  transcodes end to end. The 4-bit modes (12/15/27) and the Iota audio track
+  (event-driven `DIR1`/`SOUN`) are future work. See `docs/spec/tca-type500.md`.
 
 ## Verified Claims
 

@@ -1,0 +1,39 @@
+#ifndef REPLAY_TCA_H
+#define REPLAY_TCA_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/*
+ * Decoder for Iota Software's "The Complete Animator" (TCA / ACEF / IotaFilm)
+ * films — Replay video format 500. It operates on the IotaFilm bytes (the `ACEF`
+ * chunk followed by `PALE` etc.), whether that is a bare `.tca` file or the film
+ * embedded in a Replay container (in which case start at the video chunk's
+ * file_offset — a type-500 movie embeds the whole film there contiguously).
+ *
+ * Frames are decoded to 8-bit palette indices plus a 256-entry RGB palette;
+ * RISC OS 8bpp screen modes (28 / 21) are supported. The decode (variable-width
+ * LZW, RLE or raw, with optional inter-frame XOR delta) follows Euclid_Expand;
+ * see docs/spec/tca-type500.md.
+ */
+
+typedef struct ReplayTca ReplayTca;
+
+/* Open over the IotaFilm bytes. Parses the ACEF film header and the PALE palette.
+ * Returns NULL on error (message written to `err`). */
+ReplayTca *replay_tca_open(const uint8_t *data, size_t len,
+                           char *err, size_t errlen);
+void replay_tca_close(ReplayTca *t);
+
+unsigned replay_tca_width(const ReplayTca *t);
+unsigned replay_tca_height(const ReplayTca *t);
+unsigned replay_tca_frame_count(const ReplayTca *t);
+/* 256 * 3 interleaved RGB bytes. */
+const uint8_t *replay_tca_palette(const ReplayTca *t);
+
+/* Decode the next frame, in order, into `out` (width*height bytes of 8-bit
+ * palette indices). Returns 1 on a decoded frame, 0 at end of film, -1 on error
+ * (message in `err`). Frames must be taken in order — Delta films carry state. */
+int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen);
+
+#endif /* REPLAY_TCA_H */

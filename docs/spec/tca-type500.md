@@ -2,9 +2,9 @@
 
 Scoping for Replay video format **500**, the second codec called out in issue #9
 (the "All About Planes" educational disc; sample `test-videos/BUCCAN`). Status:
-*format + decode algorithm resolved and validated by a mode-28 prototype
-(katie / toast-delta / BUCCAN); productisation into the library + transcoder,
-and the 4-bit modes, are pending.*
+*8bpp (mode 28/21) implemented — `src/replay_tca.c` + `replay-transcode` case 500,
+validated end to end on BUCCAN (transcodes to the Buccaneer aircraft). The 4-bit
+screen modes and the audio track remain.*
 
 ## Summary
 
@@ -206,11 +206,20 @@ video decode and well below it in priority — the video frames are the goal.
 - `ARMovie_2003/Video/Decomp500/`: the `!RunImage` BASIC orchestration and the
   `EuclidX`/`IotaSound` modules — last-resort disassembly authority for the LZW.
 
+## Implemented
+
+`src/replay_tca.c` (`include/replay/replay_tca.h`) decodes the IotaFilm — ACEF
+header, PALE palette, and the LZW/RLE/raw + Delta frame blocks — to 8bpp indices
++ an RGB palette, for the 8-bit modes (28/21). `replay-transcode` drives it via a
+native `direct_tca` dispatch (`codec_info` case 500): the film is read from the
+first chunk's offset, each frame goes through `COL_PAL8` → RGB24. Iota sound
+(codec 500) is not decoded, so a type-500 movie transcodes video-only (use
+`--skip-unsupported` for the audio track). `test_replay_tca` covers the
+raw/LZW/Delta paths on synthetic films; BUCCAN transcodes end to end to the
+Buccaneer aircraft.
+
 ## Remaining work / open questions
 
-- **Productise**: move the prototype into a `replay_tca` library (+ unit test) and
-  wire it into `replay-transcode` as a stateful native dispatch (like
-  `direct_type23`) → `COL_PAL8` → RGB24, validated on BUCCAN end to end.
 - **4-bit modes** (12/15/27, ~10 corpus films): nibble expansion and the
   half-res / row-doubled output layouts above. Mode 28 is done.
 - **RLE (technique 0)** is documented but untested — no corpus sample uses it.

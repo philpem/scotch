@@ -37,6 +37,7 @@
 #include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
 #include "replay/replay_status.h"
+#include "replay/replay_tca.h"
 #include "replay/replay_type23.h"
 
 #include <ctype.h>
@@ -102,6 +103,7 @@ typedef struct {
     VideoColour colour;         /* working-output interpretation */
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
+    int direct_tca;             /* decode with the native replay_tca decoder (500) */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
     /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
@@ -223,6 +225,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
         out->passthrough_fourcc = "IV32";
         out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
+    /* Iota "The Complete Animator" (TCA/ACEF) — decoded natively by replay_tca
+     * (the film is embedded in the Replay container); emits 8bpp + its own PALE
+     * palette. See docs/spec/tca-type500.md. */
+    case 500: out->name = "Complete Animator (TCA)"; out->colour = COL_PAL8;
+        out->direct_tca = 1; return 0;
     /* Uncompressed (tiny unpacking decompressor; output per the Info colour
      * line -- see docs/spec/uncompressed-video-formats.md). */
     case 2: out->module_subpath = "Decomp2/Decompress,ffd";
@@ -910,7 +917,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char err[256];
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
-    int use_module = !(info->direct_type23 && module_path == NULL);
+    int use_module = !info->direct_tca
+                  && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
     unsigned rounded_w = movie->width, rounded_h = movie->height;
     size_t rounded_count;
@@ -967,7 +975,43 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 "%ux%u\n", prog, rounded_w, rounded_h, block_x, block_y,
                 movie->width, movie->height);
 
-    if (!use_module) {
+    if (info->direct_tca) {
+        /* Iota Complete Animator (TCA/ACEF): the whole film is embedded in the
+         * Replay container from the first chunk's offset; decode it natively to
+         * 8bpp + its own palette. Iota sound (codec 500) is not decoded. */
+        size_t off = movie->chunk_count ? (size_t)movie->chunks[0].file_offset : 0;
+        ReplayTca *tca;
+        uint8_t *idx;
+        unsigned tw, th;
+        if (movie->chunk_count == 0 || off >= movie_len)
+            die("type 500: no film data");
+        tca = replay_tca_open(movie_data + off, movie_len - off, err, sizeof err);
+        if (tca == NULL)
+            die("type 500: %s", err);
+        tw = replay_tca_width(tca);
+        th = replay_tca_height(tca);
+        if (tw != movie->width || th != movie->height)
+            die("type 500: film %ux%u != header %ux%u", tw, th,
+                movie->width, movie->height);
+        fprintf(stderr, "%s: codec 500: %u TCA frames\n", prog,
+                replay_tca_frame_count(tca));
+        idx = malloc(pixel_count ? pixel_count : 1);
+        if (idx == NULL)
+            die("out of memory");
+        for (;;) {
+            int r = replay_tca_next_frame(tca, idx, err, sizeof err);
+            if (r < 0)
+                die("type 500: %s", err);
+            if (r == 0)
+                break;
+            convert_frame(COL_PAL8, idx, pixels, movie->width, movie->width,
+                          movie->height, replay_tca_palette(tca), 1, rgb);
+            sink_video_frame(sink, rgb, pixel_count * 3);
+            total++;
+        }
+        free(idx);
+        replay_tca_close(tca);
+    } else if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. The native
          * path is not chunk-iterated, so in NUT mode the per-chunk sound is
