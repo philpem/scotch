@@ -252,6 +252,68 @@ bit-exact to Acorn, needs no FFmpeg, and the shared work is small (strip the
 Colour subsystem — chiefly 628/629 Indeo (also no source / Intel IP) — and as a
 fallback. Colour-subsystem emulation is, pleasingly, **not on the critical path**.
 
+## Appendix: VideoFS (IMS 9xx Indeo) — reverse-engineered from source
+
+The 9xx range is Innovative Media Solutions' Indeo support, integrated through
+**VideoFS** (not MovieFS). No 9xx sample exists in the workspace (the Videoclip
+and CineClips ISOs contain only codec 0 and codec 1 movies), so the following is
+derived purely from the C decoder sources `ARMovie_2003/Video/Decomp901` and
+`Decomp902`; it is **not yet validated against a real movie**.
+
+### Per-frame framing
+
+901 and 902's `DecompEntry(source, image, prev, table)` agree exactly:
+
+```c
+int *header = (int*)source;   /* +0 size, +4 ?, +8 width, +12 height */
+char *delta = source + 16;    /* codec data starts at +16            */
+xs = header[2]; ys = header[3];
+if (header[0] == 0) { /* null frame: copy previous */ return source; }
+...
+return source + header[0] - 12;   /* pointer to the next frame */
+```
+
+So VideoFS uses the **same 16-byte header shape** as MovieFS (width@+8,
+height@+12, data@+16), but the **size word means something different**:
+
+| | size word `header[0]` | codec data length | stride to next frame |
+| --- | --- | --- | --- |
+| MovieFS (6xx) | data_len + 12 | header[0] − 12 | header[0] + 4 (= 16 + data_len) |
+| VideoFS (9xx) | data_len + 28 | header[0] − 28 | header[0] − 12 (= 16 + data_len) |
+
+`header[0] == 0` marks a null frame (repeat the previous frame). Note also that,
+unlike the MovieFS codecs (which are fed the *unwrapped* frame — the player
+strips the header), the VideoFS codecs read the 16-byte header *themselves*; but
+the bytes stored in the Replay chunk are the wrapped frames either way, so an
+extractor strips the 16-byte header and takes `header[0] − 28` bytes at +16.
+
+### Native execution is not viable; use NUT → FFmpeg
+
+Both are C codecs with the C calling sequence (`Info` line `16,C`) and depend on
+the runtime in ways the bare ARMulator/CodecIf sandbox cannot provide:
+
+- 901 converts via `ycRgb16(..., table)` — needs the R3 colour-lookup table.
+- 902 `InitEntry` calls `malloc(84*1024)` and
+  `loadfile("<ARMovie$Dir>.Decomp902.correctors", ...)` — it allocates and loads
+  an external corrector-table file by RISC OS path, i.e. it needs a full RISC OS
+  + shared-C-library environment.
+
+So 9xx must be remuxed and handed to FFmpeg, exactly as for the screen-painter
+6xx codecs:
+
+- **902 Indeo Video 3.2** → strip the VideoFS header, mux the inner bitstream
+  into NUT as `IV32` → FFmpeg `indeo3` (tag recognition verified).
+- **901 Indeo Raw YVU9** → the inner data is planar 4:1:0 in Y, V, U order
+  (`yData=0; vData=Y; uData=V+Y/16`), i.e. FFmpeg `rawvideo`/`yvu410p` — or a
+  trivial native unpack (it is uncompressed).
+
+This needs a "codec pass-through to NUT" transcoder mode (extract frames + mux
+with a codec fourcc, no decode) — the generalisation of the proven Cinepak→NUT
+experiment. That mode is independently useful (it is the NUT→FFmpeg path this
+document recommends for Indeo and the screen-painter codecs); it can be built and
+validated on Cinepak today, with the 9xx framing above wired on top and confirmed
+once a 901/902 movie is available.
+
 ## Open questions for implementation
 
 - Confirm the MovieFS Replay encapsulation stores the raw codec frame verbatim
