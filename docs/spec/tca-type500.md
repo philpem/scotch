@@ -57,13 +57,22 @@ contiguous from +50232 to EOF:
 | `PALE` | 77276 | 1060 | palette + screen-mode info |
 | `FULL` | 78336 | 48 | full-screen mode prefs (Acorn only; ignore) |
 | `RATE` | 78384 | 20 | playback rate |
-| `DIR1` | 78404 | 160 | sound-effect soundtrack |
-| `SOUN` | 78564 | 44296 | SoundLib samples (`&C47`) |
-| `FADE` | — | — | fades/pauses between frames — **doc 404s** (Iota's `pauses.htm` is gone); optional, ignore |
+| `DIR1` | 78404 | 160 | sound-effect soundtrack (sequence of play events) |
+| `SOUN` | 78564 | 44296 | SoundLib sample library (`&C47`) |
+| `FADE` | — | — | fades/pauses between frames — see below; **not used by the Replay path** |
 
 So decode = AE7 reader gives `chunk[0].file_offset`; from there, `FNfilm_findchunk`
 for `ACEF` (frames) and `PALE` (palette). (`RATE` is redundant with the Replay
 header's fps; `SOUN`/`DIR1` are audio, later.)
+
+### FADE is irrelevant to Replay type 500
+
+The Replay decompressor (`Decomp500/!RunImage`) reads only **`ACEF`, `RATE`,
+`DIR1`, `FULL`, `PALE`** via `FNfilm_findchunk` — it never looks for `FADE`. FADE
+(inter-frame fades/pauses) is applied by The Complete Animator's own player, not
+the Replay path. It is also absent from BUCCAN and its Iota doc is gone (soft-404).
+So there is nothing to reverse-engineer and nothing lost: a type-500 transcoder
+ignores FADE exactly as the Replay player does.
 
 ## ACEF chunk and ACE film header (from Iota `format.txt`, validated on BUCCAN)
 
@@ -110,6 +119,27 @@ palette: one **ColourTrans** word per logical colour. On disk each word is
 (black), idx4=`04 44 00 00` (R=0x44). So `R=byte1, G=byte2, B=byte3`; BUCCAN has
 256 entries (size 1060 = 36 + 256×4). Build a 256×3 RGB table → `COL_PAL8`.
 
+## Audio (`SOUN` + `DIR1`) — for later, from Iota `soundlib.txt`
+
+Iota audio is **event-driven**, not a linear PCM track: `DIR1` is a soundtrack of
+play events and `SOUN` is the SoundLib sample library they reference (via
+`IotaSound_Play`, whose interface mirrors `Euclid_Expand` — one block per frame).
+
+- **`DIR1`** sound blocks (per `format.txt`): `[next→][sound_id/flags][amplitude]
+  [pitch][duration]…` (up to 8 voices) `[←previous]`, size in the first/last word.
+- **`SOUN`** = a SoundLib file (`&C47`), itself a chunk file with a `NAM1` (sample
+  names) and one of `WAV1`/`WAV2`/`WAV3`:
+  - per-sample header is 4 words: offset, length, default pitch, format/extra.
+  - `WAV1` = 8-bit VIDC-logarithmic samples (length in bytes).
+  - `WAV2` = 4-bit IMA-style ADPCM of 16-bit signed (length in samples).
+  - `WAV3` = explicit format word: 0/1 = 8-bit unsigned mono/stereo, 2/3 = 16-bit
+    signed mono/stereo, 4 = 8-bit VIDC log, 8 = 4-bit ADPCM, >19 = offset to a
+    Win32 `WAVEFORMAT` block; pitch is the actual sample rate in Hz.
+
+Reconstructing the audio means running the `DIR1` event sequencer against the
+SoundLib samples (mixing per-frame), which is a separate, larger task than the
+video decode and well below it in priority — the video frames are the goal.
+
 ## Implementation plan
 
 1. **Container split** — reuse `replay_ae7` to get each chunk's ACEF payload
@@ -132,7 +162,8 @@ palette: one **ColourTrans** word per logical colour. On disk each word is
   readable; the C decoder should track these.
 - Iota format spec — `http://www.iota.co.uk/tca/filefmt/format.txt` (the
   authoritative text), plus the overview `index78f5.html?page=filefmt/default`
-  and the PALE page `indexe466.html?page=filefmt/pale`. WebFetch can't reach the
+  the PALE page `indexe466.html?page=filefmt/pale`, and the SoundLib spec
+  `filefmt/soundlib.txt`. WebFetch can't reach the
   site (it forces HTTPS and the cert name is invalid); plain `curl` over HTTP from
   the sandbox **works** (`curl -ksS http://www.iota.co.uk/...`). The `FADE`/pauses
   page is a soft-404 (PHP `include` of a missing `filefmt/filefmt/pauses.htm`).
