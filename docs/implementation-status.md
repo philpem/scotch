@@ -147,6 +147,13 @@ this file describes the current portable code in `replay-tooling`.
   sources. The pass-through machinery is validated by routing Cinepak through it;
   the Indeo mappings are not yet validated against a real movie (none available).
   9xx are decode-only (no compressor exists).
+- MovieFS palettised codecs via the `Dec8` variant (600 CRAM8, 604 SMC, 606/624
+  RGB8, 607 RLE8, 609 QT-RLE8, 613 QT-RLE4). `Dec8` is r3-free and emits packed
+  8-bit palette indices; `convert_frame` gained a packed-byte `COL_PAL8` path
+  (`packed8`) and uses the movie palette from the AE7 header `palette <offset>`.
+  Source-derived; not yet validated against a sample (no palettised MovieFS movie
+  available), and the header-palette assumption is unconfirmed. FLIC/DL/ANM are
+  excluded (per-frame in-stream palettes).
 
 ## Verified Claims
 

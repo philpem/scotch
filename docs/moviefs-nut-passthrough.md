@@ -235,10 +235,18 @@ identity table) to a Replay word. That is real but bounded work, and it is
   validated). The MovieFS `Dec24` modules are not vendored — pass
   `--modules-dir` pointing at an ARMovie tree that contains them.
 
-Not yet wired (need work and/or samples): the `Dec8` palette family (600/604/
-606/607/609/610/613/622/623/624 — runnable but emit palette indices, so they
-need the container/codec palette plumbed through `COL_PAL8`); 605 Ultimotion
-(`Dec16`, colour undeclared); the screen-painter-only codecs (601/603/614).
+The **`Dec8` palette family** is also wired (600 CRAM8, 604 SMC, 606/624 RGB8,
+607 RLE8, 609 QT-RLE8, 613 QT-RLE4): the `Dec8` variant is r3-free (patch table
+`-1`, no colour transform — confirmed in all seven sources) and emits packed
+8-bit palette indices (1 byte/pixel, via `STR`/`STRB`), so the transcoder uses
+`COL_PAL8` with a new packed-byte read path (`packed8`) and the movie's palette
+from the AE7 header `palette <offset>` (the standard Replay 8bpp mechanism). Not
+yet validated against a sample, and the header-palette assumption is unconfirmed.
+FLIC (610) and DL/ANM (622/623) are intentionally left out — they carry per-frame
+in-stream palettes that a single header palette can't represent.
+
+Not yet wired (need work and/or samples): 605 Ultimotion (`Dec16`, colour
+undeclared); the screen-painter-only codecs (601/603/614).
 
 A second path, **codec pass-through to NUT**, is also implemented (requires
 `--output-format nut`): instead of decoding, each chunk's frames are de-wrapped

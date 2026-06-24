@@ -109,6 +109,7 @@ typedef struct {
      * in the sandbox (C codecs / screen-painters), e.g. Indeo. NULL = decode. */
     const char *passthrough_fourcc;
     ReplayWrapKind passthrough_wrap; /* per-frame wrapper flavour for the frames */
+    int packed8;                /* COL_PAL8 output is 1 byte/pixel (Dec8), not a word */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -148,6 +149,34 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 626: out->module_subpath = "Decomp626/Dec24,ffd";
         out->name = "RGB24 QT (MovieFS)"; out->colour = COL_RGB888;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    /* MovieFS palettised codecs via the Dec8 variant: it does no colour
+     * transform (patch table is -1, so it is r3-free like Dec24) and emits
+     * packed 8-bit palette indices (1 byte/pixel). The palette is the movie's,
+     * read from the AE7 header `palette <offset>` (COL_PAL8, the standard Replay
+     * 8bpp mechanism). FLIC (610) and DL/ANM (622/623) are left out because they
+     * carry per-frame in-stream palettes a single header palette can't capture.
+     * Not yet validated against a sample. */
+    case 600: out->module_subpath = "Decomp600/Dec8,ffd";
+        out->name = "CRAM8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 604: out->module_subpath = "Decomp604/Dec8,ffd";
+        out->name = "SMC QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 606: out->module_subpath = "Decomp606/Dec8,ffd";
+        out->name = "RGB8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 607: out->module_subpath = "Decomp607/Dec8,ffd";
+        out->name = "RLE8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 609: out->module_subpath = "Decomp609/Dec8,ffd";
+        out->name = "RLE8 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 613: out->module_subpath = "Decomp613/Dec8,ffd";
+        out->name = "RLE4 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 624: out->module_subpath = "Decomp624/Dec8,ffd";
+        out->name = "RGB8 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
     /* Indeo, pass-through to ffmpeg (requires --output-format nut). These ship
      * only a screen-painter (628/629) or a CLib-dependent C decoder (901/902)
      * that the sandbox can't run, but ffmpeg decodes them well. We strip the
@@ -386,7 +415,7 @@ static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
 static void convert_frame(VideoColour colour, const uint8_t *words,
                           MbPixel *pixels, unsigned stride,
                           unsigned out_w, unsigned out_h,
-                          const uint8_t *palette, uint8_t *rgb)
+                          const uint8_t *palette, int packed8, uint8_t *rgb)
 {
     size_t out_stride = (size_t)out_w * 3;
     unsigned r, x;
@@ -442,10 +471,12 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
             }
         break;
     case COL_PAL8:
+        /* Acorn type 4 emits a word per pixel (index in the low byte); the
+         * MovieFS Dec8 variant emits packed bytes (1 per pixel). */
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
                 size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
-                unsigned idx = words[s * 4];
+                unsigned idx = packed8 ? words[s] : words[s * 4];
                 if (palette != NULL) {
                     rgb[d * 3 + 0] = palette[idx * 3 + 0];
                     rgb[d * 3 + 1] = palette[idx * 3 + 1];
@@ -1007,7 +1038,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                     die("chunk %zu frame %u: %s", c, f, err);
                 }
                 convert_frame(colour, out_words, pixels, rounded_w,
-                              movie->width, movie->height, palette, rgb);
+                              movie->width, movie->height, palette,
+                              info->packed8, rgb);
                 sink_video_frame(sink, rgb, pixel_count * 3);
                 total++;
             }

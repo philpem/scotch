@@ -171,7 +171,10 @@ build/replay-transcode --input ironman.rpl --modules-dir path/to/!ARMovie \
     --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
 ```
 
-Wired so far: 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24.
+Wired so far: 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24, and the
+palettised `Dec8` family 600 CRAM8 / 604 SMC / 606·624 RGB8 / 607·609 RLE8 /
+613 RLE4 (8-bit indices coloured via the movie's `palette <offset>`; derived from
+source, not yet sample-validated).
 
 Codecs the sandbox can't run (Indeo) instead use **codec pass-through**: with
 `--output-format nut` the frames are de-wrapped and muxed under a codec fourcc so
