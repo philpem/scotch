@@ -229,36 +229,38 @@ identity table) to a Replay word. That is real but bounded work, and it is
   chunk's end.
 - MovieFS codecs run in **32-bit ARM mode** (`arm_mode_32`) and select the
   `Dec24` variant (`Decomp<N>/Dec24,ffd`) with `COL_RGB888`.
-- Wired: **602 Cinepak** (validated end-to-end — 114 frames + audio, frame
-  output byte-identical to the ffmpeg NUT path), plus **608/626 RGB24** and
-  **615 QT-RLE24** (same harness-compatible `Dec24` variant; not yet sample-
-  validated). The MovieFS `Dec24` modules are not vendored — pass
-  `--modules-dir` pointing at an ARMovie tree that contains them.
+- Wired via `Dec24` → `COL_RGB888`: **602 Cinepak** (validated end-to-end — 114
+  frames + audio, frame output byte-identical to the ffmpeg NUT path), plus
+  **608/626 RGB24** and **615 QT-RLE24** (same harness-compatible variant; not
+  yet sample-validated).
+- Wired via the **`Dec8` palette family** (600 CRAM8, 604 SMC, 606/624 RGB8,
+  607/609 RLE8, 613 RLE4, 622 DL, 623 ANM): `Dec8` is r3-free (patch table `-1`,
+  no colour transform) and emits packed 8-bit indices (1 byte/pixel), so the
+  transcoder uses `COL_PAL8` with a packed-byte read path (`packed8`) and the
+  movie's palette from the AE7 header `palette <offset>`. DL/ANM take no palette
+  in their `Dec8` (header palette like the rest); FLIC (610) is excluded — its
+  `Dec8` keeps a per-frame palette in its own workspace.
+- Wired via an r3-free **`Decompress`** → `COL_RGB555`: **614 QT-RLE16** (its
+  `Decompress` uses no colour table, unlike Cinepak's dithering painter, so it
+  runs unpatched; qtrle's depth can't be carried through NUT, so pass-through is
+  not an option here).
 
-The **`Dec8` palette family** is also wired (600 CRAM8, 604 SMC, 606/624 RGB8,
-607 RLE8, 609 QT-RLE8, 613 QT-RLE4): the `Dec8` variant is r3-free (patch table
-`-1`, no colour transform — confirmed in all seven sources) and emits packed
-8-bit palette indices (1 byte/pixel, via `STR`/`STRB`), so the transcoder uses
-`COL_PAL8` with a new packed-byte read path (`packed8`) and the movie's palette
-from the AE7 header `palette <offset>` (the standard Replay 8bpp mechanism). Not
-yet validated against a sample, and the header-palette assumption is unconfirmed.
-FLIC (610) and DL/ANM (622/623) are intentionally left out — they carry per-frame
-in-stream palettes that a single header palette can't represent.
+The required decoder modules are **vendored** under `vendor/armovie-codecs`
+(the WSS freeware `Dec24`/`Dec8`/`Decompress` variant per codec), so the default
+`--modules-dir vendor/armovie-codecs` drives them with no external tree.
 
-Not yet wired (need work and/or samples): 605 Ultimotion (`Dec16`, colour
-undeclared); the screen-painter-only codecs (601/603/614).
+The second path, **codec pass-through to NUT** (requires `--output-format nut`),
+de-wraps each frame and muxes it under a codec fourcc for ffmpeg to decode. Used
+where ffmpeg is the cleaner path: **601 CRAM16** (`CRAM`→msvideo1), **603 RPZA**
+(`rpza`), **605 Ultimotion** (`ULTI`→ulti), and the Indeo codecs **628/629**
+(MovieFS `IV31`/`IV32`) and **901/902** (VideoFS `YVU9`/`IV32`). The pass-through
+machinery is validated by routing Cinepak through it (matches the decode path);
+the individual fourcc mappings are not yet validated against real movies. A
+container null frame (repeat-previous) re-emits the previous frame's bytes (exact
+for raw/intra, approximate for an inter codec — to revisit with a sample).
 
-A second path, **codec pass-through to NUT**, is also implemented (requires
-`--output-format nut`): instead of decoding, each chunk's frames are de-wrapped
-and muxed straight into the NUT video stream under a codec fourcc, and ffmpeg
-decodes them. This is the path for codecs the sandbox can't run — Indeo:
-**628/629** (MovieFS, `IV31`/`IV32`) and **901/902** (VideoFS, `YVU9`/`IV32`).
-The pass-through machinery is validated by routing Cinepak through it (matches
-the decode path's frame); the Indeo fourcc mappings are wired but **not yet
-validated against a real movie** (none exists in the workspace). The pass-through
-video stream carries the codec frames verbatim; a container null frame
-(repeat-previous) re-emits the previous frame's bytes (exact for raw/intra,
-approximate for an inter codec — to revisit with a sample).
+Still unwired: **610 FLIC** (per-frame in-stream palette — needs palette tracking
+for native, or FLIC-header extradata for pass-through).
 
 ### Recommendation
 

@@ -152,8 +152,14 @@ this file describes the current portable code in `replay-tooling`.
   8-bit palette indices; `convert_frame` gained a packed-byte `COL_PAL8` path
   (`packed8`) and uses the movie palette from the AE7 header `palette <offset>`.
   Source-derived; not yet validated against a sample (no palettised MovieFS movie
-  available), and the header-palette assumption is unconfirmed. FLIC/DL/ANM are
-  excluded (per-frame in-stream palettes).
+  available), and the header-palette assumption is unconfirmed. DL (622) and ANM
+  (623) join the family (their `Dec8` takes no palette); FLIC (610) is excluded
+  (per-frame in-stream palette in its workspace). 614 QT-RLE16 is wired via its
+  r3-free `Decompress` (16bpp RGB555). Pass-through (NUT→ffmpeg) covers 601
+  CRAM16, 603 RPZA and 605 Ultimotion in addition to the Indeo codecs. The WSS
+  freeware decoder modules used by the native paths are vendored under
+  `vendor/armovie-codecs` (the specific `Dec24`/`Dec8`/`Decompress` variant +
+  `Info` per codec), so the default `--modules-dir` drives them.
 
 ## Verified Claims
 

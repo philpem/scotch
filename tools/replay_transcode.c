@@ -153,9 +153,10 @@ static int codec_info(unsigned codec, CodecInfo *out)
      * transform (patch table is -1, so it is r3-free like Dec24) and emits
      * packed 8-bit palette indices (1 byte/pixel). The palette is the movie's,
      * read from the AE7 header `palette <offset>` (COL_PAL8, the standard Replay
-     * 8bpp mechanism). FLIC (610) and DL/ANM (622/623) are left out because they
-     * carry per-frame in-stream palettes a single header palette can't capture.
-     * Not yet validated against a sample. */
+     * 8bpp mechanism). FLIC (610) is left out: its Dec8 keeps a per-frame palette
+     * in its own workspace, which a single header palette can't capture. DL (622)
+     * and ANM (623) take no palette in their Dec8, so they use the header palette
+     * like the rest. Not yet validated against a sample. */
     case 600: out->module_subpath = "Decomp600/Dec8,ffd";
         out->name = "CRAM8 AVI (MovieFS)"; out->colour = COL_PAL8;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
@@ -177,12 +178,39 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 624: out->module_subpath = "Decomp624/Dec8,ffd";
         out->name = "RGB8 QT (MovieFS)"; out->colour = COL_PAL8;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
-    /* Indeo, pass-through to ffmpeg (requires --output-format nut). These ship
-     * only a screen-painter (628/629) or a CLib-dependent C decoder (901/902)
-     * that the sandbox can't run, but ffmpeg decodes them well. We strip the
-     * per-frame wrapper and mux each frame under the matching NUT fourcc. 6xx
-     * are MovieFS-wrapped; 9xx are VideoFS-wrapped (different size field). See
-     * docs/moviefs-nut-passthrough.md. Untested against samples for 9xx. */
+    case 622: out->module_subpath = "Decomp622/Dec8,ffd";
+        out->name = "DL animation (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 623: out->module_subpath = "Decomp623/Dec8,ffd";
+        out->name = "ANM film (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    /* MovieFS 16bpp codecs that ship only a screen-painter `Decompress`, but
+     * whose `Decompress` is r3-free (no colour-table use, unlike Cinepak's
+     * dithering painter): run unpatched, emitting native RGB555 words. 614
+     * QT-RLE16 lands here because qtrle's depth can't be carried through NUT, so
+     * pass-through to ffmpeg is not an option. (601 CRAM16 and 603 RPZA are also
+     * r3-free but go via pass-through below, which ffmpeg handles cleanly.) */
+    case 614: out->module_subpath = "Decomp614/Decompress,ffd";
+        out->name = "QT RLE 16 (MovieFS)"; out->colour = COL_RGB555;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    /* Pass-through to ffmpeg (requires --output-format nut): strip the per-frame
+     * wrapper and mux each frame under the matching NUT fourcc, letting ffmpeg
+     * decode. Used where ffmpeg is the cleaner path -- codecs whose only sandbox
+     * variant needs the colour table (601/603) or a runtime the sandbox lacks
+     * (628/629 Indeo, 901/902 VideoFS C codecs), or where avoiding ARM emulation
+     * is simply preferable (605). ffmpeg decodes msvideo1 (CRAM), rpza and ulti
+     * with no extra metadata; CRAM defaults to 16-bit, matching CRAM16. 6xx are
+     * MovieFS-wrapped; 9xx are VideoFS-wrapped (different size field). See
+     * docs/moviefs-nut-passthrough.md. Not yet validated against samples. */
+    case 601: out->name = "CRAM16 AVI (msvideo1, MovieFS, pass-through)";
+        out->passthrough_fourcc = "CRAM";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 603: out->name = "RPZA QT (MovieFS, pass-through)";
+        out->passthrough_fourcc = "rpza";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 605: out->name = "Ultimotion AVI (ulti, MovieFS, pass-through)";
+        out->passthrough_fourcc = "ULTI";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
     case 628: out->name = "Indeo 3.1 (IV31, MovieFS, pass-through)";
         out->passthrough_fourcc = "IV31";
         out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
