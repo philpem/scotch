@@ -226,11 +226,11 @@ Delta) decodes correctly.
 
 ## Remaining work / open questions
 
-- **Audio** (logged as an issue): Iota sound is event-driven (`DIR1` play events
+- **Audio** (issue #35): Iota sound is event-driven (`DIR1` play events
   against the `SOUN` SoundLib `&C47`), not a linear PCM track — a separate,
   larger task (see the Audio section). Type-500 movies currently transcode
   video-only.
-- **Multi-chunk** (logged as an issue): BUCCAN is a single chunk holding the whole
+- **Multi-chunk** (issue #34): BUCCAN is a single chunk holding the whole
   ACEF. Whether type-500 movies are ever split across multiple Replay chunks (and
   if so how frames/PALE are distributed) is unconfirmed — it may not occur in
   practice; needs a multi-chunk sample.
