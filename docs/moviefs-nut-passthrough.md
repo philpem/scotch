@@ -252,15 +252,20 @@ The required decoder modules are **vendored** under `vendor/armovie-codecs`
 The second path, **codec pass-through to NUT** (requires `--output-format nut`),
 de-wraps each frame and muxes it under a codec fourcc for ffmpeg to decode. Used
 where ffmpeg is the cleaner path: **601 CRAM16** (`CRAM`→msvideo1), **603 RPZA**
-(`rpza`), **605 Ultimotion** (`ULTI`→ulti), and the Indeo codecs **628/629**
-(MovieFS `IV31`/`IV32`) and **901/902** (VideoFS `YVU9`/`IV32`). The pass-through
-machinery is validated by routing Cinepak through it (matches the decode path);
-the individual fourcc mappings are not yet validated against real movies. A
-container null frame (repeat-previous) re-emits the previous frame's bytes (exact
-for raw/intra, approximate for an inter codec — to revisit with a sample).
+(`rpza`), **605 Ultimotion** (`ULTI`→ulti), **610 FLIC** (`FLIC`→flic), and the
+Indeo codecs **628/629** (MovieFS `IV31`/`IV32`) and **901/902** (VideoFS
+`YVU9`/`IV32`). The pass-through machinery is validated by routing Cinepak through
+it (matches the decode path); the individual fourcc mappings are not yet validated
+against real movies — except **FLIC's decode path, validated with a synthesised
+FLI_FRAME**: ffmpeg's flic reads the NUT stream with no extradata (depth defaults
+to 8) and decodes the in-stream FLI_COLOR palette correctly, so FLIC needs no
+special palette handling. A container null frame (repeat-previous) re-emits the
+previous frame's bytes (exact for raw/intra, approximate for an inter codec — to
+revisit with a sample).
 
-Still unwired: **610 FLIC** (per-frame in-stream palette — needs palette tracking
-for native, or FLIC-header extradata for pass-through).
+FLIC (610) is handled here rather than via its native `Dec8` (whose palette lives
+in a per-frame workspace array that a single header palette can't capture);
+letting ffmpeg track the in-stream palette is simpler and needs no module.
 
 ### Recommendation
 
