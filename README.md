@@ -159,6 +159,32 @@ A sound-only movie (video format 0) is transcoded to audio only; it has no
 codec module, so `--modules-dir` is ignored for it even if some such movies
 carry stray non-zero dimensions in the header.
 
+MovieFS (Warm Silence Software) re-encapsulated PC codecs — video formats
+600–699, e.g. Cinepak (602) — are supported by driving their compiled MovieFS
+decompressor: the tool strips MovieFS's 16-byte per-frame wrapper and selects a
+colour-table-free variant so the module runs unpatched. The WSS freeware modules
+are vendored, so the default `--modules-dir vendor/armovie-codecs` works:
+
+```sh
+build/replay-transcode --input ironman.rpl --modules-dir vendor/armovie-codecs \
+    --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+```
+
+Native (vendored module): 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24
+(`Dec24`→RGB); the palettised `Dec8` family 600 CRAM8 / 604 SMC / 606·624 RGB8 /
+607·609 RLE8 / 613 RLE4 / 622 DL / 623 ANM (8-bit indices coloured via the
+movie's `palette <offset>`); and 614 QT-RLE16 (`Decompress`→RGB555).
+
+Codecs better handled by ffmpeg use **codec pass-through**: with `--output-format
+nut` the frames are de-wrapped and muxed under a codec fourcc so ffmpeg decodes
+them. Wired: 601 CRAM16, 603 RPZA, 605 Ultimotion (MovieFS), and the Indeo codecs
+628/629 (MovieFS) and 901/902 (IMS VideoFS: 901 raw YVU9, 902 Indeo 3.2).
+
+Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
+from the codec sources and not yet validated against real movies. See
+[docs/moviefs-nut-passthrough.md](docs/moviefs-nut-passthrough.md) for the codec
+inventory, the variant analysis, and the VideoFS framing.
+
 ## Acorn cross-check
 
 An optional CTest decodes the checked-in format-19 corpus with the original

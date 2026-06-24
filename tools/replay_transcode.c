@@ -33,6 +33,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
 #include "replay/replay_status.h"
@@ -101,6 +102,14 @@ typedef struct {
     VideoColour colour;         /* working-output interpretation */
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
+    int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
+    int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
+    /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
+     * NUT under this fourcc and let ffmpeg decode it. Set for codecs we can't run
+     * in the sandbox (C codecs / screen-painters), e.g. Indeo. NULL = decode. */
+    const char *passthrough_fourcc;
+    ReplayWrapKind passthrough_wrap; /* per-frame wrapper flavour for the frames */
+    int packed8;                /* COL_PAL8 output is 1 byte/pixel (Dec8), not a word */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -119,6 +128,101 @@ static int codec_info(unsigned codec, CodecInfo *out)
         out->name = "Super Moving Blocks"; out->colour = COL_6Y5UV; return 0;
     case 20: out->module_subpath = "Decomp20/Decompress,ffd";
         out->name = "Moving Blocks Beta"; out->colour = COL_6Y6UV; return 0;
+    /* MovieFS (Warm Silence Software) re-encapsulated PC codecs, 600-699. Each
+     * codec frame is wrapped in a 16-byte MovieFS header; the codecs ship
+     * several decompressor variants and we deliberately drive the Dec24 variant,
+     * whose `FNplook` is empty so it does the full YUV->RGB conversion with its
+     * own internal tables and never needs the caller-supplied colour-lookup
+     * table (R3) that the screen-painting `Decompress`/`DecompresH` variants
+     * require (those infinite-loop unpatched). Dec24 emits 24bpp RGB words
+     * (00 BB GG RR), i.e. COL_RGB888. The WSS modules are 32-bit code, so run
+     * them in 32-bit ARM mode. See docs/moviefs-nut-passthrough.md. */
+    case 602: out->module_subpath = "Decomp602/Dec24,ffd";
+        out->name = "Cinepak (CVID, MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 608: out->module_subpath = "Decomp608/Dec24,ffd";
+        out->name = "RGB24 AVI (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 615: out->module_subpath = "Decomp615/Dec24,ffd";
+        out->name = "QT RLE 24 (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    case 626: out->module_subpath = "Decomp626/Dec24,ffd";
+        out->name = "RGB24 QT (MovieFS)"; out->colour = COL_RGB888;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    /* MovieFS palettised codecs via the Dec8 variant: it does no colour
+     * transform (patch table is -1, so it is r3-free like Dec24) and emits
+     * packed 8-bit palette indices (1 byte/pixel). The palette is the movie's,
+     * read from the AE7 header `palette <offset>` (COL_PAL8, the standard Replay
+     * 8bpp mechanism). FLIC (610) is left out: its Dec8 keeps a per-frame palette
+     * in its own workspace, which a single header palette can't capture. DL (622)
+     * and ANM (623) take no palette in their Dec8, so they use the header palette
+     * like the rest. Not yet validated against a sample. */
+    case 600: out->module_subpath = "Decomp600/Dec8,ffd";
+        out->name = "CRAM8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 604: out->module_subpath = "Decomp604/Dec8,ffd";
+        out->name = "SMC QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 606: out->module_subpath = "Decomp606/Dec8,ffd";
+        out->name = "RGB8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 607: out->module_subpath = "Decomp607/Dec8,ffd";
+        out->name = "RLE8 AVI (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 609: out->module_subpath = "Decomp609/Dec8,ffd";
+        out->name = "RLE8 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 613: out->module_subpath = "Decomp613/Dec8,ffd";
+        out->name = "RLE4 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 624: out->module_subpath = "Decomp624/Dec8,ffd";
+        out->name = "RGB8 QT (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 622: out->module_subpath = "Decomp622/Dec8,ffd";
+        out->name = "DL animation (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    case 623: out->module_subpath = "Decomp623/Dec8,ffd";
+        out->name = "ANM film (MovieFS)"; out->colour = COL_PAL8;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+    /* MovieFS 16bpp codecs that ship only a screen-painter `Decompress`, but
+     * whose `Decompress` is r3-free (no colour-table use, unlike Cinepak's
+     * dithering painter): run unpatched, emitting native RGB555 words. 614
+     * QT-RLE16 lands here because qtrle's depth can't be carried through NUT, so
+     * pass-through to ffmpeg is not an option. (601 CRAM16 and 603 RPZA are also
+     * r3-free but go via pass-through below, which ffmpeg handles cleanly.) */
+    case 614: out->module_subpath = "Decomp614/Decompress,ffd";
+        out->name = "QT RLE 16 (MovieFS)"; out->colour = COL_RGB555;
+        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; return 0;
+    /* Pass-through to ffmpeg (requires --output-format nut): strip the per-frame
+     * wrapper and mux each frame under the matching NUT fourcc, letting ffmpeg
+     * decode. Used where ffmpeg is the cleaner path -- codecs whose only sandbox
+     * variant needs the colour table (601/603) or a runtime the sandbox lacks
+     * (628/629 Indeo, 901/902 VideoFS C codecs), or where avoiding ARM emulation
+     * is simply preferable (605). ffmpeg decodes msvideo1 (CRAM), rpza and ulti
+     * with no extra metadata; CRAM defaults to 16-bit, matching CRAM16. 6xx are
+     * MovieFS-wrapped; 9xx are VideoFS-wrapped (different size field). See
+     * docs/moviefs-nut-passthrough.md. Not yet validated against samples. */
+    case 601: out->name = "CRAM16 AVI (msvideo1, MovieFS, pass-through)";
+        out->passthrough_fourcc = "CRAM";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 603: out->name = "RPZA QT (MovieFS, pass-through)";
+        out->passthrough_fourcc = "rpza";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 605: out->name = "Ultimotion AVI (ulti, MovieFS, pass-through)";
+        out->passthrough_fourcc = "ULTI";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 628: out->name = "Indeo 3.1 (IV31, MovieFS, pass-through)";
+        out->passthrough_fourcc = "IV31";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 629: out->name = "Indeo 3.2 (IV32, MovieFS, pass-through)";
+        out->passthrough_fourcc = "IV32";
+        out->passthrough_wrap = REPLAY_WRAP_MOVIEFS; return 0;
+    case 901: out->name = "Indeo Raw YVU9 (VideoFS, pass-through)";
+        out->passthrough_fourcc = "YVU9";
+        out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
+    case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
+        out->passthrough_fourcc = "IV32";
+        out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
     /* Uncompressed (tiny unpacking decompressor; output per the Info colour
      * line -- see docs/spec/uncompressed-video-formats.md). */
     case 2: out->module_subpath = "Decomp2/Decompress,ffd";
@@ -339,7 +443,7 @@ static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
 static void convert_frame(VideoColour colour, const uint8_t *words,
                           MbPixel *pixels, unsigned stride,
                           unsigned out_w, unsigned out_h,
-                          const uint8_t *palette, uint8_t *rgb)
+                          const uint8_t *palette, int packed8, uint8_t *rgb)
 {
     size_t out_stride = (size_t)out_w * 3;
     unsigned r, x;
@@ -395,10 +499,12 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
             }
         break;
     case COL_PAL8:
+        /* Acorn type 4 emits a word per pixel (index in the low byte); the
+         * MovieFS Dec8 variant emits packed bytes (1 per pixel). */
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
                 size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
-                unsigned idx = words[s * 4];
+                unsigned idx = packed8 ? words[s] : words[s * 4];
                 if (palette != NULL) {
                     rgb[d * 3 + 0] = palette[idx * 3 + 0];
                     rgb[d * 3 + 1] = palette[idx * 3 + 1];
@@ -739,6 +845,59 @@ static void sink_chunk_audio(MuxSink *sink, size_t c)
     replay_buffer_free(&pcm);
 }
 
+/* Pass-through: don't decode -- mux each chunk's (de-wrapped) codec frames
+ * straight into the NUT video stream (whose fourcc the caller set to the codec
+ * tag) and let ffmpeg decode them. The interleaved sound is emitted per chunk,
+ * exactly as in the decode path. Returns the number of frames written.
+ *
+ * A null frame (repeat-previous wrapper marker) re-emits the previous frame's
+ * bytes: correct for the raw/intra codecs; for an inter codec it is an
+ * approximation (no real "no-change" packet exists) -- to be revisited once a
+ * real 9xx sample is available. */
+static unsigned long passthrough_video(const ReplayAe7Movie *movie,
+                                       const uint8_t *movie_data,
+                                       size_t movie_len, const CodecInfo *info,
+                                       MuxSink *sink)
+{
+    unsigned long total = 0;
+    const uint8_t *prev_frame = NULL;
+    size_t prev_len = 0;
+    size_t c;
+
+    for (c = 0; c < movie->chunk_count; c++) {
+        const ReplayAe7Chunk *chunk = &movie->chunks[c];
+        size_t voff = (size_t)chunk->file_offset;
+        size_t vbytes = (size_t)chunk->video_bytes;
+        ReplayFrameWrapIter it;
+        const uint8_t *frame;
+        size_t frame_len;
+        int is_null;
+
+        sink_chunk_audio(sink, c);
+
+        if (vbytes == 0)
+            continue;
+        if (voff > movie_len || vbytes > movie_len - voff)
+            die("chunk %zu video region is out of range", c);
+
+        replay_frame_wrap_iter_init(&it, movie_data + voff, vbytes,
+                                    info->passthrough_wrap);
+        while (replay_frame_wrap_iter_next(&it, &frame, &frame_len, &is_null)) {
+            if (is_null) {
+                if (prev_frame == NULL)
+                    continue; /* no previous frame to repeat */
+                frame = prev_frame;
+                frame_len = prev_len;
+            }
+            sink_video_frame(sink, frame, frame_len);
+            prev_frame = frame;
+            prev_len = frame_len;
+            total++;
+        }
+    }
+    return total;
+}
+
 /* Decode all video frames to RGB24 and push them (and, in NUT mode, the
  * interleaved sound) through `sink`. Returns the number of frames written. */
 static unsigned long transcode_video(const ReplayAe7Movie *movie,
@@ -839,22 +998,40 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         ReplayCodecIf *cif;
         size_t frame_words;
         uint8_t *out_words;
+        uint8_t *unwrap = NULL;     /* scratch for de-wrapped MovieFS payload */
         size_t c;
 
         module = read_file(module_path, &module_len);
-        cif = replay_codecif_open(module, module_len, rounded_w,
-                                  rounded_h, REPLAY_ARM_MODE_26,
+        cif = replay_codecif_open(module, module_len, rounded_w, rounded_h,
+                                  info->arm_mode_32 ? REPLAY_ARM_MODE_32
+                                                    : REPLAY_ARM_MODE_26,
                                   err, sizeof err);
         if (cif == NULL) die("%s", err);
         frame_words = replay_codecif_frame_words_len(cif);
         out_words = malloc(frame_words);
         if (out_words == NULL) die("out of memory");
 
+        /* The de-wrap scratch must hold the largest chunk's video payload
+         * (stripped output is always <= input). */
+        if (info->moviefs_wrapper) {
+            size_t max_vbytes = 0;
+            for (c = 0; c < movie->chunk_count; c++)
+                if (movie->chunks[c].video_bytes > max_vbytes)
+                    max_vbytes = (size_t)movie->chunks[c].video_bytes;
+            if (max_vbytes != 0 && (unwrap = malloc(max_vbytes)) == NULL)
+                die("out of memory");
+        }
+
         for (c = 0; c < movie->chunk_count; c++) {
             const ReplayAe7Chunk *chunk = &movie->chunks[c];
             size_t voff = (size_t)chunk->file_offset;
             size_t vbytes = (size_t)chunk->video_bytes;
+            const uint8_t *vdata;
             size_t offset = 0;
+            /* Frames to decode this chunk: frames_per_chunk normally, but the
+             * MovieFS wrapper tells us the exact count so we never run the
+             * decoder past the end (a runaway WSS frame burns the whole budget). */
+            unsigned frames_this_chunk = movie->frames_per_chunk;
             unsigned f;
 
             /* Interleave this chunk's sound ahead of its video frames. */
@@ -864,11 +1041,23 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 continue;
             if (voff > movie_len || vbytes > movie_len - voff)
                 die("chunk %zu video region is out of range", c);
-            if (replay_codecif_load_payload(cif, movie_data + voff, vbytes,
+
+            vdata = movie_data + voff;
+            if (info->moviefs_wrapper) {
+                size_t unwrap_len = 0;
+                frames_this_chunk = (unsigned)replay_moviefs_unwrap_chunk(
+                    vdata, vbytes, unwrap, &unwrap_len);
+                if (frames_this_chunk == 0)
+                    die("chunk %zu: no MovieFS frames found (bad wrapper?)", c);
+                vdata = unwrap;
+                vbytes = unwrap_len;
+            }
+
+            if (replay_codecif_load_payload(cif, vdata, vbytes,
                                             err, sizeof err) != 0)
                 die("chunk %zu: %s", c, err);
 
-            for (f = 0; f < movie->frames_per_chunk; f++) {
+            for (f = 0; f < frames_this_chunk; f++) {
                 size_t consumed = 0;
                 if (replay_codecif_decode(cif, &offset, out_words, &consumed,
                                           err, sizeof err) != 0) {
@@ -877,11 +1066,13 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                     die("chunk %zu frame %u: %s", c, f, err);
                 }
                 convert_frame(colour, out_words, pixels, rounded_w,
-                              movie->width, movie->height, palette, rgb);
+                              movie->width, movie->height, palette,
+                              info->packed8, rgb);
                 sink_video_frame(sink, rgb, pixel_count * 3);
                 total++;
             }
         }
+        free(unwrap);
         free(out_words);
         replay_codecif_close(cif);
         free(module);
@@ -1082,6 +1273,13 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /* Pass-through codecs are remuxed into NUT for ffmpeg to decode; there is no
+     * decoded RGB24 to write, so raw mode cannot represent them. */
+    int passthrough = have_video && info.passthrough_fourcc != NULL;
+    if (passthrough && !nut_mode)
+        die("video codec %u (%s) is decoded by ffmpeg, not this tool; "
+            "use --output-format nut", movie.video_codec, info.name);
+
     /* ---- set up the output sink ---- */
     FILE *out = stdout;
     int need_out = nut_mode || have_video;
@@ -1109,7 +1307,10 @@ int main(int argc, char **argv)
             unsigned tbn, tbd;
             rational_from_fps(movie.frames_per_second, &tbn, &tbd);
             streams[nstreams].cls = REPLAY_NUT_VIDEO;
-            memcpy(streams[nstreams].fourcc, NUT_FOURCC_RGB24, 4);
+            if (passthrough)
+                memcpy(streams[nstreams].fourcc, info.passthrough_fourcc, 4);
+            else
+                memcpy(streams[nstreams].fourcc, NUT_FOURCC_RGB24, 4);
             streams[nstreams].tb_num = tbn;
             streams[nstreams].tb_den = tbd;
             streams[nstreams].width = movie.width;
@@ -1150,7 +1351,9 @@ int main(int argc, char **argv)
 
     /* ---- video (and, in NUT mode, the interleaved sound) ---- */
     unsigned long total = 0;
-    if (have_video) {
+    if (passthrough) {
+        total = passthrough_video(&movie, movie_data, movie_len, &info, &sink);
+    } else if (have_video) {
         total = transcode_video(&movie, movie_data, movie_len, &info,
                                 module_path, modules_dir, &sink);
     } else if (nut_mode && do_audio) {

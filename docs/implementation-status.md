@@ -126,6 +126,41 @@ this file describes the current portable code in `replay-tooling`.
   the generator asserts the encoder exercised them so the gate cannot silently
   weaken. This is the coverage the focused fixtures lacked.
 
+- MovieFS (Warm Silence Software) re-encapsulated PC codecs (video formats
+  600–699) in `replay-transcode`. The transcoder strips MovieFS's 16-byte
+  per-frame wrapper (`src/replay_moviefs.c`, `replay_moviefs_unwrap_chunk`) and
+  drives the codec's colour-table-free `Dec24` variant in 32-bit ARM mode — its
+  `FNplook` is empty (or a patchable pass-through), so it does the full YUV→RGB
+  conversion with internal tables and never needs the caller-supplied colour
+  table the screen-painting `Decompress` variants require (those infinite-loop
+  unpatched). `Dec24` emits 24bpp RGB (`COL_RGB888`). Wired: 602 Cinepak
+  (validated byte-for-byte against ffmpeg on a real 160×120 movie), plus 608/626
+  RGB24 and 615 QT-RLE24 (same harness-compatible variant, pending sample
+  validation). See `docs/moviefs-nut-passthrough.md`.
+- Codec pass-through to NUT (`--output-format nut`) for codecs the sandbox can't
+  run: instead of decoding, each de-wrapped codec frame is muxed into the NUT
+  video stream under a codec fourcc (`passthrough_video`, `ReplayFrameWrapIter`),
+  letting ffmpeg decode. Wired for Indeo — 628/629 (MovieFS `IV31`/`IV32`) and
+  the IMS VideoFS codecs 901 (raw YVU9 → `YVU9`/rawvideo) and 902 (Indeo 3.2 →
+  `IV32`). VideoFS uses the same 16-byte wrapper as MovieFS but a different size
+  field (`data_len + 28` vs `+ 12`), reverse-engineered from the Decomp901/902 C
+  sources. The pass-through machinery is validated by routing Cinepak through it;
+  the Indeo mappings are not yet validated against a real movie (none available).
+  9xx are decode-only (no compressor exists).
+- MovieFS palettised codecs via the `Dec8` variant (600 CRAM8, 604 SMC, 606/624
+  RGB8, 607 RLE8, 609 QT-RLE8, 613 QT-RLE4). `Dec8` is r3-free and emits packed
+  8-bit palette indices; `convert_frame` gained a packed-byte `COL_PAL8` path
+  (`packed8`) and uses the movie palette from the AE7 header `palette <offset>`.
+  Source-derived; not yet validated against a sample (no palettised MovieFS movie
+  available), and the header-palette assumption is unconfirmed. DL (622) and ANM
+  (623) join the family (their `Dec8` takes no palette); FLIC (610) is excluded
+  (per-frame in-stream palette in its workspace). 614 QT-RLE16 is wired via its
+  r3-free `Decompress` (16bpp RGB555). Pass-through (NUT→ffmpeg) covers 601
+  CRAM16, 603 RPZA and 605 Ultimotion in addition to the Indeo codecs. The WSS
+  freeware decoder modules used by the native paths are vendored under
+  `vendor/armovie-codecs` (the specific `Dec24`/`Dec8`/`Decompress` variant +
+  `Info` per codec), so the default `--modules-dir` drives them.
+
 ## Verified Claims
 
 - Hand-reviewed golden tests cover bit order, Huffman symbols, data blocks, and

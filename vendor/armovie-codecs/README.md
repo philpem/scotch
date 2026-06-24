@@ -38,6 +38,25 @@ acknowledgement of their respective copyright holders:
 | 102 (`Decomp102`) | Escape | © Eidos plc 1993 |
 | 800 (`Decomp800`) | LinePack | © Henrik Bjerregaard Pedersen, 1995 |
 | 802 (`Decomp802`) | Movie 16:3 | © Henrik Bjerregaard Pedersen, 1995 |
+| 600–626 (`Decomp6xx`) | MovieFS (Cinepak, RGB, RLE, …) | © Warm Silence Software 1995–2001 |
+
+### MovieFS codecs (600–699, Warm Silence Software)
+
+MovieFS re-encapsulates Windows/QuickTime codecs into Replay. The WSS modules are
+freeware; only the specific decompressor *variant* each codec is driven through is
+vendored (not the whole suite), with its `Info`:
+
+| Codec(s) | Variant | Working output |
+|----------|---------|----------------|
+| 602 Cinepak, 608/626 RGB24, 615 QT-RLE24 | `Dec24` | 24bpp RGB |
+| 600 CRAM8, 604 SMC, 606/624 RGB8, 607/609 RLE8, 613 RLE4, 622 DL, 623 ANM | `Dec8` | 8bpp palette index |
+| 614 QT-RLE16 | `Decompress` | 16bpp RGB (r3-free, run unpatched) |
+
+The `Dec24`/`Dec8`/r3-free `Decompress` variants need no colour-lookup table, so
+they run in this project's harness unpatched (see `docs/moviefs-nut-passthrough.md`).
+Codecs whose only viable path is ffmpeg are **not** vendored — 601 CRAM16, 603 RPZA
+and 605 Ultimotion (pass-through to ffmpeg `msvideo1`/`rpza`/`ulti`), the Indeo
+codecs 628/629, and 610 FLIC (per-frame in-stream palette, still unwired).
 
 Escape (100/102) declares no colour model in its `Info`; pass `--video-colour`
 to the transcoder for it. Decomp102 was included with the Computer Concepts
@@ -109,7 +128,8 @@ The Replay / ARMovie sources are maintained by **RISC OS Open Ltd**
 (<https://gitlab.riscosopen.org/>, `RiscOS/Sources/SystemRes/ARMovie`); thanks to
 RISC OS Open and the original Acorn and third-party authors.
 
-Out of scope (not vendored): the MovieFS (Warm Silence Software, 600–699) and
-VideoFS (Innovative Media Solutions, 900–999) codecs wrap Windows-world formats
-(Cinepak, Indeo, …); and Iota's LZW (500) ships as an application rather than a
-CodecIf module. ffmpeg's own Cinepak/Indeo decoders are the route for those.
+The MovieFS (Warm Silence Software, 600–699) modules above come from the same
+build. Out of scope (not vendored): the VideoFS (Innovative Media Solutions,
+900–999) Indeo codecs are CLib-dependent C modules the harness can't run, so they
+go via ffmpeg pass-through; and Iota's LZW (500) ships as an application rather
+than a CodecIf module.
