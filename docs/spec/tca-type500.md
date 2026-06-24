@@ -2,9 +2,11 @@
 
 Scoping for Replay video format **500**, the second codec called out in issue #9
 (the "All About Planes" educational disc; sample `test-videos/BUCCAN`). Status:
-*8bpp (mode 28/21) implemented — `src/replay_tca.c` + `replay-transcode` case 500,
-validated end to end on BUCCAN (transcodes to the Buccaneer aircraft). The 4-bit
-screen modes and the audio track remain.*
+*Video implemented for all screen modes — `src/replay_tca.c` + `replay-transcode`
+case 500. 8-bit (28/21/15/36/40) and 4-bit (27/12/13/39) modes decode; validated
+end to end on BUCCAN (the Buccaneer) and against the Iota `.tca` corpus
+(dino/bang/timer/…). The Iota audio track and multi-chunk handling remain (logged
+as issues).*
 
 ## Summary
 
@@ -210,21 +212,27 @@ video decode and well below it in priority — the video frames are the goal.
 
 `src/replay_tca.c` (`include/replay/replay_tca.h`) decodes the IotaFilm — ACEF
 header, PALE palette, and the LZW/RLE/raw + Delta frame blocks — to 8bpp indices
-+ an RGB palette, for the 8-bit modes (28/21). `replay-transcode` drives it via a
-native `direct_tca` dispatch (`codec_info` case 500): the film is read from the
-first chunk's offset, each frame goes through `COL_PAL8` → RGB24. Iota sound
-(codec 500) is not decoded, so a type-500 movie transcodes video-only (use
++ an RGB palette, for the 8-bit modes (28/21). All screen modes are handled: 8-bit direct (28/21), 4-bit
+nibble-unpacked full height (27), and the half-height vertically-doubled 4-bit
+(12/13/39) and 8-bit (15/36/40) modes — the packed buffer is decoded then
+expanded to `width*height` indices. `replay-transcode` drives it via a native
+`direct_tca` dispatch (`codec_info` case 500): the film is read from the first
+chunk's offset, each frame goes through `COL_PAL8` → RGB24. Iota sound (codec
+500) is not decoded, so a type-500 movie transcodes video-only (use
 `--skip-unsupported` for the audio track). `test_replay_tca` covers the
-raw/LZW/Delta paths on synthetic films; BUCCAN transcodes end to end to the
-Buccaneer aircraft.
+raw/LZW/Delta and mode-27 (4-bit) paths on synthetic films; BUCCAN transcodes end
+to end to the Buccaneer, and the `.tca` corpus (modes 27/12/15/28, Normal and
+Delta) decodes correctly.
 
 ## Remaining work / open questions
 
-- **4-bit modes** (12/15/27, ~10 corpus films): nibble expansion and the
-  half-res / row-doubled output layouts above. Mode 28 is done.
-- **RLE (technique 0)** is documented but untested — no corpus sample uses it.
-- **Multi-chunk** type-500 layout: BUCCAN is a single chunk holding the whole
-  ACEF. How a multi-chunk movie splits frames across Replay chunks (and whether
-  PALE/SOUN are stored once) needs a second Replay-wrapped sample to confirm.
-- **Audio**: Iota sound (`SOUN` SoundLib `&C47` + `DIR1` sequencer) — separate,
-  lower-priority task (see the Audio section).
+- **Audio** (logged as an issue): Iota sound is event-driven (`DIR1` play events
+  against the `SOUN` SoundLib `&C47`), not a linear PCM track — a separate,
+  larger task (see the Audio section). Type-500 movies currently transcode
+  video-only.
+- **Multi-chunk** (logged as an issue): BUCCAN is a single chunk holding the whole
+  ACEF. Whether type-500 movies are ever split across multiple Replay chunks (and
+  if so how frames/PALE are distributed) is unconfirmed — it may not occur in
+  practice; needs a multi-chunk sample.
+- **RLE (technique 0)** is implemented from `euclid.rs` but untested — no corpus
+  sample uses it (all are LZW).

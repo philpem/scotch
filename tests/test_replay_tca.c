@@ -54,19 +54,20 @@ static size_t lzw_literals(const uint8_t *px, unsigned n, uint8_t *out)
 /* Build a one-or-two-frame mode-28 IotaFilm (ACEF + PALE). `technique` 1=LZW,
  * 2=raw; `flags` bit0 = delta. `frames` is nframes * FRM bytes. Returns malloc'd
  * buffer, *len set. */
-static uint8_t *build_film(unsigned technique, unsigned flags,
-                           const uint8_t *frames, unsigned nframes, size_t *len)
+static uint8_t *build_film(unsigned mode, unsigned technique, unsigned flags,
+                           const uint8_t *frames, size_t frame_bytes,
+                           unsigned nframes, size_t *len)
 {
     uint8_t blocks[512];
     size_t bl = 0;
     unsigned f;
     for (f = 0; f < nframes; f++) {
-        const uint8_t *px = frames + (size_t)f * FRM;
+        const uint8_t *px = frames + (size_t)f * frame_bytes;
         uint8_t data[64] = {0};
         size_t dlen;
         uint32_t L;
-        if (technique == 2) { memcpy(data, px, FRM); dlen = FRM; }
-        else { dlen = lzw_literals(px, FRM, data); }
+        if (technique == 2) { memcpy(data, px, frame_bytes); dlen = frame_bytes; }
+        else { dlen = lzw_literals(px, (unsigned)frame_bytes, data); }
         L = (uint32_t)(8 + dlen);          /* [len][data][len] */
         put_u32(blocks, bl, L); bl += 4;
         memcpy(blocks + bl, data, dlen); bl += dlen;
@@ -91,7 +92,7 @@ static uint8_t *build_film(unsigned technique, unsigned flags,
         put_u32(b, film + 16, 64);                    /* offset to film start */
         put_u32(b, film + 20, W * 2);                 /* width in OS units */
         put_u32(b, film + 24, H * 2);
-        put_u32(b, film + 28, 28);                    /* mode */
+        put_u32(b, film + 28, mode);                  /* mode */
         put_u32(b, film + 32, technique);
         put_u32(b, film + 36, flags);
         memcpy(b + film + 64, blocks, bl);
@@ -113,12 +114,14 @@ static uint8_t *build_film(unsigned technique, unsigned flags,
     }
 }
 
-static void test_one(const char *what, unsigned technique, unsigned flags,
-                     const uint8_t *frames, unsigned nframes,
-                     const uint8_t *expect /* nframes*FRM running frames */)
+static void test_one(const char *what, unsigned mode, unsigned technique,
+                     unsigned flags, const uint8_t *frames, size_t frame_bytes,
+                     unsigned nframes,
+                     const uint8_t *expect /* nframes*FRM display frames */)
 {
     size_t len;
-    uint8_t *film = build_film(technique, flags, frames, nframes, &len);
+    uint8_t *film = build_film(mode, technique, flags, frames, frame_bytes,
+                               nframes, &len);
     char err[256] = {0};
     ReplayTca *t = replay_tca_open(film, len, err, sizeof err);
     unsigned f;
@@ -147,13 +150,13 @@ static void test_one(const char *what, unsigned technique, unsigned flags,
 
 int main(void)
 {
-    /* raw single frame */
+    /* raw single frame (mode 28, 8-bit) */
     const uint8_t raw[FRM] = { 3, 1, 2, 0 };
-    test_one("raw", 2, 0, raw, 1, raw);
+    test_one("raw", 28, 2, 0, raw, FRM, 1, raw);
 
     /* LZW single frame (literals) */
     const uint8_t lz[FRM] = { 10, 20, 30, 40 };
-    test_one("lzw", 1, 0, lz, 1, lz);
+    test_one("lzw", 28, 1, 0, lz, FRM, 1, lz);
 
     /* Delta: two raw frames; the running frame is A then A^B */
     {
@@ -162,7 +165,15 @@ int main(void)
         unsigned i;
         memcpy(expect, frames, FRM);
         for (i = 0; i < FRM; i++) expect[FRM + i] = frames[i] ^ frames[FRM + i];
-        test_one("delta", 2, 1 /*delta*/, frames, 2, expect);
+        test_one("delta", 28, 2, 1 /*delta*/, frames, FRM, 2, expect);
+    }
+
+    /* Mode 27 (4-bit, full height): 2 packed bytes -> 2 rows of 2 px each, low
+     * nibble = left pixel. [0x21,0x43] -> [1,2] then [3,4]. */
+    {
+        const uint8_t packed[2] = { 0x21, 0x43 };
+        const uint8_t expect[FRM] = { 1, 2, 3, 4 };
+        test_one("mode27", 27, 2, 0, packed, 2 /*frame_bytes*/, 1, expect);
     }
 
     if (failures == 0)

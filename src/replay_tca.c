@@ -173,7 +173,7 @@ ReplayTca *replay_tca_open(const uint8_t *data, size_t len,
     size_t acef, film, pale;
     uint32_t flen, foff;
     size_t p;
-    unsigned i;
+    size_t i;
 
     acef = find_chunk(data, len, "ACEF");
     if (acef == (size_t)-1) { set_err(err, errlen, "no ACEF chunk"); return NULL; }
@@ -198,31 +198,53 @@ ReplayTca *replay_tca_open(const uint8_t *data, size_t len,
     t->film_start = film;
     t->film_end = film + flen;
 
-    if (t->mode != 28 && t->mode != 21) {
-        char m[64];
-        snprintf(m, sizeof m, "TCA screen mode %u not supported (8bpp only)", t->mode);
-        set_err(err, errlen, m);
-        free(t);
-        return NULL;
-    }
     if (t->technique > 2) {
         set_err(err, errlen, "unknown TCA compression technique"); free(t); return NULL;
     }
     if (t->width == 0 || t->height == 0) {
         set_err(err, errlen, "zero TCA dimensions"); free(t); return NULL;
     }
-    t->frame_words = (size_t)t->width * t->height;  /* mode 28/21: 8bpp direct */
+    /* Decompressed (packed) screen size by RISC OS mode. The display is always
+     * width*height 8-bit indices; output expansion (nibble unpack / vertical
+     * doubling) happens in replay_tca_next_frame. */
+    switch (t->mode) {
+    case 21: case 28:                     /* 8-bit direct */
+        t->frame_words = (size_t)t->width * t->height; break;
+    case 27:                              /* 4-bit, full height */
+        if (t->width & 1u) goto odd;
+        t->frame_words = (size_t)(t->width / 2) * t->height; break;
+    case 12: case 13: case 39:            /* 4-bit, half height (doubled) */
+        if ((t->width & 1u) || (t->height & 1u)) goto odd;
+        t->frame_words = (size_t)(t->width / 2) * (t->height / 2); break;
+    case 15: case 36: case 40:            /* 8-bit, half height (doubled) */
+        if (t->height & 1u) goto odd;
+        t->frame_words = (size_t)t->width * (t->height / 2); break;
+    default: {
+        char m[64];
+        snprintf(m, sizeof m, "TCA screen mode %u not supported", t->mode);
+        set_err(err, errlen, m); free(t); return NULL;
+    }
+    odd:
+        set_err(err, errlen, "TCA dimensions not even for this mode");
+        free(t); return NULL;
+    }
 
-    /* PALE: 9 header words then the ColourTrans palette, on disk [idx][R][G][B]. */
+    /* PALE: 9 header words then the ColourTrans palette, on disk [idx][R][G][B].
+     * The entry count comes from the chunk size (4-bit films carry 16). */
     pale = find_chunk(data, len, "PALE");
-    if (pale != (size_t)-1 && pale + 36 + 256 * 4 <= len) {
-        for (i = 0; i < 256; i++) {
-            size_t o = pale + 36 + (size_t)i * 4;
-            t->palette[i * 3 + 0] = data[o + 1];
-            t->palette[i * 3 + 1] = data[o + 2];
-            t->palette[i * 3 + 2] = data[o + 3];
+    if (pale != (size_t)-1) {
+        uint32_t psize = rd_u32(data, pale + 4);
+        size_t nent = psize > 36 ? (psize - 36) / 4 : 0;
+        if (nent > 256) nent = 256;
+        if (pale + 36 + nent * 4 <= len) {
+            for (i = 0; i < nent; i++) {
+                size_t o = pale + 36 + (size_t)i * 4;
+                t->palette[i * 3 + 0] = data[o + 1];
+                t->palette[i * 3 + 1] = data[o + 2];
+                t->palette[i * 3 + 2] = data[o + 3];
+            }
         }
-    } /* else: leave a black palette (greyscale fallback would also be reasonable) */
+    } /* else: black palette (a greyscale ramp would also be reasonable) */
 
     /* Count frames (blocks [len][data][len], advance by len, 0 terminates). */
     p = film + foff;
@@ -263,6 +285,50 @@ unsigned replay_tca_height(const ReplayTca *t) { return t->height; }
 unsigned replay_tca_frame_count(const ReplayTca *t) { return t->count; }
 const uint8_t *replay_tca_palette(const ReplayTca *t) { return t->palette; }
 
+/* Expand the decoded (packed) screen `t->frame` to `out` (width*height 8-bit
+ * indices), per the RISC OS screen mode: nibble unpack for 4-bit modes (low
+ * nibble = left pixel) and vertical doubling for the half-height modes. */
+static void tca_expand(const ReplayTca *t, uint8_t *out)
+{
+    unsigned W = t->width, H = t->height, r, c;
+    const uint8_t *f = t->frame;
+    switch (t->mode) {
+    case 27:
+        for (r = 0; r < H; r++) {
+            const uint8_t *s = f + (size_t)r * (W / 2);
+            uint8_t *d = out + (size_t)r * W;
+            for (c = 0; c < W / 2; c++) {
+                d[2 * c]     = (uint8_t)(s[c] & 0x0F);
+                d[2 * c + 1] = (uint8_t)(s[c] >> 4);
+            }
+        }
+        break;
+    case 12: case 13: case 39:
+        for (r = 0; r < H / 2; r++) {
+            const uint8_t *s = f + (size_t)r * (W / 2);
+            uint8_t *d0 = out + (size_t)(2 * r) * W;
+            uint8_t *d1 = d0 + W;
+            for (c = 0; c < W / 2; c++) {
+                d0[2 * c]     = (uint8_t)(s[c] & 0x0F);
+                d0[2 * c + 1] = (uint8_t)(s[c] >> 4);
+            }
+            memcpy(d1, d0, W);
+        }
+        break;
+    case 15: case 36: case 40:
+        for (r = 0; r < H / 2; r++) {
+            const uint8_t *s = f + (size_t)r * W;
+            uint8_t *d0 = out + (size_t)(2 * r) * W;
+            memcpy(d0, s, W);
+            memcpy(d0 + W, s, W);
+        }
+        break;
+    default: /* 21 / 28: 8-bit direct */
+        memcpy(out, f, (size_t)W * H);
+        break;
+    }
+}
+
 int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen)
 {
     uint32_t L;
@@ -301,7 +367,7 @@ int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen)
         for (i = 0; i < t->frame_words; i++)
             t->frame[i] ^= t->scratch[i];
     }
-    memcpy(out, t->frame, t->frame_words);
+    tca_expand(t, out);
     t->cursor += L;
     return 1;
 }
