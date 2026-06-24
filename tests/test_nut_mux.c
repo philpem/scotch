@@ -57,10 +57,11 @@ static uint64_t read_be64(const uint8_t *d)
     return v;
 }
 
-static uint32_t read_le32(const uint8_t *d)
+/* CRC footers are stored big-endian (see replay_nut.c). */
+static uint32_t read_be32(const uint8_t *d)
 {
-    return (uint32_t)d[0] | ((uint32_t)d[1] << 8) | ((uint32_t)d[2] << 16)
-           | ((uint32_t)d[3] << 24);
+    return ((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16)
+           | ((uint32_t)d[2] << 8) | (uint32_t)d[3];
 }
 
 static size_t count_startcode(const uint8_t *d, size_t len, uint64_t sc)
@@ -147,7 +148,7 @@ int main(void)
     CHECK(fwd >= 4 && pos + fwd <= len, "main forward_ptr in range");
     if (fwd >= 4 && pos + fwd <= len) {
         size_t payload_len = (size_t)fwd - 4;
-        uint32_t stored = read_le32(buf + pos + payload_len);
+        uint32_t stored = read_be32(buf + pos + payload_len);
         CHECK(crc32(buf + pos, payload_len) == stored, "main footer CRC");
         /* version=3, stream_count=2, max_distance, time_base_count=2 */
         size_t hp = pos;

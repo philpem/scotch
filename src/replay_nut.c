@@ -7,8 +7,10 @@
  *   - integers use NUT's big-endian-grouped variable-length coding (v) and the
  *     zig-zag signed coding (s); fixed 64-bit startcodes are big-endian.
  *   - every startcode packet ends with a CRC-32 footer; the CRC uses the NUT
- *     polynomial 0x04C11DB7, init 0, MSB-first (non-reflected, no final xor),
- *     and is written little-endian -- matching ff_crc04C11DB7 / AV_CRC_32_IEEE.
+ *     polynomial 0x04C11DB7, init 0, MSB-first (non-reflected, no final xor).
+ *     ffmpeg verifies it by folding the stored bytes back into the running CRC
+ *     and checking the result is zero, so the checksum is appended big-endian
+ *     (the residue property of this CRC) -- matching ff_crc04C11DB7.
  */
 
 #include "replay/replay_nut.h"
@@ -97,13 +99,15 @@ static ReplayStatus nut_emit(ReplayNutMuxer *m, const void *p, size_t n)
     return REPLAY_OK;
 }
 
-static ReplayStatus nut_emit_u32le(ReplayNutMuxer *m, uint32_t v)
+/* CRC values are written big-endian so that ffmpeg's residue check (fold the
+ * stored bytes into the running CRC, expect zero) passes. */
+static ReplayStatus nut_emit_crc(ReplayNutMuxer *m, uint32_t v)
 {
     uint8_t b[4];
-    b[0] = (uint8_t)v;
-    b[1] = (uint8_t)(v >> 8);
-    b[2] = (uint8_t)(v >> 16);
-    b[3] = (uint8_t)(v >> 24);
+    b[0] = (uint8_t)(v >> 24);
+    b[1] = (uint8_t)(v >> 16);
+    b[2] = (uint8_t)(v >> 8);
+    b[3] = (uint8_t)v;
     return nut_emit(m, b, 4);
 }
 
@@ -138,7 +142,7 @@ static ReplayStatus nut_emit_packet(ReplayNutMuxer *m, uint64_t startcode,
         uint8_t hbuf[8 + 10];
         memcpy(hbuf, sc, 8);
         memcpy(hbuf + 8, fwd.data, fwd.size);
-        st = nut_emit_u32le(m, nut_crc32(hbuf, 8 + fwd.size));
+        st = nut_emit_crc(m, nut_crc32(hbuf, 8 + fwd.size));
         if (st != REPLAY_OK)
             goto done;
     }
@@ -146,7 +150,7 @@ static ReplayStatus nut_emit_packet(ReplayNutMuxer *m, uint64_t startcode,
     st = nut_emit(m, payload->data, payload->size);
     if (st != REPLAY_OK)
         goto done;
-    st = nut_emit_u32le(m, nut_crc32(payload->data, payload->size));
+    st = nut_emit_crc(m, nut_crc32(payload->data, payload->size));
 
 done:
     replay_buffer_free(&fwd);
@@ -372,7 +376,7 @@ ReplayStatus replay_nut_write_frame(ReplayNutMuxer *m, size_t stream_index,
     st = nut_emit(m, hdr.data, hdr.size);
     if (st != REPLAY_OK)
         goto done;
-    st = nut_emit_u32le(m, nut_crc32(hdr.data, hdr.size));
+    st = nut_emit_crc(m, nut_crc32(hdr.data, hdr.size));
     if (st != REPLAY_OK)
         goto done;
     st = nut_emit(m, data, len);

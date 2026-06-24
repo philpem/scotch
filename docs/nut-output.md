@@ -61,7 +61,9 @@ The bitstream mirrors ffmpeg's own `libavformat/nutenc.c` field for field:
   startcodes are big-endian.
 - Every startcode packet ends with a CRC-32 footer and every frame carries an
   absolute pts and a header CRC (NUT polynomial `0x04C11DB7`, init 0, MSB-first,
-  written little-endian — the `AV_CRC_32_IEEE` variant ffmpeg uses).
+  the `AV_CRC_32_IEEE` variant). ffmpeg verifies a footer by folding the stored
+  bytes back into the running CRC and checking the result is zero, so the
+  checksum is appended big-endian (this CRC's residue property).
 - A single frame-code table row gives all 256 codes `FLAG_CODED`, so each frame
   states its own flags explicitly; output is purely sequential (no index is
   written), which is ideal for a pipe.
