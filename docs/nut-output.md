@@ -1,17 +1,17 @@
 # NUT container output
 
-`replay-transcode --output-format nut` muxes the decoded video and sound into a
-single [NUT](https://ffmpeg.org/nut.html) stream instead of emitting headerless
-RGB24 on stdout plus a sidecar WAV. NUT is the low-overhead container designed
-by the FFmpeg/MPlayer developers; ffmpeg demuxes it directly from a pipe, so the
-whole transcode becomes:
+`replay-transcode` muxes the decoded video and sound into a single
+[NUT](https://ffmpeg.org/nut.html) stream **by default**, instead of emitting
+headerless RGB24 on stdout plus a sidecar WAV (the older `--output-format raw`).
+NUT is the low-overhead container designed by the FFmpeg/MPlayer developers;
+ffmpeg demuxes it directly from a pipe, so the whole transcode becomes:
 
 ```sh
 build/replay-transcode --input movie,ae7 --modules-dir vendor/armovie-codecs \
-    --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+  | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
 ```
 
-Compared with raw mode this removes three sources of friction:
+Compared with the raw split form this removes three sources of friction:
 
 - **No manual geometry.** The width, height, frame rate, pixel format, sample
   rate and channel count travel in the container header, so ffmpeg no longer
@@ -22,8 +22,10 @@ Compared with raw mode this removes three sources of friction:
   stderr because the user otherwise can't know the geometry; nut mode just needs
   `ffmpeg -i -`.
 
-Raw mode (the default) is unchanged and still useful when you want the bare
-RGB24 frames or a standalone WAV.
+NUT is also the only output that can carry the **pass-through** codecs (Indeo,
+CRAM16, …), whose frames only ffmpeg can decode. `--output-format raw` remains
+available for the bare RGB24 frames or a standalone WAV, but errors for those
+codecs.
 
 ## What the stream contains
 

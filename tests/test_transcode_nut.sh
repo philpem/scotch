@@ -24,7 +24,7 @@ mkdir -p "$work"
 "$maker" "$work/m.ae7" "$work/expected.pcm"
 
 # Raw mode: RGB24 video to a file, sound to a WAV (the reference video bytes).
-"$transcode" --input "$work/m.ae7" --output "$work/raw.rgb" \
+"$transcode" --output-format raw --input "$work/m.ae7" --output "$work/raw.rgb" \
     --audio-output "$work/raw.wav" >/dev/null 2>&1
 
 # NUT mode: muxed single stream.

@@ -21,7 +21,7 @@ mkdir -p "$work"
 
 # pack at 16, declare 12 -> transcoder rounds to 16, crops to 12
 "$maker" "$work/m.ae7" "$work/expected.rgb" 16 8 5 2 12
-"$transcode" --input "$work/m.ae7" --module "$module" --output "$work/out.rgb"
+"$transcode" --output-format raw --input "$work/m.ae7" --module "$module" --output "$work/out.rgb"
 
 if cmp -s "$work/expected.rgb" "$work/out.rgb"; then
     echo "ok type23 rounding 12->16 via Decomp23 module matches cropped native"

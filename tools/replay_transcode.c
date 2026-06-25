@@ -1,20 +1,22 @@
-/* replay-transcode -- decode a Replay (ARMovie) movie to raw RGB24 video (and
- * optionally a WAV sound track) for ffmpeg.
+/* replay-transcode -- decode a Replay (ARMovie) movie to video for ffmpeg.
  *
  * Parses the container, decodes each frame -- running the original compiled
  * decompressor under the ARMulator (via replay/codecif.h) for the Moving
  * Blocks / Moving Lines codecs and for the uncompressed formats (whose tiny
- * Decompress modules just unpack fixed-layout pixels), or with the native
- * unpacker for type 23 -- converts to RGB24, and streams the frames to stdout:
+ * Decompress modules just unpack fixed-layout pixels), the native unpacker for
+ * type 23, or the native TCA decoder for type 500 -- and muxes the video, sound
+ * and geometry/frame-rate into a single NUT stream that pipes straight into
+ * ffmpeg (the default):
  *
  *   replay-transcode --input movie,ae7 --modules-dir vendor/armovie-codecs \
- *       --audio-output sound.wav \
- *     | ffmpeg -f rawvideo -pixel_format rgb24 -video_size WxH -framerate FPS \
- *         -i - -i sound.wav -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+ *     | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
  *
- * The exact ffmpeg command (with this movie's geometry/rate and any sound) is
- * printed to stderr. The video decode loop and pixel conversions are shared
- * with replay-armsim through replay/codecif.h.
+ * `--output-format raw` is the older split form: headerless RGB24 frames to
+ * stdout plus an optional `--audio-output FILE.wav` sidecar (it then prints the
+ * exact `-f rawvideo ...` ffmpeg command to stderr). Raw mode cannot represent
+ * the pass-through codecs (Indeo, CRAM16, ...), which only ffmpeg can decode --
+ * those require NUT. The decode loop and pixel conversions are shared with
+ * replay-armsim through replay/codecif.h.
  *
  * The compiled decompressor is not stored in the movie, so for the codec types
  * that need one it must be supplied: --module FILE, or --modules-dir DIR from
@@ -1211,7 +1213,7 @@ int main(int argc, char **argv)
     const char *input_path = NULL, *module_path = NULL, *modules_dir = NULL;
     const char *output_path = NULL, *audio_output = NULL;
     const char *audio_format_name = NULL, *video_colour_name = NULL;
-    const char *output_format = "raw";
+    const char *output_format = "nut";
     int skip_unsupported = 0;
     int nut_mode;
     int i;

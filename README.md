@@ -59,7 +59,7 @@ from the GDB sources (see [vendor/armulator](vendor/armulator)).
 | `replay-extract` | Pull fixed-size raw frames out of uncompressed intermediates (types 2 and 23). |
 | `replay-encode` | Encode RGB24 (or native packed) frames to raw codec payloads. |
 | `replay-join` | Assemble payloads, sound, and a poster into a playable `.ae7` movie. |
-| `replay-transcode` | Decode a Replay movie back to video for ffmpeg: raw RGB24 (+ WAV sound), or a muxed NUT container (`--output-format nut`). |
+| `replay-transcode` | Decode a Replay movie back to video for ffmpeg: a muxed NUT stream (default), or split RGB24 + WAV sidecar (`--output-format raw`). |
 | `replay-verify` | Decode/verify raw payloads and cross-check against Acorn output. |
 | `tools/replay-make` | One-command ffmpeg → encode → join pipeline. |
 
@@ -121,31 +121,28 @@ alignment, and the sound formats.
 
 ## Transcode back to video
 
-`replay-transcode` parses a movie, decodes each frame, and either streams RGB24
-to stdout (optionally writing a sidecar WAV) or muxes audio and video together
-into a NUT container that pipes straight into ffmpeg.
-
-The easy path is `--output-format nut`: one self-describing stream carries the
-video, the sound, and the geometry/frame-rate, so ffmpeg needs no `-f rawvideo
--video_size … -framerate …` and no second input:
+`replay-transcode` parses a movie, decodes each frame, and **by default** muxes
+the video, sound and geometry/frame-rate into a single NUT stream that pipes
+straight into ffmpeg — no `-f rawvideo -video_size … -framerate …`, no second
+input:
 
 ```sh
 build/replay-transcode --input movie,ae7 --modules-dir vendor/armovie-codecs \
-    --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+  | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
 ```
 
-The default raw mode streams headerless RGB24 to stdout and writes the sound to
-a separate WAV; it needs the geometry and rate spelled out to ffmpeg:
+`--output-format raw` selects the older split form: headerless RGB24 frames to
+stdout plus an optional `--audio-output sound.wav` sidecar. It needs the geometry
+and rate spelled out to ffmpeg (the exact command is printed to stderr), and it
+**cannot** carry the pass-through codecs (Indeo, CRAM16, …) that only ffmpeg can
+decode — those require the default NUT output:
 
 ```sh
 build/replay-transcode --input movie,ae7 --modules-dir vendor/armovie-codecs \
-    --audio-output sound.wav \
+    --output-format raw --audio-output sound.wav \
   | ffmpeg -f rawvideo -pixel_format rgb24 -video_size WxH -framerate FPS \
       -i - -i sound.wav -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
-```
-
-In raw mode the exact ffmpeg command (with this movie's geometry, rate, and any
-sound) is printed to stderr, so you can copy it. See
+``` See
 [docs/nut-output.md](docs/nut-output.md) for the container details. The compiled
 decompressor is not stored
 in the movie, so for the codecs that need one supply it with `--module FILE` or

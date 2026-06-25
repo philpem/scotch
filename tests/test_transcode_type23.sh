@@ -14,7 +14,7 @@ mkdir -p "$work"
 # 16x8, 5 frames, 2 frames/chunk -> chunks of 2,2,1 (tests a short final chunk).
 "$maker" "$work/m.ae7" "$work/expected.rgb" 16 8 5 2
 
-"$transcode" --input "$work/m.ae7" --output "$work/out.rgb"
+"$transcode" --output-format raw --input "$work/m.ae7" --output "$work/out.rgb"
 
 if cmp -s "$work/expected.rgb" "$work/out.rgb"; then
     echo "ok type23 transcode matches expected"

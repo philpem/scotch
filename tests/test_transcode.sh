@@ -22,7 +22,7 @@ mkdir -p "$work"
 
 width=160
 height=128
-"$transcode" --input "$movie" --modules-dir "$modules_dir" \
+"$transcode" --output-format raw --input "$movie" --modules-dir "$modules_dir" \
     --output "$work/out.rgb"
 
 size=$(wc -c < "$work/out.rgb")
