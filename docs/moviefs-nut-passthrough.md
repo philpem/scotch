@@ -259,9 +259,8 @@ it (matches the decode path); the individual fourcc mappings are not yet validat
 against real movies — except **FLIC's decode path, validated with a synthesised
 FLI_FRAME**: ffmpeg's flic reads the NUT stream with no extradata (depth defaults
 to 8) and decodes the in-stream FLI_COLOR palette correctly, so FLIC needs no
-special palette handling. A container null frame (repeat-previous) re-emits the
-previous frame's bytes (exact for raw/intra, approximate for an inter codec — to
-revisit with a sample).
+special palette handling. The wrapper iterator skips zero-word inter-frame padding
+(see below), so both the native and pass-through paths walk the same frames.
 
 FLIC (610) is handled here rather than via its native `Dec8` (whose palette lives
 in a per-frame workspace array that a single header palette can't capture);
@@ -307,11 +306,20 @@ height@+12, data@+16), but the **size word means something different**:
 | MovieFS (6xx) | data_len + 12 | header[0] − 12 | header[0] + 4 (= 16 + data_len) |
 | VideoFS (9xx) | data_len + 28 | header[0] − 28 | header[0] − 12 (= 16 + data_len) |
 
-`header[0] == 0` marks a null frame (repeat the previous frame). Note also that,
-unlike the MovieFS codecs (which are fed the *unwrapped* frame — the player
-strips the header), the VideoFS codecs read the 16-byte header *themselves*; but
-the bytes stored in the Replay chunk are the wrapped frames either way, so an
-extractor strips the 16-byte header and takes `header[0] − 28` bytes at +16.
+Note also that, unlike the MovieFS codecs (which are fed the *unwrapped* frame —
+the player strips the header), the VideoFS codecs read the 16-byte header
+*themselves*; but the bytes stored in the Replay chunk are the wrapped frames
+either way, so an extractor strips the 16-byte header and takes `header[0] − 28`
+bytes at +16.
+
+> **Zero size-words are inter-frame padding, not "repeat previous" markers.** Real
+> MovieFS Cinepak movies (e.g. `id4_1`, issue #39) separate frames with runs of
+> 0/4/16 zero bytes — a 4-byte gap cannot be a 16-byte wrapper — so the wrapper
+> iterator skips any run of zero size-words to the next real wrapper. The 9xx
+> source's `header[0] == 0 → return source` (read above as "null frame: copy
+> previous") is therefore reinterpreted as padding for framing purposes; the
+> repeat-previous behaviour is unvalidated (no 9xx sample exists) and, if a real
+> 9xx movie ever needs it, would be handled at the decoder, not the iterator.
 
 ### Native execution is not viable; use NUT → FFmpeg
 

@@ -88,25 +88,45 @@ int main(void)
         CHECK(n == 3, "moviefs iter count");
     }
 
-    /* --- VideoFS (size = len + 28) with a null frame in the middle --- */
+    /* --- VideoFS (size = len + 28): a basic two-frame stride --- */
     {
         uint8_t v[256]; size_t vl = 0;
         ReplayFrameWrapIter it;
-        const uint8_t *fr; size_t fl; int nul;
-        int n = 0, nulls = 0;
+        const uint8_t *fr; size_t fl; int nul; int n = 0;
         vl += put_wrapped(v + vl, f0, sizeof f0, 160, 120, 28);
-        vl += put_wrapped(v + vl, NULL, 0, 160, 120, 0); /* null frame */
         vl += put_wrapped(v + vl, f2, sizeof f2, 160, 120, 28);
-        /* stride for a VideoFS frame is 16 + len; null frame advances 16. */
-        CHECK(vl == (16 + 5) + 16 + (16 + 6), "videofs wrapped length");
+        CHECK(vl == (16 + 5) + (16 + 6), "videofs wrapped length");
         replay_frame_wrap_iter_init(&it, v, vl, REPLAY_WRAP_VIDEOFS);
         while (replay_frame_wrap_iter_next(&it, &fr, &fl, &nul)) {
-            if (nul) { nulls++; CHECK(fl == 0, "videofs null len"); }
-            else if (n == 0) CHECK(fr == v + 16 && fl == 5, "videofs frame 0");
+            CHECK(!nul, "videofs not null");
+            if (n == 0) CHECK(fr == v + 16 && fl == 5, "videofs frame 0");
             else CHECK(fl == 6, "videofs frame 2");
-            if (!nul) n++;
+            n++;
         }
-        CHECK(n == 2 && nulls == 1, "videofs iter count");
+        CHECK(n == 2, "videofs iter count");
+    }
+
+    /* --- Zero-word inter-frame padding is skipped (issue #39: real MovieFS
+     * Cinepak movies pad between frames with 0/4/16 zero bytes -- not a 16-byte
+     * "null frame", so a 4-byte gap must not be mistaken for a wrapper). --- */
+    {
+        uint8_t v[256]; size_t vl = 0;
+        ReplayFrameWrapIter it;
+        const uint8_t *fr; size_t fl; int nul; int n = 0;
+        size_t f2_at;
+        vl += put_wrapped(v + vl, f0, sizeof f0, 160, 88, 12);
+        memset(v + vl, 0, 4); vl += 4;                       /* 4-byte pad */
+        f2_at = vl + 16;
+        vl += put_wrapped(v + vl, f2, sizeof f2, 160, 88, 12);
+        memset(v + vl, 0, 16); vl += 16;                     /* 16-byte pad */
+        replay_frame_wrap_iter_init(&it, v, vl, REPLAY_WRAP_MOVIEFS);
+        while (replay_frame_wrap_iter_next(&it, &fr, &fl, &nul)) {
+            CHECK(!nul, "padding never yields a null");
+            if (n == 0) CHECK(fr == v + 16 && fl == 5, "pad: frame 0");
+            else CHECK(fr == v + f2_at && fl == 6, "pad: frame 1 after 4-byte gap");
+            n++;
+        }
+        CHECK(n == 2, "padding skipped, two real frames (trailing pad ignored)");
     }
 
     /* --- WRAP_NONE: the whole payload is one frame (Eidos Escape 130) --- */
