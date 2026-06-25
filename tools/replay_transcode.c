@@ -235,6 +235,13 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
         out->passthrough_fourcc = "IV32";
         out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
+    /* Eidos "Escape 2.0" (video format 130) -- the Acorn ARMovie sibling of the
+     * games codec ffmpeg decodes as escape130. Each chunk holds one frame whose
+     * 16-byte header ffmpeg's escape130 skips, so the whole payload passes
+     * through under the "E130" fourcc. See docs/spec/eidos-escape.md. */
+    case 130: out->name = "Eidos Escape 2.0 (escape130, pass-through)";
+        out->passthrough_fourcc = "E130";
+        out->passthrough_wrap = REPLAY_WRAP_NONE; return 0;
     /* Iota "The Complete Animator" (TCA/ACEF) — decoded natively by replay_tca
      * (the film is embedded in the Replay container); emits 8bpp + its own PALE
      * palette. See docs/spec/tca-type500.md. */

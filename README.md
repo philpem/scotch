@@ -174,10 +174,15 @@ movie's `palette <offset>`); and 614 QT-RLE16 (`Decompress`→RGB555).
 
 Codecs better handled by ffmpeg use **codec pass-through**: with `--output-format
 nut` the frames are de-wrapped and muxed under a codec fourcc so ffmpeg decodes
-them. Wired: 601 CRAM16, 603 RPZA, 605 Ultimotion, 610 FLI/FLC (MovieFS), and the
+them. Wired: 601 CRAM16, 603 RPZA, 605 Ultimotion, 610 FLI/FLC (MovieFS), the
 Indeo codecs 628/629 (MovieFS) and 901/902 (IMS VideoFS: 901 raw YVU9, 902 Indeo
-3.2). FLIC's decode path is validated with a synthesised frame (ffmpeg tracks its
-in-stream palette); the rest await real samples.
+3.2), and **130 Eidos "Escape 2.0"** (the games-era sibling ffmpeg decodes as
+`escape130`, fourcc `E130`; validated end-to-end on seven real samples). FLIC's
+decode path is validated with a synthesised frame (ffmpeg tracks its in-stream
+palette); the remaining MovieFS/VideoFS mappings await real samples. The other
+Escape codecs (100/102 ARM modules; 122, the RGB555 `escape124` sibling that has
+no ffmpeg container tag) are not yet wired — see
+[docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
 
 Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
 from the codec sources and not yet validated against real movies. See

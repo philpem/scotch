@@ -22,6 +22,8 @@ spec is correct and its provenance appendix explains why.
 | [armovie-sound.md](armovie-sound.md) | The ARMovie sound formats: VIDC exponential / signed linear (format 1) and IMA/DVI ADPCM (format 2). | complete |
 | [raw-formats-2-23.md](raw-formats-2-23.md) | The uncompressed video formats — type 2 (16-bit raw) and type 23 (4:2:2 6Y6Y5U5V). | complete |
 | [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | verified (`codec_movinglines.c`, cross-checked vs the compiled module) |
+| [tca-type500.md](tca-type500.md) | Type 500, Iota *"The Complete Animator"* (TCA/ACEF) — native decoder + Iota sound. | implemented |
+| [eidos-escape.md](eidos-escape.md) | The Eidos *Escape* family (types 100–199): version timeline and frame formats. Type 130 (Escape 2.0) is implemented via FFmpeg pass-through. | 130 implemented; 122 needs a native decoder |
 
 ### Shared subsystems
 

@@ -28,7 +28,12 @@
 
 typedef enum {
     REPLAY_WRAP_MOVIEFS = 0, /* size = frame_len + 12 (600-699) */
-    REPLAY_WRAP_VIDEOFS = 1  /* size = frame_len + 28 (900-999) */
+    REPLAY_WRAP_VIDEOFS = 1, /* size = frame_len + 28 (900-999) */
+    REPLAY_WRAP_NONE    = 2  /* no per-frame wrapper: the whole chunk payload is
+                              * one codec frame. Used for Eidos Escape (130),
+                              * whose frames carry a 16-byte header the ffmpeg
+                              * decoder skips itself -- so the payload, header and
+                              * all, passes straight through. One frame per chunk. */
 } ReplayWrapKind;
 
 /*

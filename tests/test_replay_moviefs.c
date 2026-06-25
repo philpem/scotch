@@ -109,6 +109,25 @@ int main(void)
         CHECK(n == 2 && nulls == 1, "videofs iter count");
     }
 
+    /* --- WRAP_NONE: the whole payload is one frame (Eidos Escape 130) --- */
+    {
+        ReplayFrameWrapIter it;
+        const uint8_t *fr; size_t fl; int nul; int n = 0;
+        const uint8_t whole[] = { 0x30, 0x01, 0x01, 0x80, 0x60, 0x35,
+                                  0xAA, 0xBB, 0xCC, 0xDD };
+        replay_frame_wrap_iter_init(&it, whole, sizeof whole, REPLAY_WRAP_NONE);
+        while (replay_frame_wrap_iter_next(&it, &fr, &fl, &nul)) {
+            CHECK(n == 0 && !nul && fr == whole && fl == sizeof whole,
+                  "wrap_none whole payload");
+            n++;
+        }
+        CHECK(n == 1, "wrap_none single frame");
+        /* An empty payload yields no frames. */
+        replay_frame_wrap_iter_init(&it, whole, 0, REPLAY_WRAP_NONE);
+        CHECK(!replay_frame_wrap_iter_next(&it, &fr, &fl, &nul),
+              "wrap_none empty");
+    }
+
     if (failures == 0)
         printf("OK\n");
     return failures != 0;
