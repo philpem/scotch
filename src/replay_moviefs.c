@@ -18,6 +18,21 @@ int replay_frame_wrap_iter_next(ReplayFrameWrapIter *it, const uint8_t **frame,
     uint32_t size;
     size_t overhead, data_len;
 
+    if (it->kind == REPLAY_WRAP_NONE) {
+        /* The whole remaining payload is a single frame (no wrapper). Yield it
+         * once, then signal end of payload. */
+        if (it->pos >= it->len)
+            return 0;
+        if (frame != NULL)
+            *frame = it->data + it->pos;
+        if (frame_len != NULL)
+            *frame_len = it->len - it->pos;
+        if (is_null != NULL)
+            *is_null = 0;
+        it->pos = it->len;
+        return 1;
+    }
+
     if (it->pos + 16 > it->len)
         return 0; /* no room for another wrapper header */
 

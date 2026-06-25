@@ -162,6 +162,13 @@ this file describes the current portable code in `replay-tooling`.
   freeware decoder modules used by the native paths are vendored under
   `vendor/armovie-codecs` (the specific `Dec24`/`Dec8`/`Decompress` variant +
   `Info` per codec), so the default `--modules-dir` drives them.
+- Eidos "Escape 2.0", Replay type **130**, via NUT pass-through to ffmpeg's
+  `escape130` (fourcc `E130`). Each chunk is one frame whose 16-byte Escape header
+  ffmpeg skips itself, so the whole payload passes through under a new
+  `REPLAY_WRAP_NONE` wrap kind (no per-frame wrapper to strip). Validated end to
+  end on seven real `ESCAPE 2.0` samples. The rest of the Escape family (100/102
+  ARM modules; 122, the RGB555 `escape124` sibling with no ffmpeg container tag) is
+  not yet wired. See `docs/spec/eidos-escape.md`.
 - Iota "The Complete Animator" (TCA / ACEF), Replay type 500, decoded natively by
   `src/replay_tca.c` (`replay_tca_open`/`replay_tca_next_frame`) and driven by
   `replay-transcode`'s `direct_tca` dispatch (`codec_info` case 500). It walks the
