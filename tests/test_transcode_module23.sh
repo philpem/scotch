@@ -19,7 +19,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work"
 
 "$maker" "$work/m.ae7" "$work/expected.rgb" 16 8 5 2
-"$transcode" --input "$work/m.ae7" --module "$module" --output "$work/out.rgb"
+"$transcode" --output-format raw --input "$work/m.ae7" --module "$module" --output "$work/out.rgb"
 
 if cmp -s "$work/expected.rgb" "$work/out.rgb"; then
     echo "ok type23 via Decomp23 module matches native unpack"

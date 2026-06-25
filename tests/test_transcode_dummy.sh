@@ -19,7 +19,7 @@ mkdir -p "$modules"
 # Worker-style invocation: request audio and pass a modules dir. The movie has
 # no video and no sound, so the run must succeed (exit 0) with no output and no
 # Decomp0 lookup, rather than dying on a missing decompressor.
-out=$("$transcode" --input "$movie" --output /dev/null \
+out=$("$transcode" --output-format raw --input "$movie" --output /dev/null \
         --audio-output "$work/out.wav" --modules-dir "$modules" 2>&1)
 status=$?
 echo "$out"

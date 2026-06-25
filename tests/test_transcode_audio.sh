@@ -14,7 +14,7 @@ mkdir -p "$work"
 "$maker" "$work/m.ae7" "$work/expected.pcm"
 
 # Decode audio to WAV; video to /dev/null. No --audio-format: must auto-detect.
-"$transcode" --input "$work/m.ae7" --output /dev/null \
+"$transcode" --output-format raw --input "$work/m.ae7" --output /dev/null \
     --audio-output "$work/out.wav"
 
 # Strip the 44-byte WAV header and compare the PCM payload byte-for-byte.

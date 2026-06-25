@@ -20,7 +20,7 @@ modules="$work/modules"
 mkdir -p "$modules"
 
 # 1) With audio + --modules-dir: must write the WAV and exit 0, not chase Decomp0.
-out=$("$transcode" --input "$work/m.ae7" --output /dev/null \
+out=$("$transcode" --output-format raw --input "$work/m.ae7" --output /dev/null \
         --audio-output "$work/out.wav" --modules-dir "$modules" 2>&1)
 echo "$out"
 if echo "$out" | grep -q "Decomp0"; then
@@ -38,7 +38,7 @@ else
 fi
 
 # 2) No audio requested (the DUMMY placeholder case): clean exit 0, no Decomp0.
-out=$("$transcode" --input "$work/m.ae7" --output /dev/null \
+out=$("$transcode" --output-format raw --input "$work/m.ae7" --output /dev/null \
         --modules-dir "$modules" 2>&1)
 echo "$out"
 if echo "$out" | grep -q "Decomp0"; then
