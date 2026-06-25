@@ -196,6 +196,12 @@ and 4-bit 27/12/13/39). The Iota soundtrack (`SOUN` WAV1/WAV2) is decoded to mon
 PCM and muxed too, so type-500 movies transcode with sound. See
 [docs/spec/tca-type500.md](docs/spec/tca-type500.md).
 
+Type 800, **LinePack** (Henrik Bjerregaard Pedersen), is decoded by its vendored
+`Decomp800` module. It decodes at the exact declared frame size — its Info "step"
+is an alignment hint, not a padding requirement, so the transcoder skips block
+rounding for it (`exact_size`). Validated end-to-end on a real 160×120 sample. See
+[docs/spec/linepack-type800.md](docs/spec/linepack-type800.md).
+
 ## Acorn cross-check
 
 An optional CTest decodes the checked-in format-19 corpus with the original

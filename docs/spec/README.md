@@ -24,6 +24,7 @@ spec is correct and its provenance appendix explains why.
 | [type1-moving-lines.md](type1-moving-lines.md) | Compression type 1, *Moving Lines* — the line-based temporal/spatial codec. | verified (`codec_movinglines.c`, cross-checked vs the compiled module) |
 | [tca-type500.md](tca-type500.md) | Type 500, Iota *"The Complete Animator"* (TCA/ACEF) — native decoder + Iota sound. | implemented |
 | [eidos-escape.md](eidos-escape.md) | The Eidos *Escape* family (types 100–199): version timeline and frame formats. Type 130 (Escape 2.0) is implemented via FFmpeg pass-through. | 130 implemented; 122 needs a native decoder |
+| [linepack-type800.md](linepack-type800.md) | Type 800, *LinePack* (Henrik Bjerregaard Pedersen) — the bitstream grammar and its exact-size decode requirement. | implemented (native module) |
 
 ### Shared subsystems
 

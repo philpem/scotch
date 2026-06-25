@@ -114,6 +114,9 @@ typedef struct {
     const char *passthrough_fourcc;
     ReplayWrapKind passthrough_wrap; /* per-frame wrapper flavour for the frames */
     int packed8;                /* COL_PAL8 output is 1 byte/pixel (Dec8), not a word */
+    int exact_size;             /* decode at the declared size, no block rounding
+                                 * (the Info "step" field is an alignment hint, not
+                                 * a frame-padding requirement -- see LinePack/800) */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -281,6 +284,15 @@ static int codec_info(unsigned codec, CodecInfo *out)
         out->name = "4x6Y1x5UV (8.5bpp)"; out->colour = COL_6Y5UV; return 0;
     case 25: out->module_subpath = "Decomp25/Decompress,ffd";
         out->name = "YYYYd4UVd4 (6bpp)"; out->colour = COL_6Y6UV; return 0;
+    /* LinePack (Henrik Bjerregaard Pedersen, 1995): a third-party temporal/spatial
+     * codec emitting 15-bit RGB/YUV words (its `Decompress` FNplook is an unpatched
+     * passthrough). It decodes at the *exact* declared size: its Info "step" of 32
+     * is an alignment hint, not a frame-padding requirement (TEKTRAILER is 160x120,
+     * not a multiple of 32). Block-rounding to 160x128 over-fills each frame and
+     * desyncs the source. See docs/spec/linepack-type800.md. */
+    case 800: out->module_subpath = "Decomp800/Decompress,ffd";
+        out->name = "LinePack"; out->colour = COL_RGB555;
+        out->header_colour = 1; out->exact_size = 1; return 0;
     default: return -1;
     }
 }
@@ -980,8 +992,9 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                      modules_dir, info->module_subpath);
             module_path = module_buf;
         }
-        info_block_for(movie->video_codec, module_path, NULL,
-                       &block_x, &block_y);
+        if (!info->exact_size)
+            info_block_for(movie->video_codec, module_path, NULL,
+                           &block_x, &block_y);
         rounded_w = block_round_up(movie->width, block_x);
         rounded_h = block_round_up(movie->height, block_y);
     }
