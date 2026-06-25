@@ -169,6 +169,13 @@ this file describes the current portable code in `replay-tooling`.
   end on seven real `ESCAPE 2.0` samples. The rest of the Escape family (100/102
   ARM modules; 122, the RGB555 `escape124` sibling with no ffmpeg container tag) is
   not yet wired. See `docs/spec/eidos-escape.md`.
+- LinePack (Henrik Bjerregaard Pedersen, 1995), Replay type **800**, via its
+  vendored `Decomp800` module under the CodecIf harness. The codec decodes at the
+  *exact* declared size (its Info "step" is an alignment hint, not frame padding),
+  so `codec_info` marks it `exact_size` and `transcode_video` skips block rounding
+  for it — block-rounding 160×120→160×128 over-fills each frame and desyncs the
+  source. Validated end to end on `TEKTRAILER.rpl` (475 frames, correct images).
+  See `docs/spec/linepack-type800.md`.
 - Iota "The Complete Animator" (TCA / ACEF), Replay type 500, decoded natively by
   `src/replay_tca.c` (`replay_tca_open`/`replay_tca_next_frame`) and driven by
   `replay-transcode`'s `direct_tca` dispatch (`codec_info` case 500). It walks the
