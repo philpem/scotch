@@ -537,7 +537,8 @@ typedef enum {
     AUDIO_SIGNED_8,    /* SoundS8 */
     AUDIO_UNSIGNED_8,  /* SoundU8 */
     AUDIO_SIGNED_16,   /* SoundS16 */
-    AUDIO_ADPCM        /* 4-bit IMA ADPCM: SoundA4 / "2 adpcm" */
+    AUDIO_ADPCM,       /* 4-bit IMA ADPCM: SoundA4 / "2 adpcm" */
+    AUDIO_IOTA         /* Iota TCA soundtrack (SOUN WAV1/WAV2), decoded to mono */
 } AudioFormat;
 
 /* Case-insensitive substring test (the header labels are free text). */
@@ -569,6 +570,7 @@ static const char *audio_format_text(AudioFormat f)
     case AUDIO_UNSIGNED_8: return "8-bit unsigned linear";
     case AUDIO_SIGNED_16: return "16-bit signed linear";
     case AUDIO_ADPCM: return "4-bit IMA ADPCM";
+    case AUDIO_IOTA: return "Iota TCA sound (mono)";
     default: return "unknown";
     }
 }
@@ -596,6 +598,8 @@ static AudioFormat choose_audio_format(const ReplayAe7Movie *movie)
 
     if (movie->sound_codec == REPLAY_AE7_SOUND_NONE)
         return AUDIO_NONE;
+    if (movie->video_codec == 500)
+        return AUDIO_IOTA; /* type-500 Iota sound (codec 500): SOUN WAV1/WAV2 */
     if (movie->sound_codec == REPLAY_AE7_SOUND_NAMED)
         return ci_contains(movie->sound_format_label, "adpcm")
             ? AUDIO_ADPCM : AUDIO_UNKNOWN; /* GSM/G72x/MPEG: no decoder */
@@ -664,6 +668,25 @@ static void decode_chunk_audio(const ReplayAe7Movie *movie, const uint8_t *data,
     size_t start = pcm->size;
     const uint8_t *s;
     size_t i;
+
+    /* The Iota (type 500) soundtrack lives in the film's SOUN chunk, not the
+     * per-chunk sound region; decode the whole track once, with chunk 0. */
+    if (format == AUDIO_IOTA) {
+        size_t off, cnt = 0;
+        int16_t *p;
+        if (c != 0)
+            return;
+        off = (size_t)movie->chunks[0].file_offset;
+        if (off >= data_len)
+            return;
+        p = replay_tca_decode_audio(data + off, data_len - off, &cnt, NULL, 0);
+        if (p != NULL) {
+            for (i = 0; i < cnt; i++)
+                append_s16le(pcm, p[i]);
+            free(p);
+        }
+        return;
+    }
 
     if (sbytes == 0)
         return;
@@ -998,6 +1021,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         idx = malloc(pixel_count ? pixel_count : 1);
         if (idx == NULL)
             die("out of memory");
+        /* Emit the whole Iota soundtrack up front (it is not chunk-iterated). */
+        sink_chunk_audio(sink, 0);
         for (;;) {
             int r = replay_tca_next_frame(tca, idx, err, sizeof err);
             if (r < 0)
@@ -1339,7 +1364,10 @@ int main(int argc, char **argv)
     sink.movie_data = movie_data;
     sink.movie_len = movie_len;
     sink.audio_format = aud;
-    sink.channels = movie.sound_channels != 0 ? movie.sound_channels : 1u;
+    /* Iota TCA sound is decoded to mono regardless of the header's channel
+     * count (which can be a stray value on type-500 movies). */
+    sink.channels = aud == AUDIO_IOTA ? 1u
+                  : movie.sound_channels != 0 ? movie.sound_channels : 1u;
 
     ReplayNutMuxer *nut = NULL;
     if (nut_mode) {

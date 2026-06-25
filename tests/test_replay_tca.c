@@ -4,6 +4,7 @@
  * coding are re-derived here independently of replay_tca.c. */
 
 #include "replay/replay_tca.h"
+#include "replay/replay_sound.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -148,6 +149,34 @@ static void test_one(const char *what, unsigned mode, unsigned technique,
     free(film);
 }
 
+/* Build a minimal SOUN chunk (just the WAVn sample data the decoder reads) and
+ * check replay_tca_decode_audio. tag = "WAV1" or "WAV2"; `snd`/`nbytes` is the
+ * sample data placed at SOUN+36 (= inner+28, after tag+size+5 words). */
+static void test_audio(const char *tag, const uint8_t *snd, size_t nbytes,
+                       size_t expect_count)
+{
+    uint8_t buf[256] = {0};
+    uint32_t wavsize = (uint32_t)(28 + nbytes);
+    size_t total = 8 + wavsize;
+    char err[256] = {0};
+    size_t got = 0;
+    int16_t *pcm;
+    memcpy(buf, "SOUN", 4);
+    put_u32(buf, 4, (uint32_t)total);
+    memcpy(buf + 8, tag, 4);
+    put_u32(buf, 12, wavsize);          /* WAV chunk size */
+    memcpy(buf + 36, snd, nbytes);      /* sample data at inner(8)+28 */
+    pcm = replay_tca_decode_audio(buf, total, &got, err, sizeof err);
+    if (pcm == NULL) { fprintf(stderr, "FAIL: %s audio: %s\n", tag, err); failures++; return; }
+    CHECK(got == expect_count, "audio sample count");
+    if (strcmp(tag, "WAV1") == 0) {
+        size_t i;
+        for (i = 0; i < nbytes && i < got; i++)
+            CHECK(pcm[i] == replay_sound_vidc_e8_to_s16(snd[i]), "WAV1 sample");
+    }
+    free(pcm);
+}
+
 int main(void)
 {
     /* raw single frame (mode 28, 8-bit) */
@@ -174,6 +203,15 @@ int main(void)
         const uint8_t packed[2] = { 0x21, 0x43 };
         const uint8_t expect[FRM] = { 1, 2, 3, 4 };
         test_one("mode27", 27, 2, 0, packed, 2 /*frame_bytes*/, 1, expect);
+    }
+
+    /* Audio: WAV1 (8-bit VIDC log) -> one sample per byte; WAV2 (4-bit ADPCM)
+     * -> two samples per byte. */
+    {
+        const uint8_t w1[4] = { 0x00, 0x80, 0x40, 0xC0 };
+        const uint8_t w2[3] = { 0x12, 0x34, 0x56 };
+        test_audio("WAV1", w1, sizeof w1, sizeof w1);
+        test_audio("WAV2", w2, sizeof w2, sizeof w2 * 2);
     }
 
     if (failures == 0)

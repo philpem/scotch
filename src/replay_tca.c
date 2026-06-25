@@ -1,4 +1,5 @@
 #include "replay/replay_tca.h"
+#include "replay/replay_sound.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -370,4 +371,71 @@ int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen)
     tca_expand(t, out);
     t->cursor += L;
     return 1;
+}
+
+int16_t *replay_tca_decode_audio(const uint8_t *data, size_t len,
+                                 size_t *out_count, char *err, size_t errlen)
+{
+    size_t soun, inner, dataoff, nbytes, i;
+    uint32_t ssize;
+    int wav2;
+    int16_t *pcm;
+    const uint8_t *snd;
+
+    if (out_count != NULL)
+        *out_count = 0;
+
+    soun = find_chunk(data, len, "SOUN");
+    if (soun == (size_t)-1)
+        return NULL;                     /* no soundtrack */
+    inner = soun + 8;                    /* the nested WAVn tag */
+    if (inner + 28 > len)
+        return NULL;
+    if (memcmp(data + inner, "WAV1", 4) == 0)
+        wav2 = 0;
+    else if (memcmp(data + inner, "WAV2", 4) == 0)
+        wav2 = 1;
+    else {
+        set_err(err, errlen, "unsupported Iota sound (not WAV1/WAV2)");
+        return NULL;
+    }
+    /* WAVn: tag(4) size(4) then 5 words (numsamples + sample 0's offset/len/
+     * pitch/extra); the sample data follows. */
+    ssize = rd_u32(data, inner + 4);
+    if (ssize <= 28)
+        return NULL;
+    dataoff = inner + 28;
+    if (dataoff >= len)
+        return NULL;
+    nbytes = (size_t)ssize - 28;
+    if (nbytes > len - dataoff)
+        nbytes = len - dataoff;
+    if (nbytes == 0)
+        return NULL;
+    snd = data + dataoff;
+
+    if (!wav2) {                         /* WAV1: 8-bit VIDC logarithmic */
+        pcm = malloc(nbytes * sizeof *pcm);
+        if (pcm == NULL) { set_err(err, errlen, "out of memory"); return NULL; }
+        for (i = 0; i < nbytes; i++)
+            pcm[i] = replay_sound_vidc_e8_to_s16(snd[i]);
+        if (out_count != NULL) *out_count = nbytes;
+    } else {                             /* WAV2: 4-bit IMA ADPCM, high nibble first */
+        size_t ns = nbytes * 2;
+        uint8_t *swap;
+        ReplaySoundAdpcmState st;
+        swap = malloc(nbytes);
+        if (swap == NULL) { set_err(err, errlen, "out of memory"); return NULL; }
+        pcm = malloc(ns * sizeof *pcm);
+        if (pcm == NULL) { free(swap); set_err(err, errlen, "out of memory"); return NULL; }
+        /* The project's IMA decoder reads the low nibble first; Euclid's WAV2
+         * stores the first sample in the high nibble, so swap each byte. */
+        for (i = 0; i < nbytes; i++)
+            swap[i] = (uint8_t)((snd[i] >> 4) | (snd[i] << 4));
+        memset(&st, 0, sizeof st);
+        replay_sound_adpcm_decode(swap, ns, &st, pcm);
+        free(swap);
+        if (out_count != NULL) *out_count = ns;
+    }
+    return pcm;
 }

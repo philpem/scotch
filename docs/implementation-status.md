@@ -166,9 +166,13 @@ this file describes the current portable code in `replay-tooling`.
   embedded IotaFilm (ACEF film header + PALE palette), decodes the Euclid frame
   blocks (variable-width LZW / RLE / raw, with Delta XOR) for the 8-bit screen
   modes (28/21), and emits 8bpp indices + palette through `COL_PAL8` → RGB24.
-  `test_replay_tca` covers the raw/LZW/Delta paths; the real BUCCAN movie
-  transcodes end to end. The 4-bit modes (12/15/27) and the Iota audio track
-  (event-driven `DIR1`/`SOUN`) are future work. See `docs/spec/tca-type500.md`.
+  All screen modes are handled (8-bit 28/21/15/36/40, 4-bit 27/12/13/39). The
+  Iota soundtrack (`SOUN` WAV1 8-bit VIDC-log / WAV2 4-bit ADPCM) is decoded to
+  mono PCM by `replay_tca_decode_audio` and muxed via a new `AUDIO_IOTA` sound
+  format, so type-500 movies transcode with sound. `test_replay_tca` covers the
+  raw/LZW/Delta, 4-bit-mode and WAV1/WAV2 audio paths; the real BUCCAN movie
+  transcodes end to end with video + narration. Remaining: multi-chunk handling
+  (issue #34) and audio rate/sync refinement. See `docs/spec/tca-type500.md`.
 
 ## Verified Claims
 

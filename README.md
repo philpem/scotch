@@ -187,9 +187,10 @@ inventory, the variant analysis, and the VideoFS framing.
 
 Type 500, Iota's "The Complete Animator" (TCA/ACEF), is decoded natively by
 `replay_tca` (no module, no ffmpeg) — the film is embedded in the Replay
-container and decoded to 8bpp + its palette. 8-bit modes (28/21) work end to end
-(`--skip-unsupported` skips the Iota sound track); the 4-bit modes are future
-work. See [docs/spec/tca-type500.md](docs/spec/tca-type500.md).
+container and decoded to 8bpp + its palette, all screen modes (8-bit 28/21/15/36/40
+and 4-bit 27/12/13/39). The Iota soundtrack (`SOUN` WAV1/WAV2) is decoded to mono
+PCM and muxed too, so type-500 movies transcode with sound. See
+[docs/spec/tca-type500.md](docs/spec/tca-type500.md).
 
 ## Acorn cross-check
 

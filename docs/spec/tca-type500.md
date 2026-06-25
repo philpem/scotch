@@ -2,11 +2,11 @@
 
 Scoping for Replay video format **500**, the second codec called out in issue #9
 (the "All About Planes" educational disc; sample `test-videos/BUCCAN`). Status:
-*Video implemented for all screen modes — `src/replay_tca.c` + `replay-transcode`
-case 500. 8-bit (28/21/15/36/40) and 4-bit (27/12/13/39) modes decode; validated
-end to end on BUCCAN (the Buccaneer) and against the Iota `.tca` corpus
-(dino/bang/timer/…). The Iota audio track and multi-chunk handling remain (logged
-as issues).*
+*Implemented — `src/replay_tca.c` + `replay-transcode` case 500. Video: all screen
+modes (8-bit 28/21/15/36/40, 4-bit 27/12/13/39). Audio: the Iota soundtrack
+(`SOUN` WAV1 8-bit VIDC-log / WAV2 4-bit ADPCM) → mono PCM, muxed. Validated end
+to end on BUCCAN (the Buccaneer, with narration) and against the Iota `.tca`
+corpus. Multi-chunk handling remains (issue #34).*
 
 ## Summary
 
@@ -157,26 +157,32 @@ palette: one **ColourTrans** word per logical colour. On disk each word is
 (black), idx4=`04 44 00 00` (R=0x44). So `R=byte1, G=byte2, B=byte3`; BUCCAN has
 256 entries (size 1060 = 36 + 256×4). Build a 256×3 RGB table → `COL_PAL8`.
 
-## Audio (`SOUN` + `DIR1`) — for later, from Iota `soundlib.txt`
+## Audio (`SOUN`) — implemented
 
-Iota audio is **event-driven**, not a linear PCM track: `DIR1` is a soundtrack of
-play events and `SOUN` is the SoundLib sample library they reference (via
-`IotaSound_Play`, whose interface mirrors `Euclid_Expand` — one block per frame).
+For these films the soundtrack is a single continuous sample in the `SOUN`
+SoundLib (`&C47`), played at the header rate — **not** the multi-voice `DIR1`
+event sequencer (that drives interactive sound effects, which a film transcode
+ignores, mirroring Nihav's `iota-sound` decoder, whose test sample is itself from
+"All About Planes"). `replay_tca_decode_audio` reads the `SOUN` chunk's first
+WAV sample (data at `SOUN + 36`, after the WAV tag/size and the 5 header words)
+and decodes it to signed-16 **mono**:
 
-- **`DIR1`** sound blocks (per `format.txt`): `[next→][sound_id/flags][amplitude]
-  [pitch][duration]…` (up to 8 voices) `[←previous]`, size in the first/last word.
-- **`SOUN`** = a SoundLib file (`&C47`), itself a chunk file with a `NAM1` (sample
-  names) and one of `WAV1`/`WAV2`/`WAV3`:
-  - per-sample header is 4 words: offset, length, default pitch, format/extra.
-  - `WAV1` = 8-bit VIDC-logarithmic samples (length in bytes).
-  - `WAV2` = 4-bit IMA-style ADPCM of 16-bit signed (length in samples).
-  - `WAV3` = explicit format word: 0/1 = 8-bit unsigned mono/stereo, 2/3 = 16-bit
-    signed mono/stereo, 4 = 8-bit VIDC log, 8 = 4-bit ADPCM, >19 = offset to a
-    Win32 `WAVEFORMAT` block; pitch is the actual sample rate in Hz.
+- **`WAV1`** = 8-bit VIDC-logarithmic → `replay_sound_vidc_e8_to_s16` per byte.
+- **`WAV2`** = 4-bit IMA ADPCM (high nibble first) → the project's IMA decoder,
+  reading nibbles swapped (it reads low-first); predictor/index start at 0.
+- `WAV3` (explicit format word) is not yet seen in the corpus; unimplemented.
 
-Reconstructing the audio means running the `DIR1` event sequencer against the
-SoundLib samples (mixing per-frame), which is a separate, larger task than the
-video decode and well below it in priority — the video frames are the goal.
+`replay-transcode` exposes it as a new `AUDIO_IOTA` sound format (`choose_audio_format`
+maps video codec 500 to it); the whole track is decoded once and muxed as mono at
+the movie's declared sample rate (8000 Hz for BUCCAN), so no `--skip-unsupported`
+is needed. Validated: BUCCAN's narration and the corpus WAV2 films (toast/hide)
+decode to real audio. Note the soundtrack is often **longer than the (looping/
+yoyo) video** — e.g. BUCCAN is ~5.5 s of audio over ~2.4 s of video — so the muxed
+output runs to the audio length.
+
+The richer `DIR1` event model (per `format.txt`: `[next→][sound_id/flags]
+[amplitude][pitch][duration]…[←previous]`) and `WAV3` are not needed for film
+playback and are left unimplemented.
 
 ## Implementation plan
 
@@ -212,24 +218,25 @@ video decode and well below it in priority — the video frames are the goal.
 
 `src/replay_tca.c` (`include/replay/replay_tca.h`) decodes the IotaFilm — ACEF
 header, PALE palette, and the LZW/RLE/raw + Delta frame blocks — to 8bpp indices
-+ an RGB palette, for the 8-bit modes (28/21). All screen modes are handled: 8-bit direct (28/21), 4-bit
++ an RGB palette. All screen modes are handled: 8-bit direct (28/21), 4-bit
 nibble-unpacked full height (27), and the half-height vertically-doubled 4-bit
 (12/13/39) and 8-bit (15/36/40) modes — the packed buffer is decoded then
-expanded to `width*height` indices. `replay-transcode` drives it via a native
-`direct_tca` dispatch (`codec_info` case 500): the film is read from the first
-chunk's offset, each frame goes through `COL_PAL8` → RGB24. Iota sound (codec
-500) is not decoded, so a type-500 movie transcodes video-only (use
-`--skip-unsupported` for the audio track). `test_replay_tca` covers the
-raw/LZW/Delta and mode-27 (4-bit) paths on synthetic films; BUCCAN transcodes end
-to end to the Buccaneer, and the `.tca` corpus (modes 27/12/15/28, Normal and
-Delta) decodes correctly.
+expanded to `width*height` indices. `replay_tca_decode_audio` decodes the `SOUN`
+soundtrack (WAV1/WAV2) to mono PCM (see the Audio section). `replay-transcode`
+drives video via a native `direct_tca` dispatch (`codec_info` case 500): the film
+is read from the first chunk's offset, each frame goes through `COL_PAL8` → RGB24;
+the soundtrack is muxed via the `AUDIO_IOTA` sound format. `test_replay_tca`
+covers the raw/LZW/Delta, mode-27 (4-bit), and WAV1/WAV2 audio paths on synthetic
+films; BUCCAN transcodes end to end (video + narration), and the `.tca` corpus
+(modes 27/12/15/28, Normal and Delta, WAV1 and WAV2) decodes correctly.
 
 ## Remaining work / open questions
 
-- **Audio** (issue #35): Iota sound is event-driven (`DIR1` play events
-  against the `SOUN` SoundLib `&C47`), not a linear PCM track — a separate,
-  larger task (see the Audio section). Type-500 movies currently transcode
-  video-only.
+- **Audio rate / sync** (refinement of #35): the soundtrack plays at the header
+  rate (8000 Hz) and is typically longer than the looping video, so the muxed
+  output runs to the audio length. Deriving a per-film rate from the WAV pitch
+  (or looping the video to the audio) is a possible refinement. WAV3 samples and
+  the `DIR1` sound-effect sequencer are unimplemented (not used by films).
 - **Multi-chunk** (issue #34): BUCCAN is a single chunk holding the whole
   ACEF. Whether type-500 movies are ever split across multiple Replay chunks (and
   if so how frames/PALE are distributed) is unconfirmed — it may not occur in

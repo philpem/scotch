@@ -36,4 +36,12 @@ const uint8_t *replay_tca_palette(const ReplayTca *t);
  * (message in `err`). Frames must be taken in order — Delta films carry state. */
 int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen);
 
+/* Decode the Iota soundtrack from the IotaFilm `data`: the `SOUN` chunk's sample
+ * library (WAV1 = 8-bit VIDC-logarithmic, or WAV2 = 4-bit IMA ADPCM) to signed
+ * 16-bit mono PCM. Returns a malloc'd sample buffer (caller frees) and sets
+ * *out_count to the sample count, or NULL if there is no decodable soundtrack
+ * (message in `err`). Independent of replay_tca_open. */
+int16_t *replay_tca_decode_audio(const uint8_t *data, size_t len,
+                                 size_t *out_count, char *err, size_t errlen);
+
 #endif /* REPLAY_TCA_H */
