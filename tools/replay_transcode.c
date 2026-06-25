@@ -37,6 +37,7 @@
 #include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
 #include "replay/replay_status.h"
+#include "replay/replay_tca.h"
 #include "replay/replay_type23.h"
 
 #include <ctype.h>
@@ -102,6 +103,7 @@ typedef struct {
     VideoColour colour;         /* working-output interpretation */
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
+    int direct_tca;             /* decode with the native replay_tca decoder (500) */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
     /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
@@ -231,6 +233,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
         out->passthrough_fourcc = "IV32";
         out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
+    /* Iota "The Complete Animator" (TCA/ACEF) — decoded natively by replay_tca
+     * (the film is embedded in the Replay container); emits 8bpp + its own PALE
+     * palette. See docs/spec/tca-type500.md. */
+    case 500: out->name = "Complete Animator (TCA)"; out->colour = COL_PAL8;
+        out->direct_tca = 1; return 0;
     /* Uncompressed (tiny unpacking decompressor; output per the Info colour
      * line -- see docs/spec/uncompressed-video-formats.md). */
     case 2: out->module_subpath = "Decomp2/Decompress,ffd";
@@ -538,7 +545,8 @@ typedef enum {
     AUDIO_SIGNED_8,    /* SoundS8 */
     AUDIO_UNSIGNED_8,  /* SoundU8 */
     AUDIO_SIGNED_16,   /* SoundS16 */
-    AUDIO_ADPCM        /* 4-bit IMA ADPCM: SoundA4 / "2 adpcm" */
+    AUDIO_ADPCM,       /* 4-bit IMA ADPCM: SoundA4 / "2 adpcm" */
+    AUDIO_IOTA         /* Iota TCA soundtrack (SOUN WAV1/WAV2), decoded to mono */
 } AudioFormat;
 
 /* Case-insensitive substring test (the header labels are free text). */
@@ -570,6 +578,7 @@ static const char *audio_format_text(AudioFormat f)
     case AUDIO_UNSIGNED_8: return "8-bit unsigned linear";
     case AUDIO_SIGNED_16: return "16-bit signed linear";
     case AUDIO_ADPCM: return "4-bit IMA ADPCM";
+    case AUDIO_IOTA: return "Iota TCA sound (mono)";
     default: return "unknown";
     }
 }
@@ -597,6 +606,8 @@ static AudioFormat choose_audio_format(const ReplayAe7Movie *movie)
 
     if (movie->sound_codec == REPLAY_AE7_SOUND_NONE)
         return AUDIO_NONE;
+    if (movie->video_codec == 500)
+        return AUDIO_IOTA; /* type-500 Iota sound (codec 500): SOUN WAV1/WAV2 */
     if (movie->sound_codec == REPLAY_AE7_SOUND_NAMED)
         return ci_contains(movie->sound_format_label, "adpcm")
             ? AUDIO_ADPCM : AUDIO_UNKNOWN; /* GSM/G72x/MPEG: no decoder */
@@ -665,6 +676,25 @@ static void decode_chunk_audio(const ReplayAe7Movie *movie, const uint8_t *data,
     size_t start = pcm->size;
     const uint8_t *s;
     size_t i;
+
+    /* The Iota (type 500) soundtrack lives in the film's SOUN chunk, not the
+     * per-chunk sound region; decode the whole track once, with chunk 0. */
+    if (format == AUDIO_IOTA) {
+        size_t off, cnt = 0;
+        int16_t *p;
+        if (c != 0)
+            return;
+        off = (size_t)movie->chunks[0].file_offset;
+        if (off >= data_len)
+            return;
+        p = replay_tca_decode_audio(data + off, data_len - off, &cnt, NULL, 0);
+        if (p != NULL) {
+            for (i = 0; i < cnt; i++)
+                append_s16le(pcm, p[i]);
+            free(p);
+        }
+        return;
+    }
 
     if (sbytes == 0)
         return;
@@ -918,7 +948,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char err[256];
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
-    int use_module = !(info->direct_type23 && module_path == NULL);
+    int use_module = !info->direct_tca
+                  && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
     unsigned rounded_w = movie->width, rounded_h = movie->height;
     size_t rounded_count;
@@ -975,7 +1006,45 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 "%ux%u\n", prog, rounded_w, rounded_h, block_x, block_y,
                 movie->width, movie->height);
 
-    if (!use_module) {
+    if (info->direct_tca) {
+        /* Iota Complete Animator (TCA/ACEF): the whole film is embedded in the
+         * Replay container from the first chunk's offset; decode it natively to
+         * 8bpp + its own palette. Iota sound (codec 500) is not decoded. */
+        size_t off = movie->chunk_count ? (size_t)movie->chunks[0].file_offset : 0;
+        ReplayTca *tca;
+        uint8_t *idx;
+        unsigned tw, th;
+        if (movie->chunk_count == 0 || off >= movie_len)
+            die("type 500: no film data");
+        tca = replay_tca_open(movie_data + off, movie_len - off, err, sizeof err);
+        if (tca == NULL)
+            die("type 500: %s", err);
+        tw = replay_tca_width(tca);
+        th = replay_tca_height(tca);
+        if (tw != movie->width || th != movie->height)
+            die("type 500: film %ux%u != header %ux%u", tw, th,
+                movie->width, movie->height);
+        fprintf(stderr, "%s: codec 500: %u TCA frames\n", prog,
+                replay_tca_frame_count(tca));
+        idx = malloc(pixel_count ? pixel_count : 1);
+        if (idx == NULL)
+            die("out of memory");
+        /* Emit the whole Iota soundtrack up front (it is not chunk-iterated). */
+        sink_chunk_audio(sink, 0);
+        for (;;) {
+            int r = replay_tca_next_frame(tca, idx, err, sizeof err);
+            if (r < 0)
+                die("type 500: %s", err);
+            if (r == 0)
+                break;
+            convert_frame(COL_PAL8, idx, pixels, movie->width, movie->width,
+                          movie->height, replay_tca_palette(tca), 1, rgb);
+            sink_video_frame(sink, rgb, pixel_count * 3);
+            total++;
+        }
+        free(idx);
+        replay_tca_close(tca);
+    } else if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. The native
          * path is not chunk-iterated, so in NUT mode the per-chunk sound is
@@ -1303,7 +1372,10 @@ int main(int argc, char **argv)
     sink.movie_data = movie_data;
     sink.movie_len = movie_len;
     sink.audio_format = aud;
-    sink.channels = movie.sound_channels != 0 ? movie.sound_channels : 1u;
+    /* Iota TCA sound is decoded to mono regardless of the header's channel
+     * count (which can be a stray value on type-500 movies). */
+    sink.channels = aud == AUDIO_IOTA ? 1u
+                  : movie.sound_channels != 0 ? movie.sound_channels : 1u;
 
     ReplayNutMuxer *nut = NULL;
     if (nut_mode) {
