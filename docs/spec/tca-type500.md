@@ -2,11 +2,13 @@
 
 Scoping for Replay video format **500**, the second codec called out in issue #9
 (the "All About Planes" educational disc; sample `test-videos/BUCCAN`). Status:
-*Implemented — `src/replay_tca.c` + `replay-transcode` case 500. Video: all screen
-modes (8-bit 28/21/15/36/40, 4-bit 27/12/13/39). Audio: the Iota soundtrack
-(`SOUN` WAV1 8-bit VIDC-log / WAV2 4-bit ADPCM) → mono PCM, muxed. Validated end
-to end on BUCCAN (the Buccaneer, with narration) and against the Iota `.tca`
-corpus. Multi-chunk handling remains (issue #34).*
+*Implemented — `src/replay_tca.c` + `replay-transcode` case 500. Video: the
+numbered screen modes (8-bit 28/21/15/36/40, 4-bit 27/12/13/39) plus new-format
+RISC OS sprite mode words including **16bpp direct colour** (RGB555). Audio: the
+Iota soundtrack (`SOUN` WAV1 8-bit VIDC-log / WAV2 4-bit ADPCM) → mono PCM, muxed.
+Validated end to end on BUCCAN (the Buccaneer, with narration), the 16bpp `080050`
+film, and against the Iota `.tca` corpus. Multi-chunk handling remains (issue
+#34).*
 
 ## Summary
 
@@ -131,6 +133,23 @@ direct** (`width*height`, one byte per pixel — copy `width` bytes per row);
 **27 = 4-bit full height** (`(width/2)*height`, two pixels per byte); **12/13/39
 = 4-bit half-res** (also vertically doubled on output); **15/36/40 = 8-bit
 row-doubled**.
+
+#### New-format mode words (non-standard resolutions)
+
+The mode field at +28 is not always a small numbered mode. When **bit 0 is set**
+it is a **new-format RISC OS sprite mode word**, used for resolutions/depths
+without a numbered mode. The colour depth is the *sprite type* in **bits 27–30**
+(3 = 4bpp, 4 = 8bpp, 5 = 16bpp); bits 1–26 hold the x/y DPI and don't affect the
+pixel data. TCA new-format films are **full resolution** at that depth — none of
+the half-height/row-doubling the numbered modes use — so 4bpp behaves like mode 27
+and 8bpp like mode 28.
+
+**16bpp (sprite type 5)** is direct colour with no numbered equivalent: each pixel
+is a packed **RGB555** halfword (red in the low 5 bits, then green, then blue —
+the Replay `bgr555le` convention), so `frm_size = width*height*2` and the output
+is the decoded pixels verbatim (no palette). Example: `080050` (240×180), mode
+word `0x281680b5` = type 5, 90 dpi — a 16bpp film the decoder now renders directly
+to RGB.
 
 ### Validation (prototype)
 

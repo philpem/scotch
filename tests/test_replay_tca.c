@@ -205,6 +205,34 @@ int main(void)
         test_one("mode27", 27, 2, 0, packed, 2 /*frame_bytes*/, 1, expect);
     }
 
+    /* New-format RISC OS sprite mode word: bit 0 set, sprite type (bits 27-30)
+     * = 5 -> 16bpp direct colour. 0x281680b5 is the real `080050` sample's word
+     * (90 dpi). Output is packed RGB555 (red low), two bytes per pixel, full
+     * resolution -- here red / green / blue / white. */
+    {
+        const uint8_t px16[W * H * 2] = {
+            0x1f, 0x00,  0xe0, 0x03,  0x00, 0x7c,  0xff, 0x7f
+        };
+        size_t len;
+        uint8_t *film = build_film(0x281680b5u, 2 /*raw*/, 0, px16,
+                                   W * H * 2, 1, &len);
+        char err[256] = {0};
+        ReplayTca *t = replay_tca_open(film, len, err, sizeof err);
+        if (t == NULL) {
+            fprintf(stderr, "FAIL: 16bpp open: %s\n", err); failures++;
+        } else {
+            uint8_t out[W * H * 2];
+            CHECK(replay_tca_bpp(t) == 16, "new-format type 5 -> 16bpp");
+            CHECK(replay_tca_width(t) == W && replay_tca_height(t) == H,
+                  "16bpp dimensions");
+            CHECK(replay_tca_next_frame(t, out, err, sizeof err) == 1,
+                  "16bpp frame decode");
+            CHECK(memcmp(out, px16, sizeof px16) == 0, "16bpp pixels");
+            replay_tca_close(t);
+        }
+        free(film);
+    }
+
     /* Audio: WAV1 (8-bit VIDC log) -> one sample per byte; WAV2 (4-bit ADPCM)
      * -> two samples per byte. */
     {

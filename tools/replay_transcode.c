@@ -1071,7 +1071,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         size_t off = movie->chunk_count ? (size_t)movie->chunks[0].file_offset : 0;
         ReplayTca *tca;
         uint8_t *idx;
-        unsigned tw, th;
+        unsigned tw, th, bpp;
         if (movie->chunk_count == 0 || off >= movie_len)
             die("type 500: no film data");
         tca = replay_tca_open(movie_data + off, movie_len - off, err, sizeof err);
@@ -1079,12 +1079,15 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             die("type 500: %s", err);
         tw = replay_tca_width(tca);
         th = replay_tca_height(tca);
+        bpp = replay_tca_bpp(tca);
         if (tw != movie->width || th != movie->height)
             die("type 500: film %ux%u != header %ux%u", tw, th,
                 movie->width, movie->height);
-        fprintf(stderr, "%s: codec 500: %u TCA frames\n", prog,
-                replay_tca_frame_count(tca));
-        idx = malloc(pixel_count ? pixel_count : 1);
+        fprintf(stderr, "%s: codec 500: %u TCA frames (%ubpp)\n", prog,
+                replay_tca_frame_count(tca), bpp);
+        /* 8bpp films emit one index byte per pixel; 16bpp films emit packed
+         * RGB555 (two bytes per pixel). */
+        idx = malloc((pixel_count ? pixel_count : 1) * (bpp == 16 ? 2 : 1));
         if (idx == NULL)
             die("out of memory");
         /* Emit the whole Iota soundtrack up front (it is not chunk-iterated). */
@@ -1095,8 +1098,20 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 die("type 500: %s", err);
             if (r == 0)
                 break;
-            convert_frame(COL_PAL8, idx, pixels, movie->width, movie->width,
-                          movie->height, replay_tca_palette(tca), 1, rgb);
+            if (bpp == 16) {
+                size_t i;
+                for (i = 0; i < pixel_count; i++) {
+                    unsigned v = idx[i * 2] | ((unsigned)idx[i * 2 + 1] << 8);
+                    unsigned rr = v & 0x1F, g = (v >> 5) & 0x1F,
+                             b = (v >> 10) & 0x1F;
+                    rgb[i * 3 + 0] = (uint8_t)((rr << 3) | (rr >> 2));
+                    rgb[i * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
+                    rgb[i * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+                }
+            } else {
+                convert_frame(COL_PAL8, idx, pixels, movie->width, movie->width,
+                              movie->height, replay_tca_palette(tca), 1, rgb);
+            }
             sink_video_frame(sink, rgb, pixel_count * 3);
             total++;
         }

@@ -188,7 +188,10 @@ this file describes the current portable code in `replay-tooling`.
   embedded IotaFilm (ACEF film header + PALE palette), decodes the Euclid frame
   blocks (variable-width LZW / RLE / raw, with Delta XOR) for the 8-bit screen
   modes (28/21), and emits 8bpp indices + palette through `COL_PAL8` → RGB24.
-  All screen modes are handled (8-bit 28/21/15/36/40, 4-bit 27/12/13/39). The
+  All numbered screen modes are handled (8-bit 28/21/15/36/40, 4-bit 27/12/13/39),
+  plus new-format RISC OS sprite mode words: the colour depth is the sprite type
+  in bits 27-30 (4bpp→mode 27, 8bpp→mode 28), and 16bpp is a direct-colour path
+  emitting packed RGB555 → RGB24 (validated on the 240x180 `080050` film). The
   Iota soundtrack (`SOUN` WAV1 8-bit VIDC-log / WAV2 4-bit ADPCM) is decoded to
   mono PCM by `replay_tca_decode_audio` and muxed via a new `AUDIO_IOTA` sound
   format, so type-500 movies transcode with sound. `test_replay_tca` covers the
