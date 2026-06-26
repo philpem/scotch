@@ -104,11 +104,12 @@ Validated end to end on all seven 130 samples (`Pumpkin`, `Victory`, `cam_start`
 `escape130 (E130 / 0x30333145)` and decodes every frame with no errors, producing
 the correct images.
 
-**Sound caveat.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear,
-supported) *or* format **101** (linear-unsigned PCM, 4-/8-bit — `Victory`,
-`inflight`, `tank`), which the transcoder does not yet decode; those movies need
-`--skip-unsupported` for video-only output until format 101 is added (tracked
-separately).
+**Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
+format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,
+so type-130 movies (`Victory`, `inflight`, …) transcode with sound. Format 101 is
+*not* the linear PCM its "LINEAR UNSIGNED" label claims — it is a non-canonical IMA
+ADPCM; see [armovie-sound.md §4](armovie-sound.md). (`tank` is the one 8-bit-101
+sample but its video is Escape 124, which is not yet decoded — see #42.)
 
 ## Appendix — provenance
 

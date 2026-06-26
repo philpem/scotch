@@ -169,6 +169,12 @@ this file describes the current portable code in `replay-tooling`.
   end on seven real `ESCAPE 2.0` samples. The rest of the Escape family (100/102
   ARM modules; 122, the RGB555 `escape124` sibling with no ffmpeg container tag) is
   not yet wired. See `docs/spec/eidos-escape.md`.
+- Eidos "Escape"/WINSTR **sound format 101** (the 4-bit ADPCM these movies use),
+  decoded by `src/replay_escape_adpcm.c` and muxed -- so type-130 movies transcode
+  with sound. It is a non-canonical IMA ADPCM (no `step>>3` bias, two altered
+  step-table entries), high-nibble-first, with one running state for the whole
+  movie (no per-chunk reset/header). Clean-room reconstruction from WINSTR.DLL;
+  validated bit-exact on `Victory`/`inflight`. See `docs/spec/armovie-sound.md` §4.
 - LinePack (Henrik Bjerregaard Pedersen, 1995), Replay type **800**, via its
   vendored `Decomp800` module under the CodecIf harness. The codec decodes at the
   *exact* declared size (its Info "step" is an alignment hint, not frame padding),

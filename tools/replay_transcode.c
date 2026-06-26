@@ -35,6 +35,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_escape_adpcm.h"
 #include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
 #include "replay/replay_sound.h"
@@ -567,7 +568,8 @@ typedef enum {
     AUDIO_UNSIGNED_8,  /* SoundU8 */
     AUDIO_SIGNED_16,   /* SoundS16 */
     AUDIO_ADPCM,       /* 4-bit IMA ADPCM: SoundA4 / "2 adpcm" */
-    AUDIO_IOTA         /* Iota TCA soundtrack (SOUN WAV1/WAV2), decoded to mono */
+    AUDIO_IOTA,        /* Iota TCA soundtrack (SOUN WAV1/WAV2), decoded to mono */
+    AUDIO_ESCAPE_ADPCM /* Eidos Escape (sound format 101): WINSTR 4-bit ADPCM */
 } AudioFormat;
 
 /* Case-insensitive substring test (the header labels are free text). */
@@ -600,6 +602,7 @@ static const char *audio_format_text(AudioFormat f)
     case AUDIO_SIGNED_16: return "16-bit signed linear";
     case AUDIO_ADPCM: return "4-bit IMA ADPCM";
     case AUDIO_IOTA: return "Iota TCA sound (mono)";
+    case AUDIO_ESCAPE_ADPCM: return "Eidos Escape 4-bit ADPCM";
     default: return "unknown";
     }
 }
@@ -632,6 +635,21 @@ static AudioFormat choose_audio_format(const ReplayAe7Movie *movie)
     if (movie->sound_codec == REPLAY_AE7_SOUND_NAMED)
         return ci_contains(movie->sound_format_label, "adpcm")
             ? AUDIO_ADPCM : AUDIO_UNKNOWN; /* GSM/G72x/MPEG: no decoder */
+    /* Sound format 101 ("standard" / "linear unsigned"): the Eidos Escape movies.
+     * The stock ARMovie player only accepts formats 1 and 2, so this is a
+     * non-standard marker decoded by WINSTR's built-in sound routine: 4-bit
+     * precision selects its (non-IMA) ADPCM, otherwise it is linear PCM. Despite
+     * the "linear unsigned" label the 4-bit case is ADPCM. See
+     * docs/spec/armovie-sound.md. */
+    if (movie->sound_codec == 101) {
+        if (movie->sound_precision == 4)
+            return AUDIO_ESCAPE_ADPCM;
+        if (movie->sound_precision == 8)
+            return AUDIO_UNSIGNED_8; /* linear PCM path; unconfirmed (no sample) */
+        if (movie->sound_precision == 16)
+            return AUDIO_SIGNED_16;
+        return AUDIO_UNKNOWN;
+    }
     if (movie->sound_codec != REPLAY_AE7_SOUND_VIDC_LOG)
         return AUDIO_UNKNOWN;
 
@@ -713,6 +731,39 @@ static void decode_chunk_audio(const ReplayAe7Movie *movie, const uint8_t *data,
             for (i = 0; i < cnt; i++)
                 append_s16le(pcm, p[i]);
             free(p);
+        }
+        return;
+    }
+
+    /* Eidos Escape (sound format 101): WINSTR's 4-bit ADPCM keeps one running
+     * state for the whole movie (no per-chunk reset or header), so decode every
+     * chunk's sound region in order on chunk 0. Each byte holds two codes, high
+     * nibble first; for stereo the high nibble is left, the low nibble right. */
+    if (format == AUDIO_ESCAPE_ADPCM) {
+        ReplayEscapeAdpcmState s0, s1;
+        int stereo = (movie->sound_channels == 2);
+        size_t cc;
+        if (c != 0)
+            return;
+        replay_escape_adpcm_init(&s0);
+        replay_escape_adpcm_init(&s1);
+        for (cc = 0; cc < movie->chunk_count; cc++) {
+            const ReplayAe7Chunk *ch = &movie->chunks[cc];
+            size_t so = (size_t)(ch->file_offset + ch->video_bytes);
+            size_t sb = (size_t)ch->sound_bytes;
+            size_t k;
+            if (sb == 0)
+                continue;
+            if (so > data_len || sb > data_len - so)
+                die("chunk %zu sound region is out of range", cc);
+            for (k = 0; k < sb; k++) {
+                uint8_t b = data[so + k];
+                ReplayEscapeAdpcmState *lo = stereo ? &s1 : &s0;
+                append_s16le(pcm, (int16_t)replay_escape_adpcm_decode_nibble(
+                                      &s0, (unsigned)(b >> 4)));
+                append_s16le(pcm, (int16_t)replay_escape_adpcm_decode_nibble(
+                                      lo, (unsigned)b));
+            }
         }
         return;
     }
