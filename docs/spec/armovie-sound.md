@@ -167,8 +167,11 @@ Reference vector (mono): the bytes `88 44 77 00` decode to
 `0 0 7 16 35 75 75 75`. The reference decoder is
 [`src/replay_escape_adpcm.c`](../../src/replay_escape_adpcm.c)
 (`include/replay/replay_escape_adpcm.h`), driven for format 101 by
-`replay-transcode`; validated bit-for-bit against the standalone
-`escape_adpcm` reconstruction on `Victory.rpl` (mono) and `inflight.rpl` (stereo).
+`replay-transcode`. It is validated **bit-exact against the real Eidos streamer's
+own output** — `WINSTR.DLL` decoding `Victory.rpl` (mono) and `inflight.rpl`
+(stereo) — captured by driving the DLLs (the `rpl2avi` tool). The streamer's audio
+leads its video by a **2-chunk preload** (1764 mono samples = 2×882); after
+aligning that lag every overlapping sample matches with zero differences.
 
 > The 8-bit (linear-PCM) and 16-bit format-101 paths are unconfirmed — no sample
 > with a transcoder-supported video codec exists (the one 8-bit sample, `tank`,
