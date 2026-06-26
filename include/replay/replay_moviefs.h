@@ -22,8 +22,11 @@
  *     MovieFS     frame_len + 12   size - 12            size + 4   (= 16 + len)
  *     VideoFS     frame_len + 28   size - 28            size - 12  (= 16 + len)
  *
- * A size word of 0 marks a null frame (repeat the previous frame). Acorn Replay
- * codecs have no such per-frame wrapper.
+ * Frames are separated by a run of zero size-words (0, 4 or 16 bytes of padding
+ * seen in real Cinepak movies): the iterator skips any zero words to reach the
+ * next wrapper. (These are alignment slack, not a "repeat previous" marker -- a
+ * 4-byte gap cannot be a 16-byte wrapper.) Acorn Replay codecs have no per-frame
+ * wrapper at all.
  */
 
 typedef enum {
@@ -52,11 +55,11 @@ void replay_frame_wrap_iter_init(ReplayFrameWrapIter *it, const uint8_t *data,
                                  size_t len, ReplayWrapKind kind);
 
 /*
- * Yield the next codec frame. On success returns 1 and sets `frame` and
- * `frame_len` to the raw codec frame (pointing into the original payload). A
- * null frame (repeat-previous marker) sets `is_null` to 1 with `frame_len` 0;
- * otherwise `is_null` is 0. Returns 0 at end of payload or on a malformed
- * wrapper. Any of the out-parameters may be NULL if not needed.
+ * Yield the next codec frame, skipping any zero-word inter-frame padding. On
+ * success returns 1 and sets `frame` and `frame_len` to the raw codec frame
+ * (pointing into the original payload); `is_null` is always set to 0 (retained
+ * for API compatibility). Returns 0 at end of payload or on a malformed wrapper.
+ * Any of the out-parameters may be NULL if not needed.
  */
 int replay_frame_wrap_iter_next(ReplayFrameWrapIter *it, const uint8_t **frame,
                                 size_t *frame_len, int *is_null);

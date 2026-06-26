@@ -907,20 +907,14 @@ static void sink_chunk_audio(MuxSink *sink, size_t c)
 /* Pass-through: don't decode -- mux each chunk's (de-wrapped) codec frames
  * straight into the NUT video stream (whose fourcc the caller set to the codec
  * tag) and let ffmpeg decode them. The interleaved sound is emitted per chunk,
- * exactly as in the decode path. Returns the number of frames written.
- *
- * A null frame (repeat-previous wrapper marker) re-emits the previous frame's
- * bytes: correct for the raw/intra codecs; for an inter codec it is an
- * approximation (no real "no-change" packet exists) -- to be revisited once a
- * real 9xx sample is available. */
+ * exactly as in the decode path. Returns the number of frames written. The
+ * wrapper iterator skips any zero-word inter-frame padding. */
 static unsigned long passthrough_video(const ReplayAe7Movie *movie,
                                        const uint8_t *movie_data,
                                        size_t movie_len, const CodecInfo *info,
                                        MuxSink *sink)
 {
     unsigned long total = 0;
-    const uint8_t *prev_frame = NULL;
-    size_t prev_len = 0;
     size_t c;
 
     for (c = 0; c < movie->chunk_count; c++) {
@@ -930,7 +924,6 @@ static unsigned long passthrough_video(const ReplayAe7Movie *movie,
         ReplayFrameWrapIter it;
         const uint8_t *frame;
         size_t frame_len;
-        int is_null;
 
         sink_chunk_audio(sink, c);
 
@@ -941,16 +934,8 @@ static unsigned long passthrough_video(const ReplayAe7Movie *movie,
 
         replay_frame_wrap_iter_init(&it, movie_data + voff, vbytes,
                                     info->passthrough_wrap);
-        while (replay_frame_wrap_iter_next(&it, &frame, &frame_len, &is_null)) {
-            if (is_null) {
-                if (prev_frame == NULL)
-                    continue; /* no previous frame to repeat */
-                frame = prev_frame;
-                frame_len = prev_len;
-            }
+        while (replay_frame_wrap_iter_next(&it, &frame, &frame_len, NULL)) {
             sink_video_frame(sink, frame, frame_len);
-            prev_frame = frame;
-            prev_len = frame_len;
             total++;
         }
     }

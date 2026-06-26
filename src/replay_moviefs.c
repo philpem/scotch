@@ -33,25 +33,25 @@ int replay_frame_wrap_iter_next(ReplayFrameWrapIter *it, const uint8_t **frame,
         return 1;
     }
 
+    /* MovieFS pads between frames with zero words: real Cinepak movies put 0, 4
+     * or 16 zero bytes after a frame before the next wrapper (alignment slack,
+     * not a "repeat previous" marker -- a 4-byte gap can't be a 16-byte wrapper).
+     * Skip any run of zero size-words to land on the next real wrapper. */
+    while (it->pos + 4 <= it->len) {
+        p = it->data + it->pos;
+        size = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16)
+             | ((uint32_t)p[3] << 24);
+        if (size != 0)
+            break;
+        it->pos += 4;
+    }
+
     if (it->pos + 16 > it->len)
         return 0; /* no room for another wrapper header */
 
     p = it->data + it->pos;
     size = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16)
          | ((uint32_t)p[3] << 24);
-
-    if (size == 0) {
-        /* Null frame: repeat the previous frame. The header carries no codec
-         * data; advance past the 16-byte wrapper. */
-        it->pos += 16;
-        if (frame != NULL)
-            *frame = NULL;
-        if (frame_len != NULL)
-            *frame_len = 0;
-        if (is_null != NULL)
-            *is_null = 1;
-        return 1;
-    }
 
     /* size = frame_len + overhead, where overhead is 12 (MovieFS) or 28
      * (VideoFS). The codec frame is at +16; the next wrapper is at +16+len. */
