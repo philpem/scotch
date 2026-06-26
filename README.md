@@ -167,10 +167,15 @@ build/replay-transcode --input ironman.rpl --modules-dir vendor/armovie-codecs \
     --output-format nut | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
 ```
 
-Native (vendored module): 602 Cinepak (validated), 608/626 RGB24, 615 QT-RLE24
-(`Dec24`→RGB); the palettised `Dec8` family 600 CRAM8 / 604 SMC / 606·624 RGB8 /
-607·609 RLE8 / 613 RLE4 / 622 DL / 623 ANM (8-bit indices coloured via the
-movie's `palette <offset>`); and 614 QT-RLE16 (`Decompress`→RGB555).
+Native (vendored module): 602 Cinepak and 600 CRAM8 (both validated), 608/626
+RGB24, 615 QT-RLE24 (`Dec24`→RGB); the rest of the palettised `Dec8` family 604
+SMC / 606·624 RGB8 / 607·609 RLE8 / 613 RLE4 / 622 DL / 623 ANM (8-bit indices
+coloured via the movie's `palette <offset>`); and 614 QT-RLE16 (`Decompress`→
+RGB555). CRAM8 carries its own per-chunk palette inline (a `0xffffffff` marker +
+256 RGB555 entries before the wrapper chain) and is stored bottom-up. MovieFS
+movies are decoded at the true frame size from the per-frame wrapper (the AE7
+header rounds the width up). See
+[docs/moviefs-nut-passthrough.md](docs/moviefs-nut-passthrough.md).
 
 Codecs better handled by ffmpeg use **codec pass-through**: with `--output-format
 nut` the frames are de-wrapped and muxed under a codec fourcc so ffmpeg decodes

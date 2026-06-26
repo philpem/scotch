@@ -48,7 +48,7 @@ Legend — **NUT verdict**:
 
 | Decomp | Status name | PC codec | FFmpeg decoder | NUT fourcc | Tag seen by NUT demux | NUT verdict |
 | -----: | ----------- | -------- | -------------- | ---------- | --------------------- | ----------- |
-| 600 | CRAM8 AVI | MS Video 1, 8-bit | `msvideo1` | `CRAM`/`MSVC` | ✓ msvideo1 | ⛔/🎨 needs depth=8 + palette (decodes as 16-bit garbage otherwise) |
+| 600 | CRAM8 AVI | MS Video 1, 8-bit | `msvideo1` | `CRAM`/`MSVC` | ✓ msvideo1 | ✅ native `Dec8` (validated) — inline per-chunk palette + bottom-up, see §CRAM8 |
 | 601 | CRAM16 AVI | MS Video 1, 16-bit | `msvideo1` | `CRAM`/`MSVC` | ✓ msvideo1 | ✅ verified end-to-end |
 | 602 | CVID AVI/QT | Cinepak | `cinepak` | `cvid` | ✓ cinepak | ✅ verified end-to-end |
 | 603 | RPZA QT | Apple Video (RPZA) | `rpza` | `rpza` | ✓ rpza | ✅ (fixed 16-bit, no depth needed) |
@@ -276,6 +276,35 @@ bit-exact to Acorn, needs no FFmpeg, and the shared work is small (strip the
 **NUT → FFmpeg** for the screen-painter-only codecs that would otherwise need the
 Colour subsystem — chiefly 628/629 Indeo (also no source / Intel IP) — and as a
 fallback. Colour-subsystem emulation is, pleasingly, **not on the critical path**.
+
+## Appendix: CRAM8 (type 600) chunk layout — reverse-engineered from real movies
+
+CRAM8 does **not** lay its chunks out like Cinepak. Each chunk's video region is:
+
+```
+0xffffffff                         palette-present marker (4 bytes)
+256 × uint32 LE                    inline RGB555 palette (red low), 1024 bytes
+[size][flags=0][w][h] + data       the normal MovieFS wrapper chain (N frames)
+```
+
+So after a fixed **1028-byte prefix** (marker + palette) the rest is exactly the
+standard `[size=len+12][flags][w][h]` wrapper chain that `replay_moviefs_unwrap_chunk`
+already handles. The palette is **per chunk** (it can change). The decoder
+(`Decomp600/Dec8`, r3-free, traced from `ARMovie_2003/Video/Decomp600/bas`) reads
+**2-byte codes** → **8-bit palette indices**, written **bottom-up** (the AVI/DIB
+row order), with opcodes: solid (`R7=0x80`), 2-colour (`R7<0x80`), skip/copy-from-
+previous (`R7=0x84..0x87`), 8-colour (else); a frame ends on `00 00`.
+
+Two things the transcoder therefore does for 600 (`moviefs_palette`, `bottom_up`):
+extract the per-chunk palette and skip the 1028-byte prefix before unwrapping, and
+vertically flip on conversion. Validated end to end on `Big_Ship` and `Explosions`
+(160×88-declared, true **156×88**).
+
+> **MovieFS true size.** The AE7 header rounds the width up; the per-frame wrapper
+> carries the real size (here `w=156`, not 160 — the same we saw in Cinepak `id4`).
+> The transcoder peeks chunk 0's first wrapper (`moviefs_true_size`) and
+> decodes/presents at that size, which also matters because `Dec8` uses the init
+> width as its row stride (a 160 stride over 156-wide data would shear/desync).
 
 ## Appendix: VideoFS (IMS 9xx Indeo) — reverse-engineered from source
 

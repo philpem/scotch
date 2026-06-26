@@ -118,6 +118,9 @@ typedef struct {
     int exact_size;             /* decode at the declared size, no block rounding
                                  * (the Info "step" field is an alignment hint, not
                                  * a frame-padding requirement -- see LinePack/800) */
+    int moviefs_palette;        /* CRAM8: chunk starts with 0xffffffff + a 256-word
+                                 * RGB555 palette, then the wrapper chain */
+    int bottom_up;              /* decoder writes rows bottom-up (AVI-sourced) */
 } CodecInfo;
 
 static int codec_info(unsigned codec, CodecInfo *out)
@@ -168,7 +171,8 @@ static int codec_info(unsigned codec, CodecInfo *out)
      * against a sample. */
     case 600: out->module_subpath = "Decomp600/Dec8,ffd";
         out->name = "CRAM8 AVI (MovieFS)"; out->colour = COL_PAL8;
-        out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
+        out->moviefs_wrapper = 1; out->moviefs_palette = 1; out->bottom_up = 1;
+        out->arm_mode_32 = 1; out->packed8 = 1; return 0;
     case 604: out->module_subpath = "Decomp604/Dec8,ffd";
         out->name = "SMC QT (MovieFS)"; out->colour = COL_PAL8;
         out->moviefs_wrapper = 1; out->arm_mode_32 = 1; out->packed8 = 1; return 0;
@@ -480,7 +484,8 @@ static void yuv888_to_rgb(int y, int u, int v, uint8_t *out)
 static void convert_frame(VideoColour colour, const uint8_t *words,
                           MbPixel *pixels, unsigned stride,
                           unsigned out_w, unsigned out_h,
-                          const uint8_t *palette, int packed8, uint8_t *rgb)
+                          const uint8_t *palette, int packed8, int bottom_up,
+                          uint8_t *rgb)
 {
     size_t out_stride = (size_t)out_w * 3;
     unsigned r, x;
@@ -510,7 +515,8 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
     case COL_RGB555:
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
-                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                size_t s = (size_t)(bottom_up ? out_h - 1 - r : r) * stride + x,
+                       d = (size_t)r * out_w + x;
                 unsigned v = words[s * 4] | ((unsigned)words[s * 4 + 1] << 8);
                 unsigned rr = v & 0x1F, g = (v >> 5) & 0x1F, b = (v >> 10) & 0x1F;
                 rgb[d * 3 + 0] = (uint8_t)((rr << 3) | (rr >> 2));
@@ -521,7 +527,8 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
     case COL_RGB888:
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
-                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                size_t s = (size_t)(bottom_up ? out_h - 1 - r : r) * stride + x,
+                       d = (size_t)r * out_w + x;
                 rgb[d * 3 + 0] = words[s * 4 + 0];
                 rgb[d * 3 + 1] = words[s * 4 + 1];
                 rgb[d * 3 + 2] = words[s * 4 + 2];
@@ -530,7 +537,8 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
     case COL_YUV888:
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
-                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                size_t s = (size_t)(bottom_up ? out_h - 1 - r : r) * stride + x,
+                       d = (size_t)r * out_w + x;
                 yuv888_to_rgb(words[s * 4], (int8_t)words[s * 4 + 1],
                               (int8_t)words[s * 4 + 2], &rgb[d * 3]);
             }
@@ -540,7 +548,8 @@ static void convert_frame(VideoColour colour, const uint8_t *words,
          * MovieFS Dec8 variant emits packed bytes (1 per pixel). */
         for (r = 0; r < out_h; r++)
             for (x = 0; x < out_w; x++) {
-                size_t s = (size_t)r * stride + x, d = (size_t)r * out_w + x;
+                size_t s = (size_t)(bottom_up ? out_h - 1 - r : r) * stride + x,
+                       d = (size_t)r * out_w + x;
                 unsigned idx = packed8 ? words[s] : words[s * 4];
                 if (palette != NULL) {
                     rgb[d * 3 + 0] = palette[idx * 3 + 0];
@@ -1110,7 +1119,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 }
             } else {
                 convert_frame(COL_PAL8, idx, pixels, movie->width, movie->width,
-                              movie->height, replay_tca_palette(tca), 1, rgb);
+                              movie->height, replay_tca_palette(tca), 1, 0, rgb);
             }
             sink_video_frame(sink, rgb, pixel_count * 3);
             total++;
@@ -1149,6 +1158,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         size_t frame_words;
         uint8_t *out_words;
         uint8_t *unwrap = NULL;     /* scratch for de-wrapped MovieFS payload */
+        uint8_t chunk_palette[256 * 3]; /* CRAM8: per-chunk inline palette */
         size_t c;
 
         module = read_file(module_path, &module_len);
@@ -1193,6 +1203,27 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 die("chunk %zu video region is out of range", c);
 
             vdata = movie_data + voff;
+            /* CRAM8 (moviefs_palette): each chunk begins with a 0xffffffff marker
+             * and a 256-entry RGB555 palette (32-bit words, red low), then the
+             * wrapper chain. Extract the palette and skip the 1028-byte prefix. */
+            if (info->moviefs_palette) {
+                size_t k;
+                if (vbytes < 1028
+                    || vdata[0] != 0xff || vdata[1] != 0xff
+                    || vdata[2] != 0xff || vdata[3] != 0xff)
+                    die("chunk %zu: expected CRAM8 palette marker", c);
+                for (k = 0; k < 256; k++) {
+                    const uint8_t *e = vdata + 4 + k * 4;
+                    unsigned v = e[0] | ((unsigned)e[1] << 8);
+                    unsigned rr = v & 0x1F, g = (v >> 5) & 0x1F, b = (v >> 10) & 0x1F;
+                    chunk_palette[k * 3 + 0] = (uint8_t)((rr << 3) | (rr >> 2));
+                    chunk_palette[k * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
+                    chunk_palette[k * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+                }
+                palette = chunk_palette;
+                vdata += 1028;
+                vbytes -= 1028;
+            }
             if (info->moviefs_wrapper) {
                 size_t unwrap_len = 0;
                 frames_this_chunk = (unsigned)replay_moviefs_unwrap_chunk(
@@ -1217,7 +1248,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
                 }
                 convert_frame(colour, out_words, pixels, rounded_w,
                               movie->width, movie->height, palette,
-                              info->packed8, rgb);
+                              info->packed8, info->bottom_up, rgb);
                 sink_video_frame(sink, rgb, pixel_count * 3);
                 total++;
             }
@@ -1277,6 +1308,40 @@ static void rational_from_fps(double fps, unsigned *num, unsigned *den)
     g = gcd_u(n, d);
     *num = n / g;
     *den = d / g;
+}
+
+/* MovieFS codecs carry the true frame size in the per-frame wrapper; the AE7
+ * header rounds the width up (e.g. 156 -> 160). Read chunk 0's first wrapper to
+ * recover it. CRAM8 (moviefs_palette) has a 0xffffffff marker + 256-word palette
+ * before the wrapper. Returns 0 and sets the w and h out-params on success. */
+static int moviefs_true_size(const uint8_t *movie_data, size_t movie_len,
+                             const ReplayAe7Movie *movie, const CodecInfo *info,
+                             unsigned *w, unsigned *h)
+{
+    size_t off, n;
+    const uint8_t *p;
+    if (movie->chunk_count == 0)
+        return -1;
+    off = (size_t)movie->chunks[0].file_offset;
+    n = (size_t)movie->chunks[0].video_bytes;
+    if (off > movie_len || n > movie_len - off)
+        return -1;
+    p = movie_data + off;
+    if (info->moviefs_palette) {           /* skip 0xffffffff + 256-word palette */
+        if (n < 1028)
+            return -1;
+        p += 1028;
+        n -= 1028;
+    }
+    if (n < 16)
+        return -1;
+    *w = p[8] | ((unsigned)p[9] << 8) | ((unsigned)p[10] << 16)
+       | ((unsigned)p[11] << 24);
+    *h = p[12] | ((unsigned)p[13] << 8) | ((unsigned)p[14] << 16)
+       | ((unsigned)p[15] << 24);
+    if (*w == 0 || *h == 0 || *w > 4096 || *h > 4096)
+        return -1;
+    return 0;
 }
 
 int main(int argc, char **argv)
@@ -1375,6 +1440,20 @@ int main(int argc, char **argv)
                 "(supply --module/--modules-dir for an external decompressor, "
                 "or --skip-unsupported for audio-only output)",
                 movie.video_codec);
+    }
+
+    /* MovieFS codecs carry the true frame size in the per-frame wrapper; the AE7
+     * header rounds the width up. Override the geometry so the whole pipeline
+     * (decoder, conversion, NUT stream) uses the true size. */
+    if (have_video && info.moviefs_wrapper) {
+        unsigned tw = 0, th = 0;
+        if (moviefs_true_size(movie_data, movie_len, &movie, &info, &tw, &th)
+                == 0 && (tw != movie.width || th != movie.height)) {
+            fprintf(stderr, "%s: MovieFS true size %ux%u (header says %ux%u)\n",
+                    prog, tw, th, movie.width, movie.height);
+            movie.width = tw;
+            movie.height = th;
+        }
     }
 
     /* In NUT mode the sound track is always muxed (when present and decodable),

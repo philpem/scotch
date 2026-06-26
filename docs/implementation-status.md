@@ -150,9 +150,15 @@ this file describes the current portable code in `replay-tooling`.
 - MovieFS palettised codecs via the `Dec8` variant (600 CRAM8, 604 SMC, 606/624
   RGB8, 607 RLE8, 609 QT-RLE8, 613 QT-RLE4). `Dec8` is r3-free and emits packed
   8-bit palette indices; `convert_frame` gained a packed-byte `COL_PAL8` path
-  (`packed8`) and uses the movie palette from the AE7 header `palette <offset>`.
-  Source-derived; not yet validated against a sample (no palettised MovieFS movie
-  available), and the header-palette assumption is unconfirmed. DL (622) and ANM
+  (`packed8`). **600 CRAM8 is validated end to end** (Big_Ship, Explosions): its
+  chunks aren't laid out like the others -- each begins with a `0xffffffff` marker
+  and an inline 256-entry RGB555 palette, then the normal wrapper chain. The
+  transcoder extracts that per-chunk palette (`moviefs_palette`), and Dec8 writes
+  rows bottom-up (`bottom_up`, AVI origin), so `convert_frame` flips. The other
+  Dec8-family mappings remain source-derived/unvalidated. Also: **MovieFS carries
+  the true frame size in the per-frame wrapper** -- the AE7 header rounds the width
+  up (CRAM8/Cinepak `160`→`156`), so the transcoder peeks the first wrapper and
+  decodes/presents at the true size (`moviefs_true_size`). DL (622) and ANM
   (623) join the family (their `Dec8` takes no palette); FLIC (610) is excluded
   (per-frame in-stream palette in its workspace). 614 QT-RLE16 is wired via its
   r3-free `Decompress` (16bpp RGB555). Pass-through (NUT→ffmpeg) covers 601
