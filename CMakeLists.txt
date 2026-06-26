@@ -44,6 +44,7 @@ add_library(replay STATIC
     src/replay_nut.c
     src/replay_moviefs.c
     src/replay_tca.c
+    src/replay_escape_adpcm.c
 )
 
 target_include_directories(replay PUBLIC include)
@@ -179,6 +180,7 @@ add_replay_test(test_replay_ae7_write tests/test_replay_ae7_write.c)
 add_replay_test(test_replay_sound tests/test_replay_sound.c)
 add_replay_test(test_nut_mux tests/test_nut_mux.c)
 add_replay_test(test_replay_moviefs tests/test_replay_moviefs.c)
+add_replay_test(test_replay_escape_adpcm tests/test_replay_escape_adpcm.c)
 add_replay_test(test_replay_tca tests/test_replay_tca.c)
 add_replay_test(test_sound_adpcm_stereo tests/test_sound_adpcm_stereo.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)

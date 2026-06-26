@@ -127,6 +127,56 @@ offset 3: one pad byte (0)
 For stereo, the left channel's header precedes the right channel's, then the
 interleaved code bytes follow.
 
+## 4. Format 101 — Eidos "Escape" (WINSTR ADPCM)
+
+Sound format **101** is **not** an Acorn format: the stock ARMovie player's
+`ToUseSound` only dispatches formats 1 and 2, so a 101 track plays silently there.
+It is the marker the Eidos **Escape** movies use (video formats 122/130), decoded
+by the built-in sound routine of Eidos' Windows "Streamer" engine, `WINSTR.DLL`.
+The header labels it `"sound format - standard"` with a `"LINEAR UNSIGNED"`
+precision comment, but for **4-bit** precision that label is misleading — the data
+is **ADPCM**, not linear PCM. (WINSTR's dispatcher routes 4-bit precision to its
+ADPCM decoder and other depths to a linear-PCM copy.)
+
+The 4-bit codec is an IMA/DVI-style ADPCM with **two deliberate deviations** from
+canonical IMA (both verified in WINSTR.DLL, ImageBase `0x10000000`, decoder at RVA
+`0x10004840`):
+
+1. The magnitude reconstruction **omits the `step >> 3` bias**:
+
+   ```
+   diff = ((code & 7) * step) >> 2        (WINSTR)
+   diff = ((2*(code & 7) + 1) * step) >> 3 (canonical IMA)
+   ```
+
+2. **`step_table[62] = 2749`** (canonical 2747) and **`step_table[63] = 3024`**
+   (canonical 3022). The index table is canonical IMA.
+
+Decoding with stock IMA maths instead makes the audio drift audibly. Framing:
+
+- **Two codes per byte, high nibble first** (the earlier sample is the high
+  nibble). No `step >> 3`; `index += index_table[code]`, clamped 0..88.
+- **One running state for the whole movie.** Unlike format 2 there is **no
+  per-chunk state header** and the state is **never reset** at chunk boundaries —
+  initialise `{predicted=0, index=0}` once and feed every chunk's code bytes in
+  order. (A decoder therefore concatenates all chunks' sound regions.)
+- **Stereo** splits each byte: high nibble → left, low nibble → right, with one
+  running state per channel.
+
+Reference vector (mono): the bytes `88 44 77 00` decode to
+`0 0 7 16 35 75 75 75`. The reference decoder is
+[`src/replay_escape_adpcm.c`](../../src/replay_escape_adpcm.c)
+(`include/replay/replay_escape_adpcm.h`), driven for format 101 by
+`replay-transcode`. It is validated **bit-exact against the real Eidos streamer's
+own output** — `WINSTR.DLL` decoding `Victory.rpl` (mono) and `inflight.rpl`
+(stereo) — captured by driving the DLLs (the `rpl2avi` tool). The streamer's audio
+leads its video by a **2-chunk preload** (1764 mono samples = 2×882); after
+aligning that lag every overlapping sample matches with zero differences.
+
+> The 8-bit (linear-PCM) and 16-bit format-101 paths are unconfirmed — no sample
+> with a transcoder-supported video codec exists (the one 8-bit sample, `tank`,
+> is Escape 124 video, which the transcoder does not decode).
+
 ## Appendix A. Provenance and corrections
 
 Sources (RISC OS 2003 tree; see [methodology.md](methodology.md) for the link
