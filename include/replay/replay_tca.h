@@ -28,12 +28,18 @@ void replay_tca_close(ReplayTca *t);
 unsigned replay_tca_width(const ReplayTca *t);
 unsigned replay_tca_height(const ReplayTca *t);
 unsigned replay_tca_frame_count(const ReplayTca *t);
-/* 256 * 3 interleaved RGB bytes. */
+/* Output bits per pixel: 8 for the palettised modes (output is 8-bit indices to
+ * the palette), or 16 for a direct-colour film (output is packed RGB555, red in
+ * the low bits). New-format RISC OS sprite mode words select the depth. */
+unsigned replay_tca_bpp(const ReplayTca *t);
+/* 256 * 3 interleaved RGB bytes (unused for 16bpp films). */
 const uint8_t *replay_tca_palette(const ReplayTca *t);
 
-/* Decode the next frame, in order, into `out` (width*height bytes of 8-bit
- * palette indices). Returns 1 on a decoded frame, 0 at end of film, -1 on error
- * (message in `err`). Frames must be taken in order — Delta films carry state. */
+/* Decode the next frame, in order, into `out`: width*height bytes of 8-bit
+ * palette indices for an 8bpp film, or width*height*2 bytes of packed RGB555
+ * (red low) for a 16bpp film (see replay_tca_bpp). Returns 1 on a decoded frame,
+ * 0 at end of film, -1 on error (message in `err`). Frames must be taken in
+ * order — Delta films carry state. */
 int replay_tca_next_frame(ReplayTca *t, uint8_t *out, char *err, size_t errlen);
 
 /* Decode the Iota soundtrack from the IotaFilm `data`: the `SOUN` chunk's sample

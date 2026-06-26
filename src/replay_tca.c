@@ -12,6 +12,7 @@ struct ReplayTca {
     size_t len;
     unsigned width, height;
     unsigned mode, technique, update; /* update = delta flag */
+    unsigned bpp;                     /* output bits per pixel: 8 or 16 */
     uint8_t palette[256 * 3];
     size_t film_start;   /* abs offset of the ACE film data (ACEF + 8) */
     size_t film_end;     /* film_start + film length */
@@ -205,6 +206,24 @@ ReplayTca *replay_tca_open(const uint8_t *data, size_t len,
     if (t->width == 0 || t->height == 0) {
         set_err(err, errlen, "zero TCA dimensions"); free(t); return NULL;
     }
+    /* New-format RISC OS sprite mode word (bit 0 set): the colour depth is the
+     * "sprite type" in bits 27-30. TCA new-format films are full-resolution at
+     * that depth (no half-height doubling, which only the numbered modes use), so
+     * map the depth to an equivalent numbered mode -- except 16bpp, a direct-
+     * colour path with no numbered equivalent. (xdpi/ydpi in the word are
+     * display metadata and don't affect the pixel data.) Unrecognised types fall
+     * through with the original mode for the "not supported" message. */
+    t->bpp = 8;
+    if (t->mode & 1u) {
+        unsigned stype = (t->mode >> 27) & 0x1fu;
+        if (stype == 3)      t->mode = 27;                 /* 4 bpp, full-res */
+        else if (stype == 4) t->mode = 28;                 /* 8 bpp, full-res */
+        else if (stype == 5) { t->mode = 28; t->bpp = 16; }/* 16 bpp direct RGB */
+    }
+    if (t->bpp == 16) {
+        t->frame_words = (size_t)t->width * t->height * 2; /* packed RGB555 */
+        goto sized;
+    }
     /* Decompressed (packed) screen size by RISC OS mode. The display is always
      * width*height 8-bit indices; output expansion (nibble unpack / vertical
      * doubling) happens in replay_tca_next_frame. */
@@ -229,6 +248,7 @@ ReplayTca *replay_tca_open(const uint8_t *data, size_t len,
         set_err(err, errlen, "TCA dimensions not even for this mode");
         free(t); return NULL;
     }
+sized:
 
     /* PALE: 9 header words then the ColourTrans palette, on disk [idx][R][G][B].
      * The entry count comes from the chunk size (4-bit films carry 16). */
@@ -284,6 +304,7 @@ void replay_tca_close(ReplayTca *t)
 unsigned replay_tca_width(const ReplayTca *t) { return t->width; }
 unsigned replay_tca_height(const ReplayTca *t) { return t->height; }
 unsigned replay_tca_frame_count(const ReplayTca *t) { return t->count; }
+unsigned replay_tca_bpp(const ReplayTca *t) { return t->bpp; }
 const uint8_t *replay_tca_palette(const ReplayTca *t) { return t->palette; }
 
 /* Expand the decoded (packed) screen `t->frame` to `out` (width*height 8-bit
@@ -293,6 +314,10 @@ static void tca_expand(const ReplayTca *t, uint8_t *out)
 {
     unsigned W = t->width, H = t->height, r, c;
     const uint8_t *f = t->frame;
+    if (t->bpp == 16) {                  /* direct colour: pixels are already */
+        memcpy(out, f, (size_t)W * H * 2); /* packed RGB555, full resolution    */
+        return;
+    }
     switch (t->mode) {
     case 27:
         for (r = 0; r < H; r++) {
