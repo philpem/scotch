@@ -184,10 +184,13 @@ Indeo codecs 628/629 (MovieFS) and 901/902 (IMS VideoFS: 901 raw YVU9, 902 Indeo
 3.2), and **130 Eidos "Escape 2.0"** (the games-era sibling ffmpeg decodes as
 `escape130`, fourcc `E130`; validated end-to-end on seven real samples). FLIC's
 decode path is validated with a synthesised frame (ffmpeg tracks its in-stream
-palette); the remaining MovieFS/VideoFS mappings await real samples. The other
-Escape codecs (100/102 ARM modules; 122, the RGB555 `escape124` sibling that has
-no ffmpeg container tag) are not yet wired — see
-[docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
+palette); the remaining MovieFS/VideoFS mappings await real samples.
+
+**Escape 122** is decoded natively (`replay_esc122`): it is a *palettised* (PAL8)
+codec — unrelated to escape124/130, and not decodable by the Eidos Streamer DLLs —
+so `tank.rpl` transcodes (video + sound). The other Escape codecs (100/102 ARM
+modules; 124, a games-only RGB555 codec with no ARMovie sample) are not yet wired.
+See [docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
 
 Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
 from the codec sources and not yet validated against real movies. See
