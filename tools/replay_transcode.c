@@ -35,6 +35,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_escape122.h"
 #include "replay/replay_escape_adpcm.h"
 #include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
@@ -107,6 +108,7 @@ typedef struct {
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
     int direct_tca;             /* decode with the native replay_tca decoder (500) */
+    int direct_esc122;          /* decode with the native escape122 decoder (122) */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
     /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
@@ -250,6 +252,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 130: out->name = "Eidos Escape 2.0 (escape130, pass-through)";
         out->passthrough_fourcc = "E130";
         out->passthrough_wrap = REPLAY_WRAP_NONE; return 0;
+    /* Eidos "Escape 122" -- a palettised (PAL8) codec, unrelated to escape124/130
+     * (the Streamer DLLs can't decode it); decoded natively by `replay_esc122`
+     * from the format spec in docs/spec/eidos-escape.md. */
+    case 122: out->name = "Eidos Escape 122 (PAL8)"; out->colour = COL_PAL8;
+        out->direct_esc122 = 1; return 0;
     /* Iota "The Complete Animator" (TCA/ACEF) — decoded natively by replay_tca
      * (the film is embedded in the Replay container); emits 8bpp + its own PALE
      * palette. See docs/spec/tca-type500.md. */
@@ -1014,7 +1021,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char err[256];
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
-    int use_module = !info->direct_tca
+    int use_module = !info->direct_tca && !info->direct_esc122
                   && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
     unsigned rounded_w = movie->width, rounded_h = movie->height;
@@ -1126,6 +1133,34 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
         }
         free(idx);
         replay_tca_close(tca);
+    } else if (info->direct_esc122) {
+        /* Eidos Escape 122 (PAL8): each chunk is a whole 122 frame
+         * ([codec_id 0x116][vsize][palette][bitstream]). Decode natively; the
+         * frame's 8-bit indices and the per-chunk palette go through COL_PAL8. */
+        ReplayEsc122 *esc = replay_esc122_open(movie->width, movie->height);
+        size_t c;
+        if (esc == NULL)
+            die("type 122: out of memory");
+        fprintf(stderr, "%s: codec 122 (Escape 122, PAL8), %ux%u\n", prog,
+                movie->width, movie->height);
+        for (c = 0; c < movie->chunk_count; c++) {
+            const ReplayAe7Chunk *chunk = &movie->chunks[c];
+            size_t voff = (size_t)chunk->file_offset;
+            size_t vbytes = (size_t)chunk->video_bytes;
+            sink_chunk_audio(sink, c);
+            if (vbytes == 0)
+                continue;
+            if (voff > movie_len || vbytes > movie_len - voff)
+                die("chunk %zu video region is out of range", c);
+            /* a malformed chunk (< 0) leaves the previous frame in place */
+            (void)replay_esc122_decode(esc, movie_data + voff, vbytes);
+            convert_frame(COL_PAL8, replay_esc122_frame(esc), pixels,
+                          movie->width, movie->width, movie->height,
+                          replay_esc122_palette(esc), 1, 0, rgb);
+            sink_video_frame(sink, rgb, pixel_count * 3);
+            total++;
+        }
+        replay_esc122_close(esc);
     } else if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. The native

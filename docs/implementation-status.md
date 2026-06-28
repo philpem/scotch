@@ -172,9 +172,16 @@ this file describes the current portable code in `replay-tooling`.
   `escape130` (fourcc `E130`). Each chunk is one frame whose 16-byte Escape header
   ffmpeg skips itself, so the whole payload passes through under a new
   `REPLAY_WRAP_NONE` wrap kind (no per-frame wrapper to strip). Validated end to
-  end on seven real `ESCAPE 2.0` samples. The rest of the Escape family (100/102
-  ARM modules; 122, the RGB555 `escape124` sibling with no ffmpeg container tag) is
-  not yet wired. See `docs/spec/eidos-escape.md`.
+  end on seven real `ESCAPE 2.0` samples. See `docs/spec/eidos-escape.md`.
+- Eidos "Escape 122", Replay type **122**, decoded natively by
+  `src/replay_escape122.c` (`direct_esc122` dispatch). Despite the "Escape" name it
+  is a *palettised* (PAL8) codec, unrelated to 124/130 -- the proprietary Streamer
+  DLLs can't decode it; only the Eidos DOS player did. 8×8 superblocks of 2×2
+  macroblocks, inline per-chunk VGA palette (6→8-bit), delta-coded. Decoded from
+  the format spec (NihAV's Escape122 a reference), validated byte-for-byte against
+  a standalone reference on `tank.rpl` (320×200, 1925 frames, video + sound). The
+  rest of the Escape family (100/102 ARM modules; 124, a games-only RGB555 codec
+  with no ARMovie sample) is not yet wired. See `docs/spec/eidos-escape.md`.
 - Eidos "Escape"/WINSTR **sound format 101** (the 4-bit ADPCM these movies use),
   decoded by `src/replay_escape_adpcm.c` and muxed -- so type-130 movies transcode
   with sound. It is a non-canonical IMA ADPCM (no `step>>3` bias, two altered
