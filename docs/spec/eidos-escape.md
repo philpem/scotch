@@ -13,14 +13,19 @@ Status:
 | --- | --- | --- | --- |
 | 100 | Escape 100 | 160×128, 5-bit YUV420, 2×2 VQ | `Decomp100` ARM module vendored, not wired |
 | 102 | Escape 102 | as 100, different luma code | `Decomp102` ARM module vendored, not wired |
-| 122 | Escape (RGB555 superblock) | RGB555, 8×8 superblocks, 3 codebooks | **not yet** — needs a native decoder (≈ FFmpeg `escape124`) |
+| 122 | Escape 122 (**PAL8**) | palettised 8-bit; 8×8 superblocks of 2×2 macroblocks; inline VGA palette; delta-coded | **implemented** — native decoder (`replay_esc122`) |
+| 124 | Escape 124 (RGB555) | RGB555 superblocks + rotating codebooks (FFmpeg `escape124`) | n/a — a games codec; no ARMovie 124 sample exists |
 | 130 | Escape 2.0 | YUV420P, 2×2 blocks, skip-coded | **implemented** — NUT pass-through to FFmpeg `escape130` |
 
+> **122 is *not* escape124.** Despite the shared "Escape" name and an earlier
+> assumption here, codec 122 is a **completely different, palettised (PAL8)**
+> format — the proprietary Windows Streamer DLLs (`WINSDEC`/`EDEC` for 124,
+> `DEC130` for 130) cannot decode it; only the original Eidos **DOS** player did.
+> Running 122 data through `WINSDEC`'s 124 bit-parser yields garbage. It is
+> decoded by its own in-tree decoder ([§ Type 122](#type-122--palettised-pal8)).
+
 This spec records the version lineage, the per-revision frame format, and *why*
-130 is a pass-through while 122 is not. The block-level bitstreams of 122/124 and
-130 are FFmpeg's (`libavcodec/escape124.c`, `escape130.c`); this document
-captures the **ARMovie-specific** framing and the mapping decisions, which is what
-the transcoder needs.
+130 is a pass-through while 122 and 124 are not.
 
 ## Version timeline
 
@@ -28,7 +33,7 @@ the transcoder needs.
 | --- | --- | --- | --- | --- | --- |
 | **100** | 1993 | Acorn ARMovie | 32-bit codec ID only | 5-bit YUV420, 160×128 | 2×2 two-colour VQ; chroma from a 256-entry combined U/V codebook; luma = two 5-bit values + 3-bit selector mask; variable-length block-skip codes |
 | **102** | 1993 | Acorn ARMovie | 32-bit codec ID only | as 100 | as 100; *only the luma code differs* |
-| **122** | mid-90s | Acorn/Eidos | 16-byte (adds size + flags) | RGB555 | 8×8 superblocks of 2×2 macroblocks; three rotating codebooks; the same VLC skip code that "survived until Escape 124" |
+| **122** | mid-90s | Acorn/Eidos | per-chunk `[0x116][vsize][pal]` | **PAL8** | 8×8 superblocks of 2×2 macroblocks; inline VGA palette; per-macroblock 2-colour or uniform index; escalating skip VLC; delta-coded (see § Type 122) |
 | **124** | mid-90s | Eidos games | 8-byte: `flags`(32) + `size`(32), MSB-first | RGB555 | as 122 (FFmpeg `escape124`) |
 | **130** | 1997 | Eidos games + ARMovie | 16-byte, *skipped* by the decoder | YUV420P | 2×2 blocks; per-block luma via `sign_table`/`offset_table {2,4,10,20}`; chroma via `chroma_adjust`→`chroma_vals` (32 entries); VLC skip codes (skip=0/3/8/15-bit escalating) |
 
@@ -62,13 +67,13 @@ This 16-byte header is **exactly the 16 bytes FFmpeg's `escape130` skips** befor
 reading the bitstream, so the whole payload — header and all — is what its decoder
 expects.
 
-**Type 122** — first 16 bytes of a `tank.rpl` frame are the same shape
-(`16 01 00 00 | 10 00 00 00 | 03 00 00 00 | …`, little-endian, size at `+4`), but
-this is **not** the byte layout FFmpeg's `escape124` reads (it expects an 8-byte
-MSB-first `flags`+`size`), and the games' RGB555 superblock bitstream differs from
-130's YUV.
+**Type 122** — the first bytes of a `tank.rpl` frame (`16 01 00 00 | 10 00 00 00 |
+03 00 00 00 | …`) are the **Escape 122** per-chunk header, *not* an escape124
+`flags`/`size` pair: `+0` is the magic `0x116`, `+4` the chunk video size, `+8` a
+16-bit palette length. The bitstream is palettised (PAL8) and unrelated to
+escape124 — see [§ Type 122](#type-122--palettised-pal8).
 
-## Why 130 is a pass-through and 122 is not
+## Why 130 is a pass-through (and 122/124 are not)
 
 The transcoder's pass-through path muxes codec frames into NUT under a FourCC and
 lets FFmpeg decode them (see [../moviefs-nut-passthrough.md](../moviefs-nut-passthrough.md)).
@@ -77,13 +82,76 @@ It only works if FFmpeg can *recognise* the FourCC:
 - `escape130` **has** a container tag — `MKTAG('E','1','3','0')` in
   `libavformat/riff.c` — so a NUT stream tagged `"E130"` is decoded by FFmpeg's
   `escape130`. ✔
-- `escape124` has a decoder but **no** RIFF/NUT/MOV tag, so there is no FourCC to
-  put in the container; FFmpeg cannot be told a stream is escape124. ✘
+- `escape124` has a decoder but **no** RIFF/NUT/MOV tag, so no FourCC — and in any
+  case 122 is not escape124. ✘
+- **122 has no FFmpeg (or DLL) decoder at all** — it is the PAL8 format below.
 
-So **130 → pass-through** and **122 → would need a native in-tree decoder** (a
-clean-room RGB555 superblock decoder, the FFmpeg `escape124` algorithm), or a
-`Decomp122` ARM module (none is present in any vendored tree — we hold only
-`Decomp100`/`Decomp102`).
+So **130 → pass-through** and **122 → a native PAL8 decoder** (`replay_esc122`).
+
+## Type 122 — palettised (PAL8)
+
+Codec 122 (named `122  video format` in the `.RPL` text header) is a **palettised
+8-bit** delta codec, decoded by `src/replay_escape122.c`
+(`include/replay/replay_escape122.h`), driven by `replay-transcode`'s
+`direct_esc122` dispatch. The on-the-wire magic is `0x116` (124 is `0x114`, 130 is
+`0x130`, 102 is `0x102`).
+
+### Per-chunk layout
+
+Each ARMovie video chunk is one frame:
+
+```
+u32le  codec_id    == 0x116
+u32le  vsize       chunk video size
+u16le  pal_size    bytes of palette data that follow
+byte[pal_size]     VGA palette, 3 bytes/entry, 6-bit components, expanded 6→8 bits
+                   as v = (v << 2) | (v >> 4). min(pal_size/3, 256) entries used;
+                   pal_size == 0 ⇒ keep the previous frame's palette.
+<bitstream>        LSB-first bit reader
+```
+
+For `tank.rpl` the first frames are 16-byte placeholders; the **first real frame
+carries the full 768-byte palette**, and most later frames have `pal_size == 0`
+and reuse it. The frame buffer **and** palette persist across frames (122 is
+delta-coded — skipped superblocks keep their previous contents).
+
+### Image / bitstream
+
+The frame is `width × height` 8-bit palette indices, decoded in **8×8
+superblocks** in raster order (strips of 8 rows, then 8-pixel columns). Each
+superblock is a **4×4 grid of 2×2 macroblocks**, with macroblock `i`'s top-left
+pixel at `offsets[i] = (i & 3)·2 + (i >> 2)·2·width`.
+
+```
+per superblock:
+    skip = read_ecode()                 # skip-run VLC (below)
+    if skip > 0: { skip--; keep previous frame's pixels; next superblock }
+    # pass A — broadcast one block into every macroblock whose mask bit is set
+    while read_bit() == 0:
+        blk  = read_blk2x2()
+        mask = read(16); for i in 0..15: if mask bit i: write blk at offsets[i]
+    # pass B — a fresh block per masked macroblock
+    if read_bit() == 0:
+        mask = read(16); for i in 0..15: if mask bit i: write read_blk2x2() at i
+
+read_ecode():                           # skip N superblocks
+    if read_bit() == 0: return 0
+    v3 = read(3);  if v3 != 7:   return v3 + 1
+    v7 = read(7);  if v7 != 127: return v7 + 1 + 7
+    return read(12) + 1 + 7 + 127
+
+read_blk2x2() -> px[0..3] = TL,TR,BL,BR:
+    m4 = read(4)
+    m4 == 0x0 -> idx = read(7);  all four = idx*2          # uniform, even index
+    m4 == 0xF -> idx = read(7);  all four = idx*2 + 1      # uniform, odd index
+    else      -> c0 = read(8); c1 = read(8); px[k] = (m4>>k)&1 ? c1 : c0
+```
+
+Output is PAL8: index → `palette[idx·3 + 0..2]` as 8-bit R,G,B. Validated end to
+end on `tank.rpl` (320×200, 1925 frames: an ocean-sunrise title sequence and
+attack-helicopter gameplay); `replay-transcode`'s output is byte-identical to the
+standalone reference decoder, and a unit test (`test_replay_escape122`) covers a
+hand-built one-superblock frame.
 
 ## Implementation (type 130)
 
@@ -109,7 +177,8 @@ format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxe
 so type-130 movies (`Victory`, `inflight`, …) transcode with sound. Format 101 is
 *not* the linear PCM its "LINEAR UNSIGNED" label claims — it is a non-canonical IMA
 ADPCM; see [armovie-sound.md §4](armovie-sound.md). (`tank` is the one 8-bit-101
-sample but its video is Escape 124, which is not yet decoded — see #42.)
+sample; its video is now decoded by the native Escape **122** path above, and its
+8-bit-101 audio uses the linear-PCM branch — unconfirmed, no reference.)
 
 ## Appendix — provenance
 
@@ -126,7 +195,14 @@ sample but its video is Escape 124, which is not yet decoded — see #42.)
   `chroma_adjust`/`chroma_vals`, escalating skip codes, and `yuv420p` output.
 - **FFmpeg** `libavformat/riff.c`: `{ AV_CODEC_ID_ESCAPE130, MKTAG('E','1','3','0') }`
   — the only Escape container tag (escape124 has none), which is what makes 130
-  pass-through possible and 122 not.
+  pass-through possible and 124 not.
+- **Type 122 (Escape 122)** was reverse-engineered from the Eidos **DOS** player
+  (the Windows Streamer DLLs only decode 124/130 — `WINSDEC`/`EDEC` = 124,
+  `DEC130` = 130). The [§ Type 122](#type-122--palettised-pal8) format above is a
+  **behavioural specification**; `src/replay_escape122.c` is a **clean-room**
+  implementation written strictly from that spec (no existing decoder consulted),
+  validated byte-for-byte against an independent standalone reference decoder on
+  `tank.rpl`.
 - **Direct byte inspection** of `test-videos/mplayer-samples/{Pumpkin,Victory,
   cam_start,inflight,landing,noVideo,win}.rpl` (130) and `tank.rpl` (122): the
   16-byte LE frame headers, the size-at-`+4` and keyframe-flag-at-`+3` fields, and
