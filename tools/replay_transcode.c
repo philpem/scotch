@@ -406,6 +406,38 @@ static int info_colour_for(unsigned codec, const char *module_path,
     return colour_from_info_line(chosen, colour) ? 0 : -1;
 }
 
+/* Read the codec's human name from Info line 1 (e.g. "Escape") into `name`
+ * (up to `n` bytes). Used to label an unknown, externally decompressed codec
+ * instead of a bare "external". Returns 0 on success. */
+static int info_name_for(unsigned codec, const char *module_path,
+                         const char *modules_dir, char *name, size_t n)
+{
+    char info_path[1024];
+    FILE *f;
+
+    if (module_path != NULL) {
+        const char *slash = strrchr(module_path, '/');
+        int dir_len = slash != NULL ? (int)(slash - module_path + 1) : 0;
+        snprintf(info_path, sizeof info_path, "%.*sInfo", dir_len, module_path);
+    } else if (modules_dir != NULL) {
+        snprintf(info_path, sizeof info_path, "%s/Decomp%u/Info",
+                 modules_dir, codec);
+    } else {
+        return -1;
+    }
+
+    f = fopen(info_path, "rb");
+    if (f == NULL)
+        return -1;
+    if (fgets(name, (int)n, f) == NULL) {
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+    name[strcspn(name, "\r\n")] = '\0';
+    return name[0] != '\0' ? 0 : -1;
+}
+
 /* A genuine block-rounding mask is a power of two in [1,64] (every real codec
  * uses 1,2,4,8,16 or 32). Escape's Info puts maximum dimensions on lines 4/5
  * (160/128), which the rounding logic would misread as a block, so reject
@@ -1499,6 +1531,7 @@ int main(int argc, char **argv)
      * --skip-unsupported asks for partial (video-only / audio-only) output. */
     CodecInfo info;
     char generic_sub[64];
+    char generic_name[80];
     int have_video = (codec_info(movie.video_codec, &info) == 0);
     /* Video format 0 means "no video track" (a sound-only movie), not an
      * unknown codec: there is no Decomp0 decompressor, so it must skip both the
@@ -1522,7 +1555,12 @@ int main(int argc, char **argv)
         snprintf(generic_sub, sizeof generic_sub,
                  "Decomp%u/Decompress,ffd", movie.video_codec);
         info.module_subpath = generic_sub;
-        info.name = "external";
+        /* Label the codec from its Info file's name line (e.g. "Escape") when
+         * available, falling back to a bare "external". */
+        if (info_name_for(movie.video_codec, module_path, modules_dir,
+                          generic_name, sizeof generic_name) != 0)
+            snprintf(generic_name, sizeof generic_name, "external");
+        info.name = generic_name;
         if (video_colour_name != NULL) {
             info.colour = video_colour_from_name(video_colour_name);
         } else if (info_colour_for(movie.video_codec, module_path, modules_dir,
@@ -1533,10 +1571,10 @@ int main(int argc, char **argv)
             info.header_colour = 1; /* refine from the header pixel label */
         }
         have_video = 1;
-        fprintf(stderr, "%s: codec %u not built in; using decompressor + %s\n",
-                prog, movie.video_codec,
+        fprintf(stderr, "%s: codec %u (%s): external decompressor, %s colour\n",
+                prog, movie.video_codec, info.name,
                 video_colour_name ? "--video-colour"
-                : !info.header_colour ? "Info colour line" : "header colour");
+                : !info.header_colour ? "Info colour line" : "header");
     }
     /* --video-colour overrides the colour model for any codec. */
     if (have_video && video_colour_name != NULL) {
