@@ -177,11 +177,21 @@ this file describes the current portable code in `replay-tooling`.
   `src/replay_escape122.c` (`direct_esc122` dispatch). Despite the "Escape" name it
   is a *palettised* (PAL8) codec, unrelated to 124/130 -- the proprietary Streamer
   DLLs can't decode it; only the Eidos DOS player did. 8×8 superblocks of 2×2
-  macroblocks, inline per-chunk VGA palette (6→8-bit), delta-coded. Decoded from
-  the format spec (NihAV's Escape122 a reference), validated byte-for-byte against
-  a standalone reference on `tank.rpl` (320×200, 1925 frames, video + sound). The
-  rest of the Escape family (100/102 ARM modules; 124, a games-only RGB555 codec
-  with no ARMovie sample) is not yet wired. See `docs/spec/eidos-escape.md`.
+  macroblocks, inline per-chunk VGA palette (6→8-bit), delta-coded. Clean-room
+  implementation from the format spec (no existing decoder consulted), validated
+  byte-for-byte against a standalone reference on `tank.rpl` (320×200, 1925 frames,
+  video + sound). See `docs/spec/eidos-escape.md`.
+- Eidos "Escape 124", Replay type **124**, decoded natively by
+  `src/replay_escape124.c` (`direct_esc124` dispatch). A games-era RGB555 block
+  codec (`WINSDEC`/`EDEC`): 8×8 superblocks of 2×2 macroblocks, three rotating
+  codebooks, an escalating skip VLC, and mask/pattern placement passes. A single
+  video chunk concatenates the header's "frames per chunk" frames, each
+  `[flags][size][bitstream]`; the transcoder walks them by `size`. Reimplemented
+  from the WINSDEC reverse-engineering (cross-referenced with FFmpeg's `escape124`
+  algorithm); validated byte-for-byte against both a standalone reference decoder
+  and FFmpeg's own `escape124` on `ESCAPE.RPL` (320×240) and `PYRAMID.RPL`
+  (320×120). Escape 100/102 (ARM modules) are not yet wired. See
+  `docs/spec/eidos-escape.md`.
 - Eidos "Escape"/WINSTR **sound format 101** (the 4-bit ADPCM these movies use),
   decoded by `src/replay_escape_adpcm.c` and muxed -- so type-130 movies transcode
   with sound. It is a non-canonical IMA ADPCM (no `step>>3` bias, two altered

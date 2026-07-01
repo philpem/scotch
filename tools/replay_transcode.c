@@ -36,6 +36,7 @@
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
 #include "replay/replay_escape122.h"
+#include "replay/replay_escape124.h"
 #include "replay/replay_escape_adpcm.h"
 #include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
@@ -109,6 +110,7 @@ typedef struct {
     int direct_type23;          /* decode with the native replay_type23 unpacker */
     int direct_tca;             /* decode with the native replay_tca decoder (500) */
     int direct_esc122;          /* decode with the native escape122 decoder (122) */
+    int direct_esc124;          /* decode with the native escape124 decoder (124) */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
     /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
@@ -257,6 +259,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
      * from the format spec in docs/spec/eidos-escape.md. */
     case 122: out->name = "Eidos Escape 122 (PAL8)"; out->colour = COL_PAL8;
         out->direct_esc122 = 1; return 0;
+    /* Eidos "Escape" games codec 124 -- an RGB555 block codec (WINSDEC/EDEC),
+     * decoded natively by `replay_esc124`. A single video chunk concatenates
+     * `frames_per_chunk` frames. See docs/spec/eidos-escape.md (§ Type 124). */
+    case 124: out->name = "Eidos Escape 124 (RGB555)"; out->colour = COL_RGB555;
+        out->direct_esc124 = 1; return 0;
     /* Iota "The Complete Animator" (TCA/ACEF) — decoded natively by replay_tca
      * (the film is embedded in the Replay container); emits 8bpp + its own PALE
      * palette. See docs/spec/tca-type500.md. */
@@ -1021,7 +1028,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char err[256];
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
-    int use_module = !info->direct_tca && !info->direct_esc122
+    int use_module = !info->direct_tca && !info->direct_esc122 && !info->direct_esc124
                   && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
     unsigned rounded_w = movie->width, rounded_h = movie->height;
@@ -1161,6 +1168,51 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             total++;
         }
         replay_esc122_close(esc);
+    } else if (info->direct_esc124) {
+        /* Eidos Escape 124 (RGB555): each video chunk concatenates
+         * `frames_per_chunk` frames, each `[u32 flags][u32 size][bitstream]`
+         * where `size` is the frame's total length (8-byte header included).
+         * Decode natively; inter-frame deltas reference the immediately preceding
+         * frame, so walk every frame in order. */
+        ReplayEsc124 *esc = replay_esc124_open(movie->width, movie->height);
+        size_t c;
+        if (esc == NULL)
+            die("type 124: bad dimensions (must be multiples of 8) or no memory");
+        fprintf(stderr, "%s: codec 124 (Escape 124, RGB555), %ux%u\n", prog,
+                movie->width, movie->height);
+        for (c = 0; c < movie->chunk_count; c++) {
+            const ReplayAe7Chunk *chunk = &movie->chunks[c];
+            size_t voff = (size_t)chunk->file_offset;
+            size_t vbytes = (size_t)chunk->video_bytes;
+            size_t pos;
+            sink_chunk_audio(sink, c);
+            if (vbytes == 0)
+                continue;
+            if (voff > movie_len || vbytes > movie_len - voff)
+                die("chunk %zu video region is out of range", c);
+            for (pos = 0; pos + 8 <= vbytes; ) {
+                const uint8_t *fp = movie_data + voff + pos;
+                size_t fsize = fp[4] | ((size_t)fp[5] << 8)
+                             | ((size_t)fp[6] << 16) | ((size_t)fp[7] << 24);
+                const uint16_t *fr;
+                size_t i;
+                if (fsize < 8 || pos + fsize > vbytes)
+                    break;             /* malformed / end of this chunk's frames */
+                (void)replay_esc124_decode(esc, fp, fsize);
+                fr = replay_esc124_frame(esc);
+                for (i = 0; i < pixel_count; i++) {
+                    unsigned v = fr[i];  /* RGB555, red high; bit 15 is alpha */
+                    unsigned rr = (v >> 10) & 0x1F, g = (v >> 5) & 0x1F, b = v & 0x1F;
+                    rgb[i * 3 + 0] = (uint8_t)((rr << 3) | (rr >> 2));
+                    rgb[i * 3 + 1] = (uint8_t)((g << 3) | (g >> 2));
+                    rgb[i * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+                }
+                sink_video_frame(sink, rgb, pixel_count * 3);
+                total++;
+                pos += fsize;
+            }
+        }
+        replay_esc124_close(esc);
     } else if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. The native
