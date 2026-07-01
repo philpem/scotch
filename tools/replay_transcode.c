@@ -35,6 +35,7 @@
 #include "replay/replay_ae7.h"
 #include "replay/replay_ae7_write.h"
 #include "replay/replay_buffer.h"
+#include "replay/replay_escape100.h"
 #include "replay/replay_escape122.h"
 #include "replay/replay_escape124.h"
 #include "replay/replay_escape130.h"
@@ -110,6 +111,7 @@ typedef struct {
     int header_colour;          /* refine `colour` from the movie's colour label */
     int direct_type23;          /* decode with the native replay_type23 unpacker */
     int direct_tca;             /* decode with the native replay_tca decoder (500) */
+    int direct_esc100;          /* decode with the native escape100 decoder (100/102) */
     int direct_esc122;          /* decode with the native escape122 decoder (122) */
     int direct_esc124;          /* decode with the native escape124 decoder (124) */
     int direct_esc130;          /* decode with the native escape130 decoder (130) */
@@ -257,6 +259,13 @@ static int codec_info(unsigned codec, CodecInfo *out)
     /* Eidos "Escape 122" -- a palettised (PAL8) codec, unrelated to escape124/130
      * (the Streamer DLLs can't decode it); decoded natively by `replay_esc122`
      * from the format spec in docs/spec/eidos-escape.md. */
+    /* Eidos "Escape" 100/102 (© Eidos 1993) -- a 5-bit-YUV 2x2-block VQ codec,
+     * decoded natively by `replay_esc100` (RE'd from the Decomp100/102 modules).
+     * A single video chunk concatenates several frames. See docs/spec/eidos-escape.md. */
+    case 100: out->name = "Eidos Escape 100 (YUV555)"; out->colour = COL_YUV555;
+        out->direct_esc100 = 1; return 0;
+    case 102: out->name = "Eidos Escape 102 (YUV555)"; out->colour = COL_YUV555;
+        out->direct_esc100 = 1; return 0;
     case 122: out->name = "Eidos Escape 122 (PAL8)"; out->colour = COL_PAL8;
         out->direct_esc122 = 1; return 0;
     /* Eidos "Escape" games codec 124 -- an RGB555 block codec (WINSDEC/EDEC),
@@ -1060,7 +1069,8 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char err[256];
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
-    int use_module = !info->direct_tca && !info->direct_esc122 && !info->direct_esc124
+    int use_module = !info->direct_tca && !info->direct_esc100
+                  && !info->direct_esc122 && !info->direct_esc124
                   && !info->direct_esc130
                   && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
@@ -1201,6 +1211,51 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             total++;
         }
         replay_esc122_close(esc);
+    } else if (info->direct_esc100) {
+        /* Eidos Escape 100/102: a 5-bit-YUV 2x2-block VQ codec. Each video chunk
+         * concatenates several frames, each `[u32 id][bitstream]` (id 0x100/0x102);
+         * the decoder returns each frame's word-aligned length so we can walk them.
+         * Output is YUV555 words, converted to RGB24 by the shared COL_YUV555 path. */
+        ReplayEsc100 *esc = replay_esc100_open(movie->width, movie->height);
+        uint8_t *ywords = malloc((pixel_count ? pixel_count : 1) * 4);
+        size_t c;
+        if (esc == NULL || ywords == NULL)
+            die("type 100/102: bad dimensions or out of memory");
+        fprintf(stderr, "%s: codec %u (Escape %u, YUV555), %ux%u\n", prog,
+                movie->video_codec, movie->video_codec, movie->width, movie->height);
+        for (c = 0; c < movie->chunk_count; c++) {
+            const ReplayAe7Chunk *chunk = &movie->chunks[c];
+            size_t voff = (size_t)chunk->file_offset;
+            size_t vbytes = (size_t)chunk->video_bytes;
+            size_t pos;
+            sink_chunk_audio(sink, c);
+            if (vbytes == 0)
+                continue;
+            if (voff > movie_len || vbytes > movie_len - voff)
+                die("chunk %zu video region is out of range", c);
+            for (pos = 0; pos + 4 <= vbytes; ) {
+                size_t used = replay_esc100_decode(esc, movie_data + voff + pos,
+                                                   vbytes - pos);
+                const uint16_t *fr;
+                size_t i;
+                if (used == 0)
+                    break;                 /* malformed / end of this chunk */
+                fr = replay_esc100_frame(esc);
+                for (i = 0; i < pixel_count; i++) {
+                    ywords[i * 4 + 0] = (uint8_t)fr[i];
+                    ywords[i * 4 + 1] = (uint8_t)(fr[i] >> 8);
+                    ywords[i * 4 + 2] = 0;
+                    ywords[i * 4 + 3] = 0;
+                }
+                convert_frame(COL_YUV555, ywords, pixels, movie->width,
+                              movie->width, movie->height, NULL, 0, 0, rgb);
+                sink_video_frame(sink, rgb, pixel_count * 3);
+                total++;
+                pos += used;
+            }
+        }
+        free(ywords);
+        replay_esc100_close(esc);
     } else if (info->direct_esc124) {
         /* Eidos Escape 124 (RGB555): each video chunk concatenates
          * `frames_per_chunk` frames, each `[u32 flags][u32 size][bitstream]`

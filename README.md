@@ -192,8 +192,11 @@ byte-for-byte vs both a reference decoder and ffmpeg's own `escape124` on
 `ESCAPE.RPL`/`PYRAMID.RPL`. **130** ("Escape 2.0", `replay_esc130`) is a YCbCr
 2×2-block codec — a clean-room decoder plus a bit-exact reimplementation of
 `DEC130.DLL`'s render (it replaced an earlier ffmpeg `escape130` pass-through);
-byte-identical to the reference on all seven samples. Escape 100/102 (ARM modules)
-are not yet wired. See
+byte-identical to the reference on all seven samples. **Escape 100/102** (©1993, a
+5-bit-YUV 2×2-block VQ) are decoded natively too (`replay_esc100`), reverse-engineered
+from the `Decomp100`/`102` modules and validated byte-exact against them (the
+`SplashBox` movie for 100; differential path-covering tests for both). All the
+Escape codecs are now native. See
 [docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
 
 Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
