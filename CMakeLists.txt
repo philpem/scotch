@@ -48,7 +48,6 @@ add_library(replay STATIC
     src/replay_escape122.c
     src/replay_escape124.c
     src/replay_escape130.c
-    src/dec130_render.c
 )
 
 target_include_directories(replay PUBLIC include)
