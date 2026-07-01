@@ -35,6 +35,14 @@ void replay_esc130enc_close(ReplayEsc130Enc *e);
 size_t replay_esc130enc_frame(ReplayEsc130Enc *e, const uint32_t *word0,
                               const uint8_t *textured, uint8_t *out, size_t cap);
 
+/* Encode one frame from an RGB888 source (width*height*3, the opened dimensions),
+ * inverting the colour render: each 2x2 block is reduced to one colour and mapped
+ * to the nearest representable flat block state. Lets arbitrary video be turned
+ * into Escape 130. (Currently flat blocks only -- no per-block texture yet.)
+ * Returns the chunk length, or 0 on error. */
+size_t replay_esc130enc_frame_rgb(ReplayEsc130Enc *e, const uint8_t *rgb,
+                                  uint8_t *out, size_t cap);
+
 /* The reconstructed block-state array after the last frame. */
 const uint32_t *replay_esc130enc_recon(const ReplayEsc130Enc *e);
 

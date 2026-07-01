@@ -379,9 +379,15 @@ flags (as the decoder exposes them), it picks the luma/chroma prefix modes
 neighbour, delta-coding by skipping unchanged blocks. Re-encoding the decoded
 states of the 130 samples is lossless (identical states, hence identical render)
 and, because it always chooses the cheapest reproducing mode, a few percent
-*smaller* than the originals (e.g. `landing` 96.6%, `intro` 91.1%). Deriving block
-states from an arbitrary RGB source (inverting the render) is a separate problem
-this encoder does not attempt.
+*smaller* than the originals (e.g. `landing` 96.6%, `intro` 91.1%).
+
+To turn **arbitrary RGB** into Escape 130, `replay_esc130enc_frame_rgb` inverts the
+colour render: at open it renders all 65536 flat states (via
+`replay_esc130_flat_rgb`) and builds a coarse `RGB → (yavg, cb, cr)` lookup, then
+reduces each 2×2 source region to one colour and picks the nearest representable
+flat block. So any video (e.g. an FFmpeg test card) can be encoded to 130 and
+played back. It is currently flat-only (no per-block texture yet), so quality is
+approximate — around 20 dB on a torture-test colour card.
 
 **Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
 format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,

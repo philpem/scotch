@@ -19,7 +19,9 @@
  * full copy; everything else avoids the accidental full-copy combination.
  */
 #include "replay/replay_escape130_enc.h"
+#include "replay/replay_escape130.h"    /* replay_esc130_flat_rgb (colour map) */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,6 +63,11 @@ static void emit_skip(BitW *w, unsigned run)
 enum { LUMA_SIGNS, LUMA_COPY, LUMA_DELTA, LUMA_ABS };
 enum { CHROMA_COPY, CHROMA_DELTA, CHROMA_ABS };
 
+/* A flat block state is (yavg 0..63, cb 0..31, cr 0..31), packed as an index
+ * yavg<<10 | cb<<5 | cr (0..65535) for the reverse colour map below. */
+#define FLAT_IDX(yavg, cb, cr) (((yavg) << 10) | ((cb) << 5) | (cr))
+#define FLAT_NCAND 65536
+
 struct ReplayEsc130Enc {
     int w, h, bw, bh;
     size_t total;
@@ -68,6 +75,12 @@ struct ReplayEsc130Enc {
     uint8_t *recon_tex;   /* per-block textured flag (persistent) */
     uint32_t sign_tbl[64];
     int rev_sign[256];    /* texture byte (word bits 8-15) -> a SIGNS sidx, or -1 */
+    /* RGB -> flat-state inversion (built at open): the RGB each of the 65536 flat
+     * states renders to, and a coarse RGB(>>3 per channel)->state cell lookup. */
+    uint8_t *cand_rgb;    /* FLAT_NCAND * 3 */
+    uint16_t *lut;        /* 32*32*32 -> a flat index */
+    uint32_t *sw0;        /* scratch: per-block word0 */
+    uint8_t *stex;        /* scratch: per-block textured (all 0 for flat) */
 };
 
 /* Emit one coded block, reproducing target state `T` (with textured flag `tt`)
@@ -140,6 +153,57 @@ static void emit_block(ReplayEsc130Enc *e, BitW *w, uint32_t T, uint32_t P, int 
     }
 }
 
+/* Build the RGB -> flat-state inversion: the RGB each of the 65536 flat states
+ * renders to (via the decoder's colour path), and a coarse 32x32x32 RGB-cell LUT
+ * giving, per cell, the state whose RGB is nearest the cell centre. Cells no state
+ * lands in (colours outside the codec's gamut) are flood-filled from neighbours.
+ * Built once at open. */
+static void build_flat_lut(ReplayEsc130Enc *e)
+{
+    int *celld = malloc((size_t)32 * 32 * 32 * sizeof(int));
+    unsigned yavg, cb, cr;
+    int cell, pass;
+    if (celld == NULL) return;
+    for (cell = 0; cell < 32 * 32 * 32; cell++) { celld[cell] = INT_MAX; e->lut[cell] = 0; }
+
+    for (yavg = 0; yavg < 64; yavg++)
+        for (cb = 0; cb < 32; cb++)
+            for (cr = 0; cr < 32; cr++) {
+                unsigned idx = FLAT_IDX(yavg, cb, cr);
+                uint8_t *c = &e->cand_rgb[(size_t)idx * 3];
+                int R, G, B, cc, dc;
+                replay_esc130_flat_rgb(yavg, cb, cr, c);
+                R = c[0] >> 3; G = c[1] >> 3; B = c[2] >> 3;
+                cc = (R << 10) | (G << 5) | B;
+                dc = (c[0]-(R*8+4))*(c[0]-(R*8+4)) + (c[1]-(G*8+4))*(c[1]-(G*8+4))
+                   + (c[2]-(B*8+4))*(c[2]-(B*8+4));
+                if (dc < celld[cc]) { celld[cc] = dc; e->lut[cc] = (uint16_t)idx; }
+            }
+
+    for (pass = 0; pass < 96; pass++) {
+        int changed = 0, R, G, B;
+        for (R = 0; R < 32; R++) for (G = 0; G < 32; G++) for (B = 0; B < 32; B++) {
+            int nb[6], nn = 0, k;
+            cell = (R << 10) | (G << 5) | B;
+            if (celld[cell] != INT_MAX) continue;
+            if (R > 0)  nb[nn++] = ((R-1) << 10) | (G << 5) | B;
+            if (R < 31) nb[nn++] = ((R+1) << 10) | (G << 5) | B;
+            if (G > 0)  nb[nn++] = (R << 10) | ((G-1) << 5) | B;
+            if (G < 31) nb[nn++] = (R << 10) | ((G+1) << 5) | B;
+            if (B > 0)  nb[nn++] = (R << 10) | (G << 5) | (B-1);
+            if (B < 31) nb[nn++] = (R << 10) | (G << 5) | (B+1);
+            for (k = 0; k < nn; k++)
+                if (celld[nb[k]] < INT_MAX) {
+                    e->lut[cell] = e->lut[nb[k]];
+                    celld[cell] = INT_MAX - 1;      /* filled this pass */
+                    changed = 1; break;
+                }
+        }
+        if (!changed) break;
+    }
+    free(celld);
+}
+
 /* ---- public API -----------------------------------------------------------*/
 ReplayEsc130Enc *replay_esc130enc_open(unsigned width, unsigned height)
 {
@@ -155,7 +219,14 @@ ReplayEsc130Enc *replay_esc130enc_open(unsigned width, unsigned height)
     e->total = (size_t)e->bw * (size_t)e->bh;
     e->recon = calloc(e->total ? e->total : 1, sizeof(uint32_t));
     e->recon_tex = calloc(e->total ? e->total : 1, 1);
-    if (e->recon == NULL || e->recon_tex == NULL) { replay_esc130enc_close(e); return NULL; }
+    e->cand_rgb = malloc((size_t)FLAT_NCAND * 3);
+    e->lut = malloc((size_t)32 * 32 * 32 * sizeof(uint16_t));
+    e->sw0 = calloc(e->total ? e->total : 1, sizeof(uint32_t));
+    e->stex = calloc(e->total ? e->total : 1, 1);
+    if (e->recon == NULL || e->recon_tex == NULL || e->cand_rgb == NULL ||
+        e->lut == NULL || e->sw0 == NULL || e->stex == NULL) {
+        replay_esc130enc_close(e); return NULL;
+    }
     /* Build the sign table and the reverse map (texture byte -> a sidx). */
     esc130_build_sign_tbl(e->sign_tbl);
     for (i = 0; i < 256; i++) e->rev_sign[i] = -1;
@@ -163,6 +234,7 @@ ReplayEsc130Enc *replay_esc130enc_open(unsigned width, unsigned height)
         unsigned tb = (e->sign_tbl[i] >> 8) & 0xFFu;
         if (e->rev_sign[tb] < 0) e->rev_sign[tb] = i;      /* first sidx wins */
     }
+    build_flat_lut(e);
     return e;
 }
 
@@ -171,6 +243,10 @@ void replay_esc130enc_close(ReplayEsc130Enc *e)
     if (e == NULL) return;
     free(e->recon);
     free(e->recon_tex);
+    free(e->cand_rgb);
+    free(e->lut);
+    free(e->sw0);
+    free(e->stex);
     free(e);
 }
 
@@ -213,6 +289,57 @@ size_t replay_esc130enc_frame(ReplayEsc130Enc *e, const uint32_t *word0,
     out[4] = (uint8_t)total; out[5] = (uint8_t)(total >> 8);
     out[6] = (uint8_t)(total >> 16); out[7] = (uint8_t)(total >> 24);
     return total;
+}
+
+size_t replay_esc130enc_frame_rgb(ReplayEsc130Enc *e, const uint8_t *rgb,
+                                  uint8_t *out, size_t cap)
+{
+    int bx, by;
+    if (e == NULL || rgb == NULL || out == NULL)
+        return 0;
+
+    /* Turn each 2x2 source region into one flat block state: average its colour,
+     * look it up in the coarse LUT, then refine against nearby candidates for the
+     * exact nearest representable colour. */
+    for (by = 0; by < e->bh; by++)
+        for (bx = 0; bx < e->bw; bx++) {
+            int r = 0, g = 0, b = 0, dy, dx;
+            unsigned base;
+            int by0, cb0, cr0, bestd, yy, cc, rr;
+            unsigned best;
+            for (dy = 0; dy < 2; dy++)
+                for (dx = 0; dx < 2; dx++) {
+                    size_t p = ((size_t)(by * 2 + dy) * (size_t)e->w
+                              + (size_t)(bx * 2 + dx)) * 3;
+                    r += rgb[p]; g += rgb[p + 1]; b += rgb[p + 2];
+                }
+            r = (r + 2) / 4; g = (g + 2) / 4; b = (b + 2) / 4;
+
+            base = e->lut[((size_t)(r >> 3) << 10) | ((size_t)(g >> 3) << 5) | (size_t)(b >> 3)];
+            by0 = (int)(base >> 10); cb0 = (int)((base >> 5) & 31u); cr0 = (int)(base & 31u);
+            bestd = INT_MAX; best = base;
+            for (yy = by0 - 3; yy <= by0 + 3; yy++) {
+                if (yy < 0 || yy > 63) continue;
+                for (cc = cb0 - 2; cc <= cb0 + 2; cc++) {
+                    if (cc < 0 || cc > 31) continue;
+                    for (rr = cr0 - 2; rr <= cr0 + 2; rr++) {
+                        const uint8_t *c;
+                        int d;
+                        if (rr < 0 || rr > 31) continue;
+                        c = &e->cand_rgb[(size_t)FLAT_IDX((unsigned)yy,
+                                          (unsigned)cc, (unsigned)rr) * 3];
+                        d = (r-c[0])*(r-c[0]) + (g-c[1])*(g-c[1]) + (b-c[2])*(b-c[2]);
+                        if (d < bestd) { bestd = d; best = FLAT_IDX((unsigned)yy,
+                                          (unsigned)cc, (unsigned)rr); }
+                    }
+                }
+            }
+            e->sw0[(size_t)by * (size_t)e->bw + (size_t)bx] =
+                (best >> 10) | (((best >> 5) & 31u) << 16) | ((best & 31u) << 24);
+            e->stex[(size_t)by * (size_t)e->bw + (size_t)bx] = 0;
+        }
+
+    return replay_esc130enc_frame(e, e->sw0, e->stex, out, cap);
 }
 
 const uint32_t *replay_esc130enc_recon(const ReplayEsc130Enc *e) { return e->recon; }

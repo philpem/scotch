@@ -51,6 +51,11 @@ const uint32_t *replay_esc130_blocks(const ReplayEsc130 *s);
 const uint8_t *replay_esc130_textured(const ReplayEsc130 *s);
 size_t replay_esc130_block_count(const ReplayEsc130 *s);
 
+/* The RGB888 (out[0..2]) a flat block with the given base luma (yavg, 0..63) and
+ * chroma (cb, cr, 0..31) renders to -- the forward colour map an encoder inverts
+ * to pick a block's luma/chroma from a target colour. */
+void replay_esc130_flat_rgb(unsigned yavg, unsigned cb, unsigned cr, uint8_t out[3]);
+
 #ifdef __cplusplus
 }
 #endif

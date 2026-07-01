@@ -286,6 +286,21 @@ static uint32_t block_base(const ReplayEsc130 *s, size_t bi)
     return (sum & 0x40000000u) ? sum : clamp_build(sum);
 }
 
+/* The RGB888 a flat block with the given (yavg, cb, cr) renders to as a uniform
+ * interior pixel -- the forward colour map an encoder inverts to choose a block's
+ * luma/chroma from a target colour. */
+void replay_esc130_flat_rgb(unsigned yavg, unsigned cb, unsigned cr, uint8_t out[3])
+{
+    uint32_t sum = R_CR[cr & 63u] + R_CB[cb & 0xFFu]
+                 + (R_LUM[yavg & 0x3Fu] | 0x80000000u);
+    uint32_t d = clamp_build(sum) & COLOUR_MASK;
+    uint16_t c = blend565(d, d, d, 0);
+    unsigned r5 = (c >> 11) & 0x1Fu, g6 = (c >> 5) & 0x3Fu, b5 = c & 0x1Fu;
+    out[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+    out[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+    out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+}
+
 /* ---- public API ----------------------------------------------------------- */
 ReplayEsc130 *replay_esc130_open(unsigned width, unsigned height)
 {

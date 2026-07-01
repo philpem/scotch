@@ -87,6 +87,30 @@ int main(void)
         replay_esc130enc_close(e2);
     }
 
+    /* RGB inversion path: encoding an RGB frame yields a valid chunk that decodes
+     * to the encoder's own (flat) reconstruction -- i.e. RGB -> states is emitted
+     * faithfully. */
+    {
+        ReplayEsc130Enc *er = replay_esc130enc_open(W, H);
+        ReplayEsc130 *dr = replay_esc130_open(W, H);
+        static uint8_t rgb[W * H * 3];
+        size_t len; int y, x;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                int p = (y * W + x) * 3;
+                rgb[p]     = (uint8_t)(x * 255 / (W - 1));
+                rgb[p + 1] = (uint8_t)(y * 255 / (H - 1));
+                rgb[p + 2] = (uint8_t)((x + y) * 255 / (W + H - 2));
+            }
+        len = replay_esc130enc_frame_rgb(er, rgb, out, sizeof out);
+        CHECK(len > 0, "rgb frame encoded");
+        CHECK(replay_esc130_decode(dr, out, len) == 0, "rgb chunk decodes");
+        CHECK(memcmp(replay_esc130_blocks(dr), replay_esc130enc_recon(er),
+                     NB * 4) == 0, "rgb-encoded frame decodes to the reconstruction");
+        replay_esc130_close(dr);
+        replay_esc130enc_close(er);
+    }
+
     if (failures == 0) printf("OK\n");
     return failures != 0;
 }
