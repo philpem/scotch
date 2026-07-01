@@ -46,6 +46,7 @@ add_library(replay STATIC
     src/replay_tca.c
     src/replay_escape_adpcm.c
     src/replay_escape100.c
+    src/replay_escape100_enc.c
     src/replay_escape122.c
     src/replay_escape124.c
     src/replay_escape130.c
@@ -186,6 +187,7 @@ add_replay_test(test_nut_mux tests/test_nut_mux.c)
 add_replay_test(test_replay_moviefs tests/test_replay_moviefs.c)
 add_replay_test(test_replay_escape_adpcm tests/test_replay_escape_adpcm.c)
 add_replay_test(test_replay_escape100 tests/test_replay_escape100.c)
+add_replay_test(test_escape100_encode tests/test_escape100_encode.c)
 
 # Differential test: native Escape 100/102 decoder vs the vendored Decomp100/102
 # ARM modules (the golden decoders), on synthetic path-covering frames.
