@@ -298,23 +298,31 @@ size_t replay_esc130enc_frame_rgb(ReplayEsc130Enc *e, const uint8_t *rgb,
     if (e == NULL || rgb == NULL || out == NULL)
         return 0;
 
-    /* Turn each 2x2 source region into one flat block state: average its colour,
-     * look it up in the coarse LUT, then refine against nearby candidates for the
-     * exact nearest representable colour. */
+    /* Turn each 2x2 source region into one block state. First the best flat block
+     * (average colour -> coarse LUT -> local refine); then whether a *textured*
+     * block -- an even base luma plus a +/- step per sub-pixel, chosen from the 64
+     * sign patterns -- fits the four sub-pixels better; keep whichever is closer. */
     for (by = 0; by < e->bh; by++)
         for (bx = 0; bx < e->bw; bx++) {
-            int r = 0, g = 0, b = 0, dy, dx;
-            unsigned base;
+            uint8_t s4[4][3];
+            int r = 0, g = 0, b = 0, k;
+            unsigned base, yavg, cbv, crv, yavg_e;
             int by0, cb0, cr0, bestd, yy, cc, rr;
             unsigned best;
-            for (dy = 0; dy < 2; dy++)
-                for (dx = 0; dx < 2; dx++) {
-                    size_t p = ((size_t)(by * 2 + dy) * (size_t)e->w
-                              + (size_t)(bx * 2 + dx)) * 3;
-                    r += rgb[p]; g += rgb[p + 1]; b += rgb[p + 2];
-                }
+            const uint8_t *fc;
+            int flat_err, best_terr, best_step, best_sidx, step;
+            size_t blk = (size_t)by * (size_t)e->bw + (size_t)bx;
+
+            for (k = 0; k < 4; k++) {
+                int dx = k & 1, dy = k >> 1;
+                size_t p = ((size_t)(by * 2 + dy) * (size_t)e->w
+                          + (size_t)(bx * 2 + dx)) * 3;
+                s4[k][0] = rgb[p]; s4[k][1] = rgb[p + 1]; s4[k][2] = rgb[p + 2];
+                r += rgb[p]; g += rgb[p + 1]; b += rgb[p + 2];
+            }
             r = (r + 2) / 4; g = (g + 2) / 4; b = (b + 2) / 4;
 
+            /* flat: coarse LUT cell, then refine against the average colour */
             base = e->lut[((size_t)(r >> 3) << 10) | ((size_t)(g >> 3) << 5) | (size_t)(b >> 3)];
             by0 = (int)(base >> 10); cb0 = (int)((base >> 5) & 31u); cr0 = (int)(base & 31u);
             bestd = INT_MAX; best = base;
@@ -334,9 +342,52 @@ size_t replay_esc130enc_frame_rgb(ReplayEsc130Enc *e, const uint8_t *rgb,
                     }
                 }
             }
-            e->sw0[(size_t)by * (size_t)e->bw + (size_t)bx] =
-                (best >> 10) | (((best >> 5) & 31u) << 16) | ((best & 31u) << 24);
-            e->stex[(size_t)by * (size_t)e->bw + (size_t)bx] = 0;
+            yavg = best >> 10; cbv = (best >> 5) & 31u; crv = best & 31u;
+
+            /* flat error over the four sub-pixels (not just their average) */
+            fc = &e->cand_rgb[(size_t)best * 3];
+            flat_err = 0;
+            for (k = 0; k < 4; k++)
+                flat_err += (s4[k][0]-fc[0])*(s4[k][0]-fc[0])
+                          + (s4[k][1]-fc[1])*(s4[k][1]-fc[1])
+                          + (s4[k][2]-fc[2])*(s4[k][2]-fc[2]);
+
+            /* texture: for each step, the three sub-pixel colours (sign -1/0/+1)
+             * are fixed; score every sign pattern and keep the best (step, sidx). */
+            yavg_e = yavg & 0x3Eu;
+            best_terr = INT_MAX; best_step = 0; best_sidx = 0;
+            for (step = 0; step < 4; step++) {
+                uint8_t C[3][3];
+                int perr[4][3], sidx;
+                replay_esc130_textured_rgb(yavg_e, cbv, crv, (unsigned)step, -1, C[0]);
+                replay_esc130_textured_rgb(yavg_e, cbv, crv, (unsigned)step,  0, C[1]);
+                replay_esc130_textured_rgb(yavg_e, cbv, crv, (unsigned)step,  1, C[2]);
+                for (k = 0; k < 4; k++) {
+                    int si;
+                    for (si = 0; si < 3; si++)
+                        perr[k][si] = (s4[k][0]-C[si][0])*(s4[k][0]-C[si][0])
+                                    + (s4[k][1]-C[si][1])*(s4[k][1]-C[si][1])
+                                    + (s4[k][2]-C[si][2])*(s4[k][2]-C[si][2]);
+                }
+                for (sidx = 0; sidx < 64; sidx++) {
+                    int t = 0;
+                    for (k = 0; k < 4; k++) {
+                        int sg = ESC130_SIGN_TUPLES[sidx][k];
+                        t += perr[k][sg < 0 ? 0 : (sg > 0 ? 2 : 1)];
+                    }
+                    if (t < best_terr) { best_terr = t; best_step = step; best_sidx = sidx; }
+                }
+            }
+
+            if (best_terr < flat_err) {
+                unsigned ya = yavg_e >> 1;
+                e->sw0[blk] = e->sign_tbl[best_sidx] | ((unsigned)best_step << 6)
+                            | (ya << 1) | (cbv << 16) | (crv << 24);
+                e->stex[blk] = 1;
+            } else {
+                e->sw0[blk] = yavg | (cbv << 16) | (crv << 24);
+                e->stex[blk] = 0;
+            }
         }
 
     return replay_esc130enc_frame(e, e->sw0, e->stex, out, cap);

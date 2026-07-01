@@ -385,9 +385,17 @@ To turn **arbitrary RGB** into Escape 130, `replay_esc130enc_frame_rgb` inverts 
 colour render: at open it renders all 65536 flat states (via
 `replay_esc130_flat_rgb`) and builds a coarse `RGB → (yavg, cb, cr)` lookup, then
 reduces each 2×2 source region to one colour and picks the nearest representable
-flat block. So any video (e.g. an FFmpeg test card) can be encoded to 130 and
-played back. It is currently flat-only (no per-block texture yet), so quality is
-approximate — around 20 dB on a torture-test colour card.
+flat block. It then also tries a **textured** block — the same base colour plus a
+±luma step per sub-pixel, chosen from the 64 sign patterns (scored with
+`replay_esc130_textured_rgb`) — and keeps whichever fits the four sub-pixels
+better. So any video (e.g. an FFmpeg test card) can be encoded to 130 and played
+back.
+
+Texture recovers intra-block *luma* detail that a single flat colour cannot, so
+its benefit depends on the content: on luma-heavy material (high-contrast line
+art) it is large — a Conway's-life clip goes from 12.6 dB (flat only) to 19.6 dB —
+while on chroma-dominated material it is small, because one chroma pair per block
+is a hard limit (a torture-test colour card only moves ~20.4 → 20.7 dB).
 
 **Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
 format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,

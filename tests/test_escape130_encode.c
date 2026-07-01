@@ -88,8 +88,8 @@ int main(void)
     }
 
     /* RGB inversion path: encoding an RGB frame yields a valid chunk that decodes
-     * to the encoder's own (flat) reconstruction -- i.e. RGB -> states is emitted
-     * faithfully. */
+     * to the encoder's own reconstruction -- i.e. RGB -> states is emitted
+     * faithfully, whether the encoder chose flat or textured blocks. */
     {
         ReplayEsc130Enc *er = replay_esc130enc_open(W, H);
         ReplayEsc130 *dr = replay_esc130_open(W, H);
@@ -107,6 +107,32 @@ int main(void)
         CHECK(replay_esc130_decode(dr, out, len) == 0, "rgb chunk decodes");
         CHECK(memcmp(replay_esc130_blocks(dr), replay_esc130enc_recon(er),
                      NB * 4) == 0, "rgb-encoded frame decodes to the reconstruction");
+        replay_esc130_close(dr);
+        replay_esc130enc_close(er);
+    }
+
+    /* Texture path: a per-sub-pixel luma checkerboard (bright/dark within every 2x2
+     * block) is exactly what a textured block captures and a flat block cannot, so
+     * the encoder must choose textured blocks -- and they must still round-trip. */
+    {
+        ReplayEsc130Enc *er = replay_esc130enc_open(W, H);
+        ReplayEsc130 *dr = replay_esc130_open(W, H);
+        static uint8_t rgb[W * H * 3];
+        const uint8_t *tex;
+        size_t len; int y, x, i, ntex = 0;
+        for (y = 0; y < H; y++)
+            for (x = 0; x < W; x++) {
+                int p = (y * W + x) * 3;
+                uint8_t v = (uint8_t)(((x ^ y) & 1) ? 230 : 30);
+                rgb[p] = rgb[p + 1] = rgb[p + 2] = v;
+            }
+        len = replay_esc130enc_frame_rgb(er, rgb, out, sizeof out);
+        CHECK(replay_esc130_decode(dr, out, len) == 0, "textured chunk decodes");
+        CHECK(memcmp(replay_esc130_blocks(dr), replay_esc130enc_recon(er),
+                     NB * 4) == 0, "textured rgb frame decodes to the reconstruction");
+        tex = replay_esc130_textured(dr);
+        for (i = 0; i < NB; i++) if (tex[i]) ntex++;
+        CHECK(ntex > 0, "encoder chose textured blocks for a luma checkerboard");
         replay_esc130_close(dr);
         replay_esc130enc_close(er);
     }

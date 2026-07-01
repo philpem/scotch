@@ -301,6 +301,23 @@ void replay_esc130_flat_rgb(unsigned yavg, unsigned cb, unsigned cr, uint8_t out
     out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
 }
 
+/* The RGB888 one sub-pixel of a *textured* block (yavg, cb, cr, step) renders to
+ * for a given sign (-1/0/+1) -- how a texture pattern's +/-luma step maps to a
+ * colour. The encoder uses this to fit a sign pattern to a 2x2 region's luma. */
+void replay_esc130_textured_rgb(unsigned yavg, unsigned cb, unsigned cr,
+                                unsigned step, int sign, uint8_t out[3])
+{
+    uint32_t word4 = R_CR[cr & 63u] + R_CB[cb & 0xFFu]
+                   + (R_LUM[yavg & 0x3Fu] | 0x80000000u | 0x40000000u);
+    uint32_t stepv = R_STEP[step & 3u];
+    uint32_t a = (sign > 0) ? (word4 + stepv) : (sign < 0) ? (word4 - stepv) : word4;
+    uint16_t c = pack565(clamp_step(a));
+    unsigned r5 = (c >> 11) & 0x1Fu, g6 = (c >> 5) & 0x3Fu, b5 = c & 0x1Fu;
+    out[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+    out[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+    out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+}
+
 /* ---- public API ----------------------------------------------------------- */
 ReplayEsc130 *replay_esc130_open(unsigned width, unsigned height)
 {

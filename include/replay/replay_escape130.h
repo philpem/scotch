@@ -56,6 +56,12 @@ size_t replay_esc130_block_count(const ReplayEsc130 *s);
  * to pick a block's luma/chroma from a target colour. */
 void replay_esc130_flat_rgb(unsigned yavg, unsigned cb, unsigned cr, uint8_t out[3]);
 
+/* The RGB888 (out[0..2]) one sub-pixel of a *textured* block (yavg, cb, cr, step
+ * 0..3) renders to for the given sign (-1/0/+1) -- how a texture pattern's +/-luma
+ * step maps to colour. Lets an encoder fit a texture pattern to a 2x2 region. */
+void replay_esc130_textured_rgb(unsigned yavg, unsigned cb, unsigned cr,
+                                unsigned step, int sign, uint8_t out[3]);
+
 #ifdef __cplusplus
 }
 #endif
