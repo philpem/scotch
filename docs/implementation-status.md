@@ -168,11 +168,16 @@ this file describes the current portable code in `replay-tooling`.
   freeware decoder modules used by the native paths are vendored under
   `vendor/armovie-codecs` (the specific `Dec24`/`Dec8`/`Decompress` variant +
   `Info` per codec), so the default `--modules-dir` drives them.
-- Eidos "Escape 2.0", Replay type **130**, via NUT pass-through to ffmpeg's
-  `escape130` (fourcc `E130`). Each chunk is one frame whose 16-byte Escape header
-  ffmpeg skips itself, so the whole payload passes through under a new
-  `REPLAY_WRAP_NONE` wrap kind (no per-frame wrapper to strip). Validated end to
-  end on seven real `ESCAPE 2.0` samples. See `docs/spec/eidos-escape.md`.
+- Eidos "Escape 2.0", Replay type **130**, decoded natively by
+  `src/replay_escape130.c` (`direct_esc130` dispatch). A YCbCr 2×2-block codec: a
+  persistent, delta/skip-coded grid of 2×2-pixel blocks (base luma + chroma pair +
+  optional per-sub-pixel texture) that the display 2× upsamples with a separable
+  blend. The bitstream decoder is a clean-room implementation from the format spec;
+  the render (`src/dec130_render.c`) is a hand-written reimplementation of
+  `DEC130.DLL`'s display path, bit-exact to the DLL. This replaced an earlier NUT
+  pass-through to ffmpeg's `escape130` (whose render is not the DLL's). Validated
+  byte-identical to a standalone reference decoder on all seven `ESCAPE 2.0` samples
+  and other games' 130 movies. See `docs/spec/eidos-escape.md`.
 - Eidos "Escape 122", Replay type **122**, decoded natively by
   `src/replay_escape122.c` (`direct_esc122` dispatch). Despite the "Escape" name it
   is a *palettised* (PAL8) codec, unrelated to 124/130 -- the proprietary Streamer

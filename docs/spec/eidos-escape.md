@@ -15,7 +15,7 @@ Status:
 | 102 | Escape 102 | as 100, different luma code | `Decomp102` ARM module vendored, not wired |
 | 122 | Escape 122 (**PAL8**) | palettised 8-bit; 8×8 superblocks of 2×2 macroblocks; inline VGA palette; delta-coded | **implemented** — native decoder (`replay_esc122`) |
 | 124 | Escape 124 (RGB555) | RGB555 8×8 superblocks of 2×2 macroblocks; three rotating codebooks; skip VLC; mask + pattern placement | **implemented** — native decoder (`replay_esc124`) |
-| 130 | Escape 2.0 | YUV420P, 2×2 blocks, skip-coded | **implemented** — NUT pass-through to FFmpeg `escape130` |
+| 130 | Escape 2.0 | YCbCr 2×2-block grid, delta/skip-coded, 2× upsampled render | **implemented** — native decoder (`replay_esc130`) + bit-exact render |
 
 > **122 is *not* escape124.** Despite the shared "Escape" name and an earlier
 > assumption here, codec 122 is a **completely different, palettised (PAL8)**
@@ -24,8 +24,9 @@ Status:
 > Running 122 data through `WINSDEC`'s 124 bit-parser yields garbage. It is
 > decoded by its own in-tree decoder ([§ Type 122](#type-122--palettised-pal8)).
 
-This spec records the version lineage, the per-revision frame format, and *why*
-130 is a pass-through while 122 and 124 are not.
+This spec records the version lineage and the per-revision frame format. All three
+later codecs (122, 124, 130) are now decoded by in-tree native decoders; 130 was
+previously a NUT pass-through to FFmpeg's `escape130` (see the history note below).
 
 ## Version timeline
 
@@ -73,23 +74,22 @@ expects.
 16-bit palette length. The bitstream is palettised (PAL8) and unrelated to
 escape124 — see [§ Type 122](#type-122--palettised-pal8).
 
-## Why 130 is a pass-through (and 122/124 are not)
+## All three later codecs are decoded natively
 
-The transcoder's pass-through path muxes codec frames into NUT under a FourCC and
-lets FFmpeg decode them (see [../moviefs-nut-passthrough.md](../moviefs-nut-passthrough.md)).
-It only works if FFmpeg can *recognise* the FourCC:
+Each of 122, 124 and 130 has its own in-tree decoder:
 
-- `escape130` **has** a container tag — `MKTAG('E','1','3','0')` in
-  `libavformat/riff.c` — so a NUT stream tagged `"E130"` is decoded by FFmpeg's
-  `escape130`. ✔
-- `escape124` has **no** RIFF/NUT/MOV tag, so no FourCC to pass through under; and
-  the ARMovie 124 variant differs from FFmpeg's `escape124` anyway (LSB-first, a
-  swapped transition table, an extra 17-bit mask+continue field and a pattern
-  path). So 124 gets a **native decoder** (`replay_esc124`, the RGB555 format below). ✘
-- **122 has no FFmpeg (or DLL) decoder at all** — it is the PAL8 format below.
+- **122** → `replay_esc122` (PAL8) — no FFmpeg or DLL decoder exists for it at all.
+- **124** → `replay_esc124` (RGB555) — the ARMovie variant differs from FFmpeg's
+  `escape124` (LSB-first, a swapped transition table, a 17-bit mask+continue field
+  and a pattern path), and has no NUT FourCC to pass through under anyway.
+- **130** → `replay_esc130` — a clean-room bitstream decoder plus a bit-exact
+  reimplementation of `DEC130.DLL`'s render ([§ Type 130](#type-130--ycbcr-2x2-block-codec)).
 
-So **130 → pass-through**, and **122 / 124 → native decoders** (`replay_esc122`
-PAL8, `replay_esc124` RGB555).
+> **History.** 130 was originally a NUT pass-through to FFmpeg's `escape130`
+> (`MKTAG('E','1','3','0')` in `libavformat/riff.c`). That worked, but FFmpeg's
+> `escape130` render is not the DLL's — the DLL's colour path is genuinely
+> non-linear and 2× upsamples with a separable blend. The native decoder reproduces
+> `DEC130.DLL` bit-for-bit (decode *and* render), so it replaced the pass-through.
 
 ## Type 122 — palettised (PAL8)
 
@@ -229,24 +229,63 @@ decoder every frame, and `replay-transcode`'s RGB24 output is byte-identical to
 whole video. A unit test (`test_replay_escape124`) covers a hand-built
 one-superblock frame.
 
-## Implementation (type 130)
+## Type 130 — YCbCr 2×2-block codec
 
-`replay-transcode` case 130 maps to FourCC `"E130"` with wrap kind
-`REPLAY_WRAP_NONE`: each chunk holds exactly one frame and carries no MovieFS-style
-per-frame wrapper, so the **whole chunk payload** (16-byte Escape header included)
-is muxed as one NUT packet. FFmpeg's `escape130` skips the header and decodes the
-rest to `yuv420p`. Requires `--output-format nut` (the default), like the other
-pass-through codecs.
+Codec 130 ("Escape 2.0") is decoded natively by `src/replay_escape130.c`
+(`include/replay/replay_escape130.h`) via `replay-transcode`'s `direct_esc130`
+dispatch, with the render in `src/dec130_render.c`. One frame per chunk.
 
-```sh
-build/replay-transcode --input Pumpkin.rpl \
-  | ffmpeg -i - -c:v libx264 -pix_fmt yuv420p -c:a aac out.mp4
+### Per-chunk layout
+
+```
+u16le  magic       == 0x130
+u16le  flags       (not needed to decode pixels)
+u32le  vsize       total video size of this chunk
+8 bytes            reserved
+<bitstream>        LSB-first, vsize-16 bytes
 ```
 
-Validated end to end on all seven 130 samples (`Pumpkin`, `Victory`, `cam_start`,
-`inflight`, `landing`, `noVideo`, `win`): FFmpeg auto-detects
-`escape130 (E130 / 0x30333145)` and decodes every frame with no errors, producing
-the correct images.
+A chunk with fewer than 16 bytes carries no bitstream and is a **"no change"**
+frame (identical to the previous one).
+
+### Picture model and decode
+
+The picture is a grid of **2×2-pixel blocks** (`BW = W/2` by `BH = H/2`), each
+holding a packed 32-bit word: a 6-bit base luma, a 5+5-bit chroma pair, and four
+2-bit per-sub-pixel "texture" signs. The block-state array **persists across
+frames** and is delta-coded; an escalating skip-run VLC copies unmentioned blocks
+from the previous frame.
+
+```
+i = read_skip()                          # initial skip (§5 VLC)
+while i < BW*BH:
+    pred = (i>0) ? blk[i-1] : SEED0      # predictor = left neighbour, wraps rows
+    blk[i] = decode_block(pred)          # luma mode then chroma mode (below)
+    i += 1 + read_skip()
+
+luma mode  : 1 -> SIGNS(sidx6,step2,ya5); 00 -> COPY; 010 -> DELTA(d3); 011 -> ABS(v6)
+chroma mode: 0 -> COPY; 10 -> DELTA(d3); 11 -> ABS(cb5,cr5)
+read_skip():  bit==1 -> 0; else v=bits(3) (v?v); v=bits(8) (v?v+7); bits(15)+262
+```
+
+SIGNS writes a fresh texture pattern (a 64-entry sign table) and marks the block
+*textured*; COPY+COPY copies the predictor verbatim (texture included) but renders
+flat. The full block-word layout, the `Y_DIFF`/`C_DIFF`/sign tables, and the packed
+chroma add are in the decoder and `docs/spec` behavioural spec.
+
+### Render
+
+`DEC130.DLL` treats the block grid as a low-resolution colour grid and **2×
+upsamples** it with a separable (2,1,1)/4 blend, rendering textured blocks sharply
+(each sub-pixel gets a ±luma step) and packing RGB565; the chroma response is
+non-linear (three DLL colour tables). `src/dec130_render.c` is a hand-written
+reimplementation of that path, **bit-exact** to the DLL, expanded here to RGB888.
+
+Validated on all seven 320×240 samples (`Pumpkin`, `Victory`, `cam_start`,
+`inflight`, `landing`, `noVideo`, `win`) plus other games' 130 movies: the native
+decoder's RGB output is **byte-identical to the standalone reference decoder**
+(itself bit-exact to `DEC130.DLL`) on every sampled frame. A unit test
+(`test_replay_escape130`) covers a hand-built one-block frame.
 
 **Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
 format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,
@@ -270,8 +309,9 @@ sample; its video is now decoded by the native Escape **122** path above, and it
   16-byte skipped header, 2×2 blocks, `sign_table`/`offset_table {2,4,10,20}`,
   `chroma_adjust`/`chroma_vals`, escalating skip codes, and `yuv420p` output.
 - **FFmpeg** `libavformat/riff.c`: `{ AV_CODEC_ID_ESCAPE130, MKTAG('E','1','3','0') }`
-  — the only Escape container tag (escape124 has none), which is what makes 130
-  pass-through possible and 124 not.
+  — the only Escape container tag (escape124 has none). This is what the earlier
+  130 NUT pass-through relied on, before the native `replay_esc130` decoder replaced
+  it; FFmpeg's `escape130` render does not match `DEC130.DLL` bit-for-bit.
 - **Type 122 (Escape 122)** was reverse-engineered from the Eidos **DOS** player
   (the Windows Streamer DLLs only decode 124/130 — `WINSDEC`/`EDEC` = 124,
   `DEC130` = 130). The [§ Type 122](#type-122--palettised-pal8) format above is a
@@ -288,6 +328,13 @@ sample; its video is now decoded by the native Escape **122** path above, and it
   ([§ Type 124](#type-124--rgb555-block-codec) above), validated byte-for-byte
   against both a standalone reference decoder and FFmpeg's `escape124` on
   `ESCAPE.RPL` / `PYRAMID.RPL`.
+- **Type 130 (Escape 2.0)** has two provenances. The bitstream **decoder**
+  (`src/replay_escape130.c`) is a **clean-room** implementation from the behavioural
+  spec ([§ Type 130](#type-130--ycbcr-2x2-block-codec)); no existing decoder was
+  consulted. The **render** (`src/dec130_render.c`) is a hand-written reimplementation
+  of `DEC130.DLL`'s display path, reverse-engineered from the DLL and bit-exact to it.
+  Together they are byte-identical to a standalone reference decoder (itself bit-exact
+  to `DEC130.DLL`) on every 130 test movie.
 - **Direct byte inspection** of `test-videos/mplayer-samples/{Pumpkin,Victory,
   cam_start,inflight,landing,noVideo,win}.rpl` (130) and `tank.rpl` (122): the
   16-byte LE frame headers, the size-at-`+4` and keyframe-flag-at-`+3` fields, and

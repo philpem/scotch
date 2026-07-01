@@ -179,20 +179,21 @@ header rounds the width up). See
 
 Codecs better handled by ffmpeg use **codec pass-through**: with `--output-format
 nut` the frames are de-wrapped and muxed under a codec fourcc so ffmpeg decodes
-them. Wired: 601 CRAM16, 603 RPZA, 605 Ultimotion, 610 FLI/FLC (MovieFS), the
+them. Wired: 601 CRAM16, 603 RPZA, 605 Ultimotion, 610 FLI/FLC (MovieFS), and the
 Indeo codecs 628/629 (MovieFS) and 901/902 (IMS VideoFS: 901 raw YVU9, 902 Indeo
-3.2), and **130 Eidos "Escape 2.0"** (the games-era sibling ffmpeg decodes as
-`escape130`, fourcc `E130`; validated end-to-end on seven real samples). FLIC's
-decode path is validated with a synthesised frame (ffmpeg tracks its in-stream
-palette); the remaining MovieFS/VideoFS mappings await real samples.
+3.2). FLIC's decode path is validated with a synthesised frame (ffmpeg tracks its
+in-stream palette); the remaining MovieFS/VideoFS mappings await real samples.
 
-**Escape 122** is decoded natively (`replay_esc122`): it is a *palettised* (PAL8)
-codec — unrelated to escape124/130, and not decodable by the Eidos Streamer DLLs —
-so `tank.rpl` transcodes (video + sound). **Escape 124** (a games-era RGB555 block
-codec, `WINSDEC`/`EDEC`) is also decoded natively (`replay_esc124`), walking the
-several frames each chunk packs; validated byte-for-byte against both a reference
-decoder and ffmpeg's own `escape124` on `ESCAPE.RPL`/`PYRAMID.RPL`. Escape 100/102
-(ARM modules) are not yet wired. See
+The three later **Eidos "Escape"** codecs are all decoded natively. **122**
+(`replay_esc122`) is a *palettised* PAL8 codec the Streamer DLLs can't decode, so
+`tank.rpl` transcodes (video + sound). **124** (`replay_esc124`) is a games-era
+RGB555 block codec (`WINSDEC`/`EDEC`), walking the several frames each chunk packs;
+byte-for-byte vs both a reference decoder and ffmpeg's own `escape124` on
+`ESCAPE.RPL`/`PYRAMID.RPL`. **130** ("Escape 2.0", `replay_esc130`) is a YCbCr
+2×2-block codec — a clean-room decoder plus a bit-exact reimplementation of
+`DEC130.DLL`'s render (it replaced an earlier ffmpeg `escape130` pass-through);
+byte-identical to the reference on all seven samples. Escape 100/102 (ARM modules)
+are not yet wired. See
 [docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
 
 Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
