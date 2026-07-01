@@ -204,10 +204,16 @@ static void emit_superblock(ReplayEsc122Enc *e, BitW *w, int sbx, int sby,
     unsigned assigned = 0;     /* macroblocks handled by a pass-1 broadcast */
     int m, n;
 
-    /* Pass 1: one broadcast per group of >=2 identical changed macroblocks. */
+    /* Pass 1: broadcast a group of identical changed macroblocks only when it
+     * actually saves bits. A broadcast costs one block plus a 16-bit mask and a
+     * continue bit (~17 bits of overhead) but replaces `count` pass-2 blocks with
+     * one; it wins when the (count-1) blocks it removes outweigh that overhead.
+     * A uniform block is 11 bits (mask nibble + 7-bit index), a two-colour block
+     * 20 bits (nibble + two 8-bit indices) -- so uniform pairs stay in pass 2,
+     * while two-colour pairs and any triple-plus broadcast. */
     for (m = 0; m < 16; m++) {
         unsigned group;
-        int count;
+        int count, block_bits;
         if (!(changed & (1u << m)) || (assigned & (1u << m)))
             continue;
         group = (1u << m);
@@ -218,7 +224,8 @@ static void emit_superblock(ReplayEsc122Enc *e, BitW *w, int sbx, int sby,
                 group |= (1u << n);
                 count++;
             }
-        if (count >= 2) {
+        block_bits = codes[m].uniform ? 11 : 20;
+        if ((count - 1) * block_bits > 17) {
             wput(w, 0, 1);                            /* pass 1: another block */
             emit_block(w, &codes[m]);
             wput(w, group, 16);
