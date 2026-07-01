@@ -188,9 +188,12 @@ palette); the remaining MovieFS/VideoFS mappings await real samples.
 
 **Escape 122** is decoded natively (`replay_esc122`): it is a *palettised* (PAL8)
 codec — unrelated to escape124/130, and not decodable by the Eidos Streamer DLLs —
-so `tank.rpl` transcodes (video + sound). The other Escape codecs (100/102 ARM
-modules; 124, a games-only RGB555 codec with no ARMovie sample) are not yet wired.
-See [docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
+so `tank.rpl` transcodes (video + sound). **Escape 124** (a games-era RGB555 block
+codec, `WINSDEC`/`EDEC`) is also decoded natively (`replay_esc124`), walking the
+several frames each chunk packs; validated byte-for-byte against both a reference
+decoder and ffmpeg's own `escape124` on `ESCAPE.RPL`/`PYRAMID.RPL`. Escape 100/102
+(ARM modules) are not yet wired. See
+[docs/spec/eidos-escape.md](docs/spec/eidos-escape.md).
 
 Apart from 602 Cinepak (validated end-to-end), the 6xx/9xx mappings are derived
 from the codec sources and not yet validated against real movies. See

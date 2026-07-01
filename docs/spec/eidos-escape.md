@@ -14,7 +14,7 @@ Status:
 | 100 | Escape 100 | 160×128, 5-bit YUV420, 2×2 VQ | `Decomp100` ARM module vendored, not wired |
 | 102 | Escape 102 | as 100, different luma code | `Decomp102` ARM module vendored, not wired |
 | 122 | Escape 122 (**PAL8**) | palettised 8-bit; 8×8 superblocks of 2×2 macroblocks; inline VGA palette; delta-coded | **implemented** — native decoder (`replay_esc122`) |
-| 124 | Escape 124 (RGB555) | RGB555 superblocks + rotating codebooks (FFmpeg `escape124`) | n/a — a games codec; no ARMovie 124 sample exists |
+| 124 | Escape 124 (RGB555) | RGB555 8×8 superblocks of 2×2 macroblocks; three rotating codebooks; skip VLC; mask + pattern placement | **implemented** — native decoder (`replay_esc124`) |
 | 130 | Escape 2.0 | YUV420P, 2×2 blocks, skip-coded | **implemented** — NUT pass-through to FFmpeg `escape130` |
 
 > **122 is *not* escape124.** Despite the shared "Escape" name and an earlier
@@ -34,7 +34,7 @@ This spec records the version lineage, the per-revision frame format, and *why*
 | **100** | 1993 | Acorn ARMovie | 32-bit codec ID only | 5-bit YUV420, 160×128 | 2×2 two-colour VQ; chroma from a 256-entry combined U/V codebook; luma = two 5-bit values + 3-bit selector mask; variable-length block-skip codes |
 | **102** | 1993 | Acorn ARMovie | 32-bit codec ID only | as 100 | as 100; *only the luma code differs* |
 | **122** | mid-90s | Acorn/Eidos | per-chunk `[0x116][vsize][pal]` | **PAL8** | 8×8 superblocks of 2×2 macroblocks; inline VGA palette; per-macroblock 2-colour or uniform index; escalating skip VLC; delta-coded (see § Type 122) |
-| **124** | mid-90s | Eidos games | 8-byte: `flags`(32) + `size`(32), MSB-first | RGB555 | as 122 (FFmpeg `escape124`) |
+| **124** | mid-90s | Eidos games / ARMovie | per frame: `flags`(32) + `size`(32); block bitstream **LSB-first** | RGB555 | 8×8 superblocks of 2×2 macroblocks; three rotating codebooks (4-bit mask + two RGB555 colours); escalating skip VLC; mask + pattern placement (FFmpeg `escape124` variant) |
 | **130** | 1997 | Eidos games + ARMovie | 16-byte, *skipped* by the decoder | YUV420P | 2×2 blocks; per-block luma via `sign_table`/`offset_table {2,4,10,20}`; chroma via `chroma_adjust`→`chroma_vals` (32 entries); VLC skip codes (skip=0/3/8/15-bit escalating) |
 
 The frame-header evolution is the clearest version marker. The earliest codecs
@@ -82,11 +82,14 @@ It only works if FFmpeg can *recognise* the FourCC:
 - `escape130` **has** a container tag — `MKTAG('E','1','3','0')` in
   `libavformat/riff.c` — so a NUT stream tagged `"E130"` is decoded by FFmpeg's
   `escape130`. ✔
-- `escape124` has a decoder but **no** RIFF/NUT/MOV tag, so no FourCC — and in any
-  case 122 is not escape124. ✘
+- `escape124` has **no** RIFF/NUT/MOV tag, so no FourCC to pass through under; and
+  the ARMovie 124 variant differs from FFmpeg's `escape124` anyway (LSB-first, a
+  swapped transition table, an extra 17-bit mask+continue field and a pattern
+  path). So 124 gets a **native decoder** (`replay_esc124`, the RGB555 format below). ✘
 - **122 has no FFmpeg (or DLL) decoder at all** — it is the PAL8 format below.
 
-So **130 → pass-through** and **122 → a native PAL8 decoder** (`replay_esc122`).
+So **130 → pass-through**, and **122 / 124 → native decoders** (`replay_esc122`
+PAL8, `replay_esc124` RGB555).
 
 ## Type 122 — palettised (PAL8)
 
@@ -153,6 +156,79 @@ attack-helicopter gameplay); `replay-transcode`'s output is byte-identical to th
 standalone reference decoder, and a unit test (`test_replay_escape122`) covers a
 hand-built one-superblock frame.
 
+## Type 124 — RGB555 block codec
+
+Codec 124 is the Eidos games "Escape" codec decoded by `WINSDEC.DLL` (`SC_Frame`)
+and `EDEC.DLL` (`EC_Frame`), decoded natively by `src/replay_escape124.c`
+(`include/replay/replay_escape124.h`) via `replay-transcode`'s `direct_esc124`
+dispatch. Its internal pixel format is **RGB555** (`0RRRRRGGGGGBBBBB`, red high),
+one `uint16` per pixel. It is *not* 122 (PAL8); the two share only the
+superblock/skip-VLC skeleton.
+
+### Frames per chunk
+
+Unlike 122/130 (one frame per chunk), a real codec-124 movie packs the
+header's **"frames per chunk"** count into one ARMovie video chunk, each frame a
+self-delimiting unit:
+
+```
+u32le  flags       escape124 frame flags (mode gate + codebook-resend bits)
+u32le  size         total bytes of THIS frame, including this 8-byte header
+<bitstream>         LSB-first block bitstream
+```
+
+The transcoder walks a chunk by advancing `size` bytes per frame until the chunk's
+video bytes are consumed. Inter-frame deltas reference the immediately preceding
+frame, so every frame is decoded in order.
+
+### Frame model
+
+The frame is a grid of **8×8 superblocks**, each a 4×4 grid of **2×2 macroblocks**
+(four RGB555 pixels). The decoder keeps three **codebooks** of macroblocks and a
+persistent RGB555 frame; skipped superblocks keep their previous contents.
+
+```
+flags gate:   if (flags & 0x7800000) == 0  ⇒  whole frame copied from previous
+codebooks:    for i in 0,1,2 if flags & (1<<(17+i)) resend codebook (below)
+per superblock (raster order), current codebook index persists across the frame:
+    skip = skip_vlc()                       # escalating 1/+3/+7/+12-bit code
+    if skip > 0: { skip--; keep previous superblock; next }
+    leading = read_bit()                    # 1 ⇒ straight to the pattern path
+    if !leading:                            # main loop
+        repeat:
+            mb   = read_macroblock()        # codebook-switch bit, then depth-bit index
+            m17  = read(17); mask = m17 & 0xffff; continue = (m17 >> 16) & 1
+            for k in 0..15: if mask & mask_matrix[k]: place mb at slot k
+            if continue: break              # drop into the pattern path
+    pattern path: sub = read_bit()
+        sub == 1 and (flags & 0x10000):     while !read_bit(): place read_macroblock() at read(4)
+        sub == 0:  sel = read(4); ebp = accumulated_mask ^ pattern_delta(sel)
+                   for k in 0..15: if ebp & mask_matrix[k]: place read_macroblock() at slot k
+
+codebook resend:
+    i==0 → slot 1, depth = read(4),  size = 1<<depth
+    i==1 → slot 0, depth = read(4),  size = num_superblocks<<depth   (per-superblock)
+    i==2 → slot 2, size = read(20),  depth = ilog2(size-1)+1
+    each entry (34 bits): mask = read(4); c0 = read(15); c1 = read(15);
+                          pixel[j] = (mask>>j)&1 ? c1 : c0
+read_macroblock: if read_bit(): cb = transitions[cb][read_bit()]
+                 idx = read(cb.depth); if cb==0: idx += superblock_index<<cb.depth
+                 return cb.blocks[idx]
+```
+
+`mask_matrix` maps the row-major 4×4 slot `k` to its bit in the 16-bit mask;
+`transitions[3][2] = {{1,2},{2,0},{0,1}}` (the ARMovie column order). The decoder
+also reproduces a genuine WINSDEC bit-reader quirk — a stale dword look-ahead
+register across 32-bit boundaries — so the output matches the shipping decoder
+bit-for-bit.
+
+Validated on `ESCAPE.RPL` (320×240, 4×25 frames) and `PYRAMID.RPL` (320×120,
+15/chunk): `replay_esc124`'s RGB555 is byte-identical to the standalone reference
+decoder every frame, and `replay-transcode`'s RGB24 output is byte-identical to
+**FFmpeg's own `escape124`** decoder (an independent implementation) across the
+whole video. A unit test (`test_replay_escape124`) covers a hand-built
+one-superblock frame.
+
 ## Implementation (type 130)
 
 `replay-transcode` case 130 maps to FourCC `"E130"` with wrap kind
@@ -203,6 +279,15 @@ sample; its video is now decoded by the native Escape **122** path above, and it
   implementation written strictly from that spec (no existing decoder consulted),
   validated byte-for-byte against an independent standalone reference decoder on
   `tank.rpl`.
+- **Type 124 (Escape 124)** was reverse-engineered from `WINSDEC.DLL` (`SC_Frame`)
+  and cross-referenced with the publicly documented **FFmpeg `escape124`** algorithm
+  (the `0x7800000` gate, `mask_matrix`, transition table, codebook-flag bits, skip
+  VLC); the ARMovie-specific parts (LSB-first order, swapped transitions, the 17-bit
+  mask+continue field, the pattern path, and a WINSDEC dword-lookahead quirk) came
+  from the RE. `src/replay_escape124.c` is a reimplementation of that algorithm
+  ([§ Type 124](#type-124--rgb555-block-codec) above), validated byte-for-byte
+  against both a standalone reference decoder and FFmpeg's `escape124` on
+  `ESCAPE.RPL` / `PYRAMID.RPL`.
 - **Direct byte inspection** of `test-videos/mplayer-samples/{Pumpkin,Victory,
   cam_start,inflight,landing,noVideo,win}.rpl` (130) and `tank.rpl` (122): the
   16-byte LE frame headers, the size-at-`+4` and keyframe-flag-at-`+3` fields, and
