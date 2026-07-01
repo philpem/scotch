@@ -11,8 +11,8 @@ Status:
 
 | Type | Name | Internal format | Our support |
 | --- | --- | --- | --- |
-| 100 | Escape 100 | 160×128, 5-bit YUV420, 2×2 VQ | `Decomp100` ARM module vendored, not wired |
-| 102 | Escape 102 | as 100, different luma code | `Decomp102` ARM module vendored, not wired |
+| 100 | Escape 100 | 160×128 YUV555, 2×2-block VQ; 256-entry chroma codebook; delta/skip-coded | **implemented** — native decoder (`replay_esc100`) |
+| 102 | Escape 102 | as 100 (identical bitstream); differs only in the frame header | **implemented** — native decoder (`replay_esc100`) |
 | 122 | Escape 122 (**PAL8**) | palettised 8-bit; 8×8 superblocks of 2×2 macroblocks; inline VGA palette; delta-coded | **implemented** — native decoder (`replay_esc122`) |
 | 124 | Escape 124 (RGB555) | RGB555 8×8 superblocks of 2×2 macroblocks; three rotating codebooks; skip VLC; mask + pattern placement | **implemented** — native decoder (`replay_esc124`) |
 | 130 | Escape 2.0 | YCbCr 2×2-block grid, delta/skip-coded, 2× upsampled render | **implemented** — native decoder (`replay_esc130`) + bit-exact render |
@@ -32,16 +32,17 @@ previously a NUT pass-through to FFmpeg's `escape130` (see the history note belo
 
 | Ver | ~Era | Origin | Frame header | Pixel model | Block coding |
 | --- | --- | --- | --- | --- | --- |
-| **100** | 1993 | Acorn ARMovie | 32-bit codec ID only | 5-bit YUV420, 160×128 | 2×2 two-colour VQ; chroma from a 256-entry combined U/V codebook; luma = two 5-bit values + 3-bit selector mask; variable-length block-skip codes |
-| **102** | 1993 | Acorn ARMovie | 32-bit codec ID only | as 100 | as 100; *only the luma code differs* |
+| **100** | 1993 | Acorn ARMovie | `u32 id=0x100` | 5-bit-Y YUV555, 160×128 | 2×2-block VQ; chroma from a 256-entry codebook; luma = 1–2 5-bit values + a 3-bit selector mask; escalating block-skip VLC (see § Type 100/102) |
+| **102** | 1993 | Acorn ARMovie | `u32 id=0x102` + reserved word | as 100 | **identical bitstream** to 100 (the "different luma code" is only the module's field packing; the bits are the same) |
 | **122** | mid-90s | Acorn/Eidos | per-chunk `[0x116][vsize][pal]` | **PAL8** | 8×8 superblocks of 2×2 macroblocks; inline VGA palette; per-macroblock 2-colour or uniform index; escalating skip VLC; delta-coded (see § Type 122) |
 | **124** | mid-90s | Eidos games / ARMovie | per frame: `flags`(32) + `size`(32); block bitstream **LSB-first** | RGB555 | 8×8 superblocks of 2×2 macroblocks; three rotating codebooks (4-bit mask + two RGB555 colours); escalating skip VLC; mask + pattern placement (FFmpeg `escape124` variant) |
 | **130** | 1997 | Eidos games + ARMovie | 16-byte, *skipped* by the decoder | YUV420P | 2×2 blocks; per-block luma via `sign_table`/`offset_table {2,4,10,20}`; chroma via `chroma_adjust`→`chroma_vals` (32 entries); VLC skip codes (skip=0/3/8/15-bit escalating) |
 
-The frame-header evolution is the clearest version marker. The earliest codecs
-(100/102) prefix each frame with **only** a 32-bit word holding the codec ID;
-"later revisions decided to add frame size and even flags that affect [the]
-decoding process" (Kostya, below). By 122/130 the header is 16 bytes of
+The frame-header evolution is the clearest version marker. The earliest codec
+(100) prefixes each frame with **only** a 32-bit word holding the codec ID; 102
+adds one reserved word (an 8-byte header); "later revisions decided to add frame
+size and even flags that affect [the] decoding process" (Kostya, below). By
+122/130 the header is 16 bytes of
 little-endian words, and by the games' Escape 124 it is the 8-byte
 `flags`+`size` pair FFmpeg reads MSB-first through its bit-reader.
 
@@ -90,6 +91,79 @@ Each of 122, 124 and 130 has its own in-tree decoder:
 > `escape130` render is not the DLL's — the DLL's colour path is genuinely
 > non-linear and 2× upsamples with a separable blend. The native decoder reproduces
 > `DEC130.DLL` bit-for-bit (decode *and* render), so it replaced the pass-through.
+
+## Type 100/102 — 5-bit-YUV 2×2-block VQ
+
+Codecs 100 and 102 (© Eidos plc 1993) are the earliest Escape codecs, shipped as
+the Acorn ARMovie decompressor modules `Decomp100` / `Decomp102`. They are decoded
+natively by `src/replay_escape100.c` (`include/replay/replay_escape100.h`) via
+`replay-transcode`'s `direct_esc100` dispatch. **100 and 102 are the same codec on
+the wire; they differ only in the per-frame header.**
+
+Pixels are **YUV555** words (`Y[0:4] U[5:9] V[10:14]`, one `uint16` per pixel).
+The 160×128 picture is an **80×64 grid of 2×2-pixel blocks** and persists across
+frames (delta-coded).
+
+### Per-frame layout
+
+A single ARMovie video chunk concatenates several frames. Each frame is:
+
+```
+100:  u32 id (== 0x100)                       then the bitstream
+102:  u32 id (== 0x102), u32 reserved         then the bitstream
+```
+
+The bitstream is **LSB-first**, read as 32-bit little-endian words; frames are
+word-aligned (a frame ends on a word boundary, so the next frame's id follows).
+
+### Decode loop
+
+The picture is walked in block raster order with a cursor `(bx,by)`:
+
+```
+bx = by = 0
+loop:
+    bx += read_skip()                 # escalating skip VLC (below); skipped blocks
+    while bx >= 80: bx -= 80; by++    #   keep the previous frame's pixels
+    if by >= 64: done
+    if read_bit() == 1: decode_luma_block(bx, by)
+    else:               decode_chroma_block(bx, by)
+    bx += 1
+
+read_skip():                          # blocks to copy from the previous frame
+    if bit() == 0: return 0
+    v = bits(3);  if v != 7:   return 1 + v
+    v = bits(7);  if v != 127: return 8 + v
+    return 135 + bits(15)
+
+read_chroma_index():                  # index into the 256-entry chroma codebook
+    i = bits(6); if i > 48: i += bits(2) << 6; return i
+```
+
+### Blocks
+
+A block's four pixels are `chroma | luma5`, where `chroma` is a codebook entry (a
+YUV555 value with Y=0) and `luma5` is a 5-bit Y.
+
+- **Luma block** (mode bit 1): `sel = bits(3)`, `lumaA = bits(5)`, and if `sel != 0`
+  also `lumaB = bits(5)`. Then `new_chroma = bit()`: if 0, reuse the block's
+  existing chroma (its current top-left pixel, luma cleared); if 1, `chroma =
+  codebook[read_chroma_index()]`. The 3-bit selector is a per-sub-pixel mask —
+  bit0→top-right, bit1→bottom-left, bit2→bottom-right each choose luma B, else A;
+  **the top-left pixel is always luma A**.
+- **Chroma block** (mode bit 0): `chroma = codebook[read_chroma_index()]`; every
+  pixel keeps its own existing luma and takes the new chroma.
+
+  > On 102 the module reads `sel`+`lumaA` as a single `bits(8)` split into low-3 /
+  > high-5, which — LSB-first — is the same bits as 100's `bits(3)`+`bits(5)`. So
+  > the luma coding is identical; only the frame header differs.
+
+The 256-entry chroma codebook is a static table baked into the modules (identical
+in both); the in-tree decoder embeds it. Validated **byte-exact** against the
+`Decomp100`/`Decomp102` modules: the real `SplashBox` movie (160×128, 25 frames, ©
+Computer Concepts 1993) decodes identically to `Decomp100` frame-for-frame, and a
+differential test (`test_escape100_module`) checks both modules on synthetic frames
+covering every path.
 
 ## Type 122 — palettised (PAL8)
 
@@ -297,12 +371,20 @@ sample; its video is now decoded by the native Escape **122** path above, and it
 
 ## Appendix — provenance
 
+- **Type 100/102 (Escape 100/102)** were reverse-engineered directly from the
+  vendored `Decomp100` / `Decomp102` ARM modules (disassembly + tracing under the
+  in-tree ARMulator), cross-checked with Kostya's blog below. The [§ Type 100/102]
+  (#type-100102--5-bit-yuv-2x2-block-vq) format above describes the bitstream;
+  `src/replay_escape100.c` is a clean, readable reimplementation of it (not a
+  register transliteration), with the modules' 256-entry chroma codebook embedded
+  verbatim. Validated **byte-exact** against those modules: the real `SplashBox`
+  movie for 100, and differential path-covering synthetic frames for both.
 - **Kostya / Nihav**, *"A quick look at Eidos Escape codecs"*,
   <https://codecs.multimedia.cx/2024/04/a-quick-look-at-eidos-escape-codecs/>
-  (2024-04): the ARMovie Escape 100/102 reverse engineering — 160×128, 5-bit
-  YUV420, 2×2 VQ, the chroma codebook, the luma value+mask coding, the 32-bit
-  codec-ID frame header, and the note that the skip code "survived until Escape
-  124" and that the codecs "survived for some time in the games."
+  (2024-04): background for the Escape 100/102 reverse engineering — 160×128,
+  5-bit YUV, 2×2 VQ, the chroma codebook, the luma value+mask coding, and the note
+  that the skip code "survived until Escape 124" and the codecs "survived for some
+  time in the games."
 - **FFmpeg** `libavcodec/escape124.c`, `libavcodec/escape130.c`: the block-level
   bitstreams for the later codecs — escape124's `flags`+`size` header, 8×8
   superblocks / 2×2 macroblocks / three codebooks / RGB555 output; escape130's

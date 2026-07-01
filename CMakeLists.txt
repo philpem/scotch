@@ -45,6 +45,7 @@ add_library(replay STATIC
     src/replay_moviefs.c
     src/replay_tca.c
     src/replay_escape_adpcm.c
+    src/replay_escape100.c
     src/replay_escape122.c
     src/replay_escape124.c
     src/replay_escape130.c
@@ -184,6 +185,26 @@ add_replay_test(test_replay_sound tests/test_replay_sound.c)
 add_replay_test(test_nut_mux tests/test_nut_mux.c)
 add_replay_test(test_replay_moviefs tests/test_replay_moviefs.c)
 add_replay_test(test_replay_escape_adpcm tests/test_replay_escape_adpcm.c)
+add_replay_test(test_replay_escape100 tests/test_replay_escape100.c)
+
+# Differential test: native Escape 100/102 decoder vs the vendored Decomp100/102
+# ARM modules (the golden decoders), on synthetic path-covering frames.
+add_executable(test_escape100_module tests/test_escape100_module.c)
+target_link_libraries(test_escape100_module PRIVATE replay codecif)
+if(NOT MSVC)
+    target_compile_options(test_escape100_module PRIVATE
+        -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp100/Decompress,ffd")
+    add_test(NAME test_escape100_module_100 COMMAND test_escape100_module
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp100/Decompress,ffd" 256)
+    set_tests_properties(test_escape100_module_100 PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp102/Decompress,ffd")
+    add_test(NAME test_escape100_module_102 COMMAND test_escape100_module
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp102/Decompress,ffd" 258)
+    set_tests_properties(test_escape100_module_102 PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_replay_test(test_replay_escape122 tests/test_replay_escape122.c)
 add_replay_test(test_replay_escape124 tests/test_replay_escape124.c)
 add_replay_test(test_replay_escape130 tests/test_replay_escape130.c)

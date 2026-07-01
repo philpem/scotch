@@ -178,6 +178,17 @@ this file describes the current portable code in `replay-tooling`.
   pass-through to ffmpeg's `escape130` (whose render is not the DLL's). Validated
   byte-identical to a standalone reference decoder on all seven `ESCAPE 2.0` samples
   and other games' 130 movies. See `docs/spec/eidos-escape.md`.
+- Eidos "Escape 100" and "Escape 102", Replay types **100/102** (© Eidos 1993),
+  decoded natively by `src/replay_escape100.c` (`direct_esc100` dispatch). A
+  5-bit-Y YUV555 2×2-block vector quantiser: an 80×64 grid of 2×2-pixel blocks with
+  a 256-entry chroma codebook, luma blocks (1–2 5-bit values + a 3-bit sub-pixel
+  selector) and chroma-only blocks, an escalating skip-run VLC, delta-coded. A
+  chunk concatenates several frames. **100 and 102 share the bitstream and the
+  codebook** and differ only in the frame header (100: `u32 id`; 102: `u32 id` +
+  reserved word). Reverse-engineered from the vendored `Decomp100`/`Decomp102` ARM
+  modules and validated byte-exact against them: the real `SplashBox` movie
+  (160×128, 25 frames) for 100, plus a differential test over synthetic
+  path-covering frames for both. See `docs/spec/eidos-escape.md`.
 - Eidos "Escape 122", Replay type **122**, decoded natively by
   `src/replay_escape122.c` (`direct_esc122` dispatch). Despite the "Escape" name it
   is a *palettised* (PAL8) codec, unrelated to 124/130 -- the proprietary Streamer
