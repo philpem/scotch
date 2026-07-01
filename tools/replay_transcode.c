@@ -37,6 +37,7 @@
 #include "replay/replay_buffer.h"
 #include "replay/replay_escape122.h"
 #include "replay/replay_escape124.h"
+#include "replay/replay_escape130.h"
 #include "replay/replay_escape_adpcm.h"
 #include "replay/replay_moviefs.h"
 #include "replay/replay_nut.h"
@@ -111,6 +112,7 @@ typedef struct {
     int direct_tca;             /* decode with the native replay_tca decoder (500) */
     int direct_esc122;          /* decode with the native escape122 decoder (122) */
     int direct_esc124;          /* decode with the native escape124 decoder (124) */
+    int direct_esc130;          /* decode with the native escape130 decoder (130) */
     int moviefs_wrapper;        /* strip MovieFS's 16-byte per-frame header (6xx) */
     int arm_mode_32;            /* run the module in 32-bit ARM mode (WSS codecs) */
     /* Pass-through: instead of decoding, mux each (de-wrapped) codec frame into
@@ -247,13 +249,11 @@ static int codec_info(unsigned codec, CodecInfo *out)
     case 902: out->name = "Indeo 3.2 (IV32, VideoFS, pass-through)";
         out->passthrough_fourcc = "IV32";
         out->passthrough_wrap = REPLAY_WRAP_VIDEOFS; return 0;
-    /* Eidos "Escape 2.0" (video format 130) -- the Acorn ARMovie sibling of the
-     * games codec ffmpeg decodes as escape130. Each chunk holds one frame whose
-     * 16-byte header ffmpeg's escape130 skips, so the whole payload passes
-     * through under the "E130" fourcc. See docs/spec/eidos-escape.md. */
-    case 130: out->name = "Eidos Escape 2.0 (escape130, pass-through)";
-        out->passthrough_fourcc = "E130";
-        out->passthrough_wrap = REPLAY_WRAP_NONE; return 0;
+    /* Eidos "Escape 2.0" (video format 130) -- a YCbCr 2x2-block codec, decoded
+     * natively by `replay_esc130` (clean-room decode + a bit-exact reimplementation
+     * of DEC130.DLL's render). One frame per chunk. See docs/spec/eidos-escape.md. */
+    case 130: out->name = "Eidos Escape 2.0 (escape130)"; out->colour = COL_RGB888;
+        out->direct_esc130 = 1; return 0;
     /* Eidos "Escape 122" -- a palettised (PAL8) codec, unrelated to escape124/130
      * (the Streamer DLLs can't decode it); decoded natively by `replay_esc122`
      * from the format spec in docs/spec/eidos-escape.md. */
@@ -1029,6 +1029,7 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
     char module_buf[1024];
     size_t pixel_count = (size_t)movie->width * movie->height;
     int use_module = !info->direct_tca && !info->direct_esc122 && !info->direct_esc124
+                  && !info->direct_esc130
                   && !(info->direct_type23 && module_path == NULL);
     unsigned block_x = 1, block_y = 1;
     unsigned rounded_w = movie->width, rounded_h = movie->height;
@@ -1213,6 +1214,30 @@ static unsigned long transcode_video(const ReplayAe7Movie *movie,
             }
         }
         replay_esc124_close(esc);
+    } else if (info->direct_esc130) {
+        /* Eidos Escape 2.0 (130): a YCbCr 2x2-block codec, one frame per chunk
+         * (16-byte header + LSB-first bitstream). Decode updates the persistent
+         * block state; render it to RGB888. Chunks < 16 bytes are "no change" and
+         * re-emit the current picture, keeping one output frame per chunk. */
+        ReplayEsc130 *esc = replay_esc130_open(movie->width, movie->height);
+        size_t c;
+        if (esc == NULL)
+            die("type 130: bad dimensions (must be even) or no memory");
+        fprintf(stderr, "%s: codec 130 (Escape 2.0), %ux%u\n", prog,
+                movie->width, movie->height);
+        for (c = 0; c < movie->chunk_count; c++) {
+            const ReplayAe7Chunk *chunk = &movie->chunks[c];
+            size_t voff = (size_t)chunk->file_offset;
+            size_t vbytes = (size_t)chunk->video_bytes;
+            sink_chunk_audio(sink, c);
+            if (voff > movie_len || vbytes > movie_len - voff)
+                die("chunk %zu video region is out of range", c);
+            (void)replay_esc130_decode(esc, movie_data + voff, vbytes);
+            replay_esc130_render(esc, rgb);
+            sink_video_frame(sink, rgb, pixel_count * 3);
+            total++;
+        }
+        replay_esc130_close(esc);
     } else if (!use_module) {
         /* Fixed-size packed frames: unpack directly, no ARM decoder. An
          * explicit --module forces the decompressor route instead. The native
