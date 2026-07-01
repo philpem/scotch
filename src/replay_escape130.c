@@ -81,7 +81,7 @@ struct ReplayEsc130 {
     uint32_t *blk;          /* persistent block-state words (word0) */
     uint8_t *tex;           /* per-block "textured" flag */
     uint32_t sign_tbl[64];  /* SIGN_TUPLES packed into word bits 8..15 */
-    uint32_t *rbuf;         /* render scratch: (total+1)*2 words {word0,word4} */
+    Dec130Block *rbuf;      /* render scratch: total+1 blocks (rbuf[0] = seed) */
     uint16_t *out565;       /* render scratch: w*h RGB565 */
 };
 
@@ -191,7 +191,7 @@ ReplayEsc130 *replay_esc130_open(unsigned width, unsigned height)
     s->total = (size_t)s->bw * (size_t)s->bh;
     s->blk = calloc(s->total ? s->total : 1, sizeof(uint32_t));
     s->tex = calloc(s->total ? s->total : 1, 1);
-    s->rbuf = calloc((s->total + 1) * 2, sizeof(uint32_t));
+    s->rbuf = calloc(s->total + 1, sizeof(Dec130Block));
     s->out565 = calloc((size_t)s->w * (size_t)s->h, sizeof(uint16_t));
     if (s->blk == NULL || s->tex == NULL || s->rbuf == NULL || s->out565 == NULL) {
         replay_esc130_close(s);
@@ -252,13 +252,13 @@ void replay_esc130_render(ReplayEsc130 *s, uint8_t *rgb)
     size_t i;
     int oy, ox;
 
-    /* rbuf[0..1] = seed/sentinel (0); block i at rbuf[(i+1)*2 .. +1]. */
-    s->rbuf[0] = 0; s->rbuf[1] = 0;
+    /* rbuf[0] = seed/sentinel; block i at rbuf[i+1]. */
+    s->rbuf[0].word0 = 0; s->rbuf[0].word4 = 0;
     for (i = 0; i < s->total; i++) {
-        s->rbuf[(i + 1) * 2 + 0] = s->blk[i];        /* word0 */
-        s->rbuf[(i + 1) * 2 + 1] = block_base(s, i); /* word4 */
+        s->rbuf[i + 1].word0 = s->blk[i];
+        s->rbuf[i + 1].word4 = block_base(s, i);
     }
-    dec130_render((const uint8_t *)s->rbuf, s->w, s->h, s->out565);
+    dec130_render(s->rbuf, s->w, s->h, s->out565);
 
     for (oy = 0; oy < s->h; oy++)
         for (ox = 0; ox < s->w; ox++) {
