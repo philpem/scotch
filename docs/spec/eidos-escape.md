@@ -230,6 +230,15 @@ attack-helicopter gameplay); `replay-transcode`'s output is byte-identical to th
 standalone reference decoder, and a unit test (`test_replay_escape122`) covers a
 hand-built one-superblock frame.
 
+### Encoding
+
+`src/replay_escape122_enc.c` encodes PAL8 frames back to this format. It codes each
+2×2 macroblock as uniform or two-colour, delta-codes against the reconstructed
+picture (skipping unchanged superblocks), and uses the pass-1 broadcast to code a
+group of identical macroblocks once. It is format-compatible (the decoder and DOS
+player accept it), not bit-compatible with any Eidos encoder. Re-encoding all 1925
+`tank.rpl` frames is lossless and only ~2% larger than the originals.
+
 ## Type 124 — RGB555 block codec
 
 Codec 124 is the Eidos games "Escape" codec decoded by `WINSDEC.DLL` (`SC_Frame`)

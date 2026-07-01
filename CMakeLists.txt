@@ -48,6 +48,7 @@ add_library(replay STATIC
     src/replay_escape100.c
     src/replay_escape100_enc.c
     src/replay_escape122.c
+    src/replay_escape122_enc.c
     src/replay_escape124.c
     src/replay_escape130.c
 )
@@ -208,6 +209,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp102/Decompres
     set_tests_properties(test_escape100_module_102 PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 add_replay_test(test_replay_escape122 tests/test_replay_escape122.c)
+add_replay_test(test_escape122_encode tests/test_escape122_encode.c)
 add_replay_test(test_replay_escape124 tests/test_replay_escape124.c)
 add_replay_test(test_replay_escape130 tests/test_replay_escape130.c)
 add_replay_test(test_replay_tca tests/test_replay_tca.c)
