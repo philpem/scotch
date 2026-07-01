@@ -230,6 +230,15 @@ attack-helicopter gameplay); `replay-transcode`'s output is byte-identical to th
 standalone reference decoder, and a unit test (`test_replay_escape122`) covers a
 hand-built one-superblock frame.
 
+### Encoding
+
+`src/replay_escape122_enc.c` encodes PAL8 frames back to this format. It codes each
+2×2 macroblock as uniform or two-colour, delta-codes against the reconstructed
+picture (skipping unchanged superblocks), and uses the pass-1 broadcast to code a
+group of identical macroblocks once. It is format-compatible (the decoder and DOS
+player accept it), not bit-compatible with any Eidos encoder. Re-encoding all 1925
+`tank.rpl` frames is lossless and only ~2% larger than the originals.
+
 ## Type 124 — RGB555 block codec
 
 Codec 124 is the Eidos games "Escape" codec decoded by `WINSDEC.DLL` (`SC_Frame`)
@@ -360,6 +369,25 @@ Validated on all seven 320×240 samples (`Pumpkin`, `Victory`, `cam_start`,
 decoder's RGB output is **byte-identical to the standalone reference decoder**
 (itself bit-exact to `DEC130.DLL`) on every sampled frame. A unit test
 (`test_replay_escape130`) covers a hand-built one-block frame.
+
+### Encoding
+
+Because the block state → RGB render is non-linear, `src/replay_escape130_enc.c`
+encodes at the **block-state level**: given a frame's per-block words and textured
+flags (as the decoder exposes them), it picks the luma/chroma prefix modes
+(SIGNS/COPY/DELTA/ABS, or a full copy) that reproduce each state from its left
+neighbour, delta-coding by skipping unchanged blocks. Re-encoding the decoded
+states of the 130 samples is lossless (identical states, hence identical render)
+and, because it always chooses the cheapest reproducing mode, a few percent
+*smaller* than the originals (e.g. `landing` 96.6%, `intro` 91.1%).
+
+To turn **arbitrary RGB** into Escape 130, `replay_esc130enc_frame_rgb` inverts the
+colour render: at open it renders all 65536 flat states (via
+`replay_esc130_flat_rgb`) and builds a coarse `RGB → (yavg, cb, cr)` lookup, then
+reduces each 2×2 source region to one colour and picks the nearest representable
+flat block. So any video (e.g. an FFmpeg test card) can be encoded to 130 and
+played back. It is currently flat-only (no per-block texture yet), so quality is
+approximate — around 20 dB on a torture-test colour card.
 
 **Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
 format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,

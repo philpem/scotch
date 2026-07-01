@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "escape130_tables.h"
+
 /* ---- bit reader (spec § 3): LSB-first -------------------------------------- */
 typedef struct {
     const uint8_t *data;
@@ -49,34 +51,6 @@ static unsigned rd_bits(BitReader *b, int n)
         v |= (unsigned)rd_bit(b) << i;
     return v;
 }
-
-/* ---- constant tables (spec § 6/8) ----------------------------------------- */
-static const int Y_DIFF[8] = { -4, -3, -2, -1, 1, 2, 3, 4 };
-
-static const uint32_t C_DIFF[8] = {
-    0x00010000u, 0x01010000u, 0x01000000u, 0x00FF0000u,
-    0xFFFF0000u, 0xFEFF0000u, 0xFF000000u, 0xFF010000u
-};
-
-/* The four signs (TL,TR,BL,BR) for each 6-bit sidx (spec § 8). */
-static const int8_t SIGN_TUPLES[64][4] = {
-    { 0, 0, 0, 0}, {-1,+1, 0, 0}, {+1,-1, 0, 0}, {-1, 0,+1, 0},
-    {-1,+1,+1, 0}, { 0,-1,+1, 0}, {+1,-1,+1, 0}, {-1,-1,+1, 0},
-    {+1, 0,-1, 0}, { 0,+1,-1, 0}, {+1,+1,-1, 0}, {-1,+1,-1, 0},
-    {+1,-1,-1, 0}, {-1, 0, 0,+1}, {-1,+1, 0,+1}, { 0,-1, 0,+1},
-    { 0, 0, 0, 0}, {+1,-1, 0,+1}, {-1,-1, 0,+1}, {-1, 0,+1,+1},
-    {-1,+1,+1,+1}, { 0,-1,+1,+1}, {+1,-1,+1,+1}, {-1,-1,+1,+1},
-    { 0, 0,-1,+1}, {+1, 0,-1,+1}, {-1, 0,-1,+1}, { 0,+1,-1,+1},
-    {+1,+1,-1,+1}, {-1,+1,-1,+1}, { 0,-1,-1,+1}, {+1,-1,-1,+1},
-    { 0, 0, 0, 0}, {-1,-1,-1,+1}, {+1, 0, 0,-1}, { 0,+1, 0,-1},
-    {+1,+1, 0,-1}, {-1,+1, 0,-1}, {+1,-1, 0,-1}, { 0, 0,+1,-1},
-    {+1, 0,+1,-1}, {-1, 0,+1,-1}, { 0,+1,+1,-1}, {+1,+1,+1,-1},
-    {-1,+1,+1,-1}, { 0,-1,+1,-1}, {+1,-1,+1,-1}, {-1,-1,+1,-1},
-    { 0, 0, 0, 0}, {+1, 0,-1,-1}, { 0,+1,-1,-1}, {+1,+1,-1,-1},
-    {-1,+1,-1,-1}, {+1,-1,-1,-1}, { 0, 0, 0, 0}, { 0, 0, 0, 0},
-    { 0, 0, 0, 0}, { 0, 0, 0, 0}, { 0, 0, 0, 0}, { 0, 0, 0, 0},
-    { 0, 0, 0, 0}, { 0, 0, 0, 0}, { 0, 0, 0, 0}, { 0, 0, 0, 0}
-};
 
 /*
  * One decoded 2x2-pixel block (DEC130.DLL's ctx[2] layout):
@@ -126,7 +100,7 @@ static uint32_t decode_block(ReplayEsc130 *s, BitReader *b, uint32_t pred, int *
     } else if (rd_bit(b) == 0) {
         /* DELTA: plain integer add, not masked to 6 bits (spec § 6.1). */
         unsigned d = rd_bits(b, 3);
-        int yv = (int)(pred & 0x3Fu) + Y_DIFF[d];
+        int yv = (int)(pred & 0x3Fu) + ESC130_Y_DIFF[d];
         lbits = (uint32_t)yv;
     } else {
         lbits = rd_bits(b, 6);
@@ -138,7 +112,7 @@ static uint32_t decode_block(ReplayEsc130 *s, BitReader *b, uint32_t pred, int *
         cbits = pred & 0xFFFF0000u;
     } else if (rd_bit(b) == 0) {
         unsigned d = rd_bits(b, 3);
-        cbits = (pred & 0xFFFF0000u) + C_DIFF[d];   /* packed add (spec § 7.2) */
+        cbits = (pred & 0xFFFF0000u) + ESC130_C_DIFF[d];   /* packed add (spec § 7.2) */
     } else {
         unsigned cb = rd_bits(b, 5);
         unsigned cr = rd_bits(b, 5);
@@ -312,11 +286,25 @@ static uint32_t block_base(const ReplayEsc130 *s, size_t bi)
     return (sum & 0x40000000u) ? sum : clamp_build(sum);
 }
 
+/* The RGB888 a flat block with the given (yavg, cb, cr) renders to as a uniform
+ * interior pixel -- the forward colour map an encoder inverts to choose a block's
+ * luma/chroma from a target colour. */
+void replay_esc130_flat_rgb(unsigned yavg, unsigned cb, unsigned cr, uint8_t out[3])
+{
+    uint32_t sum = R_CR[cr & 63u] + R_CB[cb & 0xFFu]
+                 + (R_LUM[yavg & 0x3Fu] | 0x80000000u);
+    uint32_t d = clamp_build(sum) & COLOUR_MASK;
+    uint16_t c = blend565(d, d, d, 0);
+    unsigned r5 = (c >> 11) & 0x1Fu, g6 = (c >> 5) & 0x3Fu, b5 = c & 0x1Fu;
+    out[0] = (uint8_t)((r5 << 3) | (r5 >> 2));
+    out[1] = (uint8_t)((g6 << 2) | (g6 >> 4));
+    out[2] = (uint8_t)((b5 << 3) | (b5 >> 2));
+}
+
 /* ---- public API ----------------------------------------------------------- */
 ReplayEsc130 *replay_esc130_open(unsigned width, unsigned height)
 {
     ReplayEsc130 *s;
-    int si;
     if (width == 0 || height == 0 || (width % 2) || (height % 2))
         return NULL;
     s = calloc(1, sizeof *s);
@@ -333,17 +321,7 @@ ReplayEsc130 *replay_esc130_open(unsigned width, unsigned height)
         replay_esc130_close(s);
         return NULL;
     }
-    /* Build the packed texture sign table (spec § 8): code(+1)=1, code(-1)=2. */
-    for (si = 0; si < 64; si++) {
-        uint32_t entry = 0;
-        int k;
-        for (k = 0; k < 4; k++) {
-            int sgn = SIGN_TUPLES[si][k];
-            unsigned code = (sgn > 0) ? 1u : (sgn < 0) ? 2u : 0u;
-            entry |= code << (8 + 2 * k);
-        }
-        s->sign_tbl[si] = entry;
-    }
+    esc130_build_sign_tbl(s->sign_tbl);
     return s;
 }
 
@@ -407,3 +385,9 @@ void replay_esc130_render(ReplayEsc130 *s, uint8_t *rgb)
             rgb[off + 2] = (uint8_t)((b5 << 3) | (b5 >> 2));
         }
 }
+
+/* Block-state accessors: the persistent per-block word (word0) and the "textured"
+ * flag, plus the block count. The encoder re-codes these to reproduce a frame. */
+const uint32_t *replay_esc130_blocks(const ReplayEsc130 *s) { return s->blk; }
+const uint8_t *replay_esc130_textured(const ReplayEsc130 *s) { return s->tex; }
+size_t replay_esc130_block_count(const ReplayEsc130 *s) { return s->total; }

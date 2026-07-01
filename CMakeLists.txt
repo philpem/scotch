@@ -46,9 +46,12 @@ add_library(replay STATIC
     src/replay_tca.c
     src/replay_escape_adpcm.c
     src/replay_escape100.c
+    src/replay_escape100_enc.c
     src/replay_escape122.c
+    src/replay_escape122_enc.c
     src/replay_escape124.c
     src/replay_escape130.c
+    src/replay_escape130_enc.c
 )
 
 target_include_directories(replay PUBLIC include)
@@ -186,6 +189,7 @@ add_replay_test(test_nut_mux tests/test_nut_mux.c)
 add_replay_test(test_replay_moviefs tests/test_replay_moviefs.c)
 add_replay_test(test_replay_escape_adpcm tests/test_replay_escape_adpcm.c)
 add_replay_test(test_replay_escape100 tests/test_replay_escape100.c)
+add_replay_test(test_escape100_encode tests/test_escape100_encode.c)
 
 # Differential test: native Escape 100/102 decoder vs the vendored Decomp100/102
 # ARM modules (the golden decoders), on synthetic path-covering frames.
@@ -206,8 +210,10 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/armovie-codecs/Decomp102/Decompres
     set_tests_properties(test_escape100_module_102 PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 add_replay_test(test_replay_escape122 tests/test_replay_escape122.c)
+add_replay_test(test_escape122_encode tests/test_escape122_encode.c)
 add_replay_test(test_replay_escape124 tests/test_replay_escape124.c)
 add_replay_test(test_replay_escape130 tests/test_replay_escape130.c)
+add_replay_test(test_escape130_encode tests/test_escape130_encode.c)
 add_replay_test(test_replay_tca tests/test_replay_tca.c)
 add_replay_test(test_sound_adpcm_stereo tests/test_sound_adpcm_stereo.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)
