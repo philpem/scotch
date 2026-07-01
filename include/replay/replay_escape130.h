@@ -15,12 +15,13 @@ extern "C" {
  * across frames and is delta-coded; the display 2x upsamples that low-resolution
  * grid to the full frame with a separable blend, rendering textured blocks sharply.
  *
- * Two provenances (see docs/spec/eidos-escape.md § 130-spec and the .c files):
- *  - the bitstream DECODER (src/replay_escape130.c) is a clean-room implementation
- *    from the behavioural spec; no existing decoder was consulted;
- *  - the RENDER (src/dec130_render.c) is a hand-written reimplementation of
- *    DEC130.DLL's display path, reverse-engineered from the DLL and bit-exact to
- *    it. Together they reproduce DEC130.DLL's output bit-for-bit.
+ * Two provenances, both in src/replay_escape130.c (see docs/spec/eidos-escape.md
+ * § 130):
+ *  - the bitstream DECODER is a clean-room implementation from the behavioural
+ *    spec; no existing decoder was consulted;
+ *  - the RENDER is a hand-written reimplementation of DEC130.DLL's display path,
+ *    reverse-engineered from the DLL and bit-exact to it. Together they reproduce
+ *    DEC130.DLL's output bit-for-bit.
  *
  * Each ARMovie video chunk is a 16-byte header (`u16 magic=0x130`, flags, `u32
  * vsize`, reserved) followed by the LSB-first bitstream (`vsize-16` bytes); a
