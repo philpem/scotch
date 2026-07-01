@@ -51,6 +51,7 @@ add_library(replay STATIC
     src/replay_escape122_enc.c
     src/replay_escape124.c
     src/replay_escape130.c
+    src/replay_escape130_enc.c
 )
 
 target_include_directories(replay PUBLIC include)
@@ -212,6 +213,7 @@ add_replay_test(test_replay_escape122 tests/test_replay_escape122.c)
 add_replay_test(test_escape122_encode tests/test_escape122_encode.c)
 add_replay_test(test_replay_escape124 tests/test_replay_escape124.c)
 add_replay_test(test_replay_escape130 tests/test_replay_escape130.c)
+add_replay_test(test_escape130_encode tests/test_escape130_encode.c)
 add_replay_test(test_replay_tca tests/test_replay_tca.c)
 add_replay_test(test_sound_adpcm_stereo tests/test_sound_adpcm_stereo.c)
 add_replay_test(test_replay_type2 tests/test_replay_type2.c)

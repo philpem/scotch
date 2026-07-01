@@ -43,6 +43,14 @@ int replay_esc130_decode(ReplayEsc130 *s, const uint8_t *chunk, size_t clen);
 /* Render the current picture to a caller-supplied width*height*3 RGB888 buffer. */
 void replay_esc130_render(ReplayEsc130 *s, uint8_t *rgb);
 
+/* The persistent per-block state: `_blocks` is the packed block word (word0) per
+ * block, `_textured` the "textured" (SIGNS-luma) flag per block, and
+ * `_block_count` the number of blocks ((width/2)*(height/2)). Together they are
+ * the codec's native representation of a frame -- what an encoder must reproduce. */
+const uint32_t *replay_esc130_blocks(const ReplayEsc130 *s);
+const uint8_t *replay_esc130_textured(const ReplayEsc130 *s);
+size_t replay_esc130_block_count(const ReplayEsc130 *s);
+
 #ifdef __cplusplus
 }
 #endif

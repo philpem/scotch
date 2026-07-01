@@ -370,6 +370,19 @@ decoder's RGB output is **byte-identical to the standalone reference decoder**
 (itself bit-exact to `DEC130.DLL`) on every sampled frame. A unit test
 (`test_replay_escape130`) covers a hand-built one-block frame.
 
+### Encoding
+
+Because the block state → RGB render is non-linear, `src/replay_escape130_enc.c`
+encodes at the **block-state level**: given a frame's per-block words and textured
+flags (as the decoder exposes them), it picks the luma/chroma prefix modes
+(SIGNS/COPY/DELTA/ABS, or a full copy) that reproduce each state from its left
+neighbour, delta-coding by skipping unchanged blocks. Re-encoding the decoded
+states of the 130 samples is lossless (identical states, hence identical render)
+and, because it always chooses the cheapest reproducing mode, a few percent
+*smaller* than the originals (e.g. `landing` 96.6%, `intro` 91.1%). Deriving block
+states from an arbitrary RGB source (inverting the render) is a separate problem
+this encoder does not attempt.
+
 **Sound.** Escape 2.0 movies carry ARMovie sound format 1 (16-bit linear) or
 format **101**, the Eidos "Escape"/WINSTR 4-bit ADPCM. Both are decoded and muxed,
 so type-130 movies (`Victory`, `inflight`, …) transcode with sound. Format 101 is
